@@ -229,3 +229,18 @@ export const webhookInbox = platform.table(
   },
   (t) => [uniqueIndex('webhook_inbox_uq').on(t.provider, t.eventId)],
 );
+
+/** Single-use, 10-minute report download tokens (TDD §4.11, FR-RPT-10). */
+export const downloadToken = platform.table('download_token', {
+  id: id(),
+  tokenHash: text().notNull().unique(),
+  userId: uuid()
+    .notNull()
+    .references(() => appUser.id),
+  report: text().notNull(),
+  params: jsonb().notNull(),
+  format: text().notNull(),
+  expiresAt: ts().notNull(),
+  usedAt: ts(),
+  createdAt: createdAt(),
+});

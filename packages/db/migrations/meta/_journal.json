@@ -43,6 +43,13 @@
       "when": 1792917015680,
       "tag": "0005_store_credit",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792918830276,
+      "tag": "0006_download_token",
+      "breakpoints": true
     }
   ]
 }

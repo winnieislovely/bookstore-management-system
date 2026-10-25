@@ -6,6 +6,7 @@ import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
 import { importRoutes } from './routes/imports.js';
 import { posRoutes } from './routes/pos.js';
+import { reportRoutes } from './routes/reports.js';
 import { stockRoutes } from './routes/stock.js';
 
 /** The `api` process (TDD §3.2): staff API now; public API, webhooks and POS sync follow. */
@@ -27,6 +28,7 @@ export function createApp(deps: Deps): OpenAPIHono<AppEnv> {
   stockRoutes(app);
   posRoutes(app);
   importRoutes(app, deps);
+  reportRoutes(app);
 
   app.openAPIRegistry.registerComponent('securitySchemes', 'session', { type: 'apiKey', in: 'cookie', name: '__Host-bms_sid' });
   app.doc31('/api/v1/openapi.json', { openapi: '3.1.0', info: { title: 'Bookstore Management System – staff API', version: '1.0.0' } });
