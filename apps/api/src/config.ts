@@ -16,6 +16,8 @@ const Env = z.object({
     .default('true')
     .transform((v) => v === 'true'),
   LOG_LEVEL: z.string().default('info'),
+  /** Local-disk file storage for development; production uses S3-compatible storage (TDD §4.12). */
+  STORAGE_DIR: z.string().default('./data/files'),
 });
 export type Config = z.infer<typeof Env>;
 

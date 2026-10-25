@@ -397,6 +397,8 @@ export const ListQuery = z.object({
   status: z.enum(['active', 'hidden', 'discontinued']).optional(),
   /** Stock-status chips of the product list (Design §12.1). */
   stock: z.enum(['in_stock', 'low', 'out']).optional(),
+  /** “Thiếu ảnh”: products without a photo, typically imported (FR-CAT-11). */
+  image: z.enum(['missing']).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(40),
 });
@@ -420,6 +422,7 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
   if (q.stock === 'out') where.push(sql`${avail} <= 0`);
   if (q.stock === 'low') where.push(sql`${avail} > 0 and ${v.minStock} is not null and ${avail} <= ${v.minStock}`);
   if (q.stock === 'in_stock') where.push(sql`${avail} > 0`);
+  if (q.image === 'missing') where.push(sql`not exists (select 1 from catalog.item_image im where im.item_id = ${i.id})`);
   const filter = where.length ? and(...where) : undefined;
 
   const rows = await ctx.db
@@ -437,6 +440,7 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
       status: i.status,
       releaseDate: i.releaseDate,
       imageFileId: sql<string | null>`(select im.file_id from catalog.item_image im where im.item_id = ${i.id} order by im.sort limit 1)`,
+      missingImage: sql<boolean>`not exists (select 1 from catalog.item_image im where im.item_id = ${i.id})`,
     })
     .from(v)
     .innerJoin(i, eq(i.id, v.itemId))
@@ -564,4 +568,38 @@ export async function createBrand(ctx: Ctx, input: z.input<typeof NamedSchema>) 
 export async function listBrands(ctx: Ctx) {
   requirePermission(ctx, 'catalog.view');
   return ctx.db.select().from(schema.brand).where(eq(schema.brand.status, 'active'));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Product photos (FR-CAT-10); the first photo clears the “missing image” flag (FR-CAT-11)
+
+export const ImageSchema = z.object({
+  fileId: z.uuid(),
+  alt: z.object({ en: z.string().trim().min(1, 'Cần mô tả ảnh (alt) bằng tiếng Anh.'), vi: z.string().trim().optional() }).optional(),
+});
+
+export async function addImage(ctx: Ctx, itemId: string, input: z.input<typeof ImageSchema>) {
+  requirePermission(ctx, 'catalog.edit');
+  const data = ImageSchema.parse(input);
+  return ctx.db.transaction(async (tx) => {
+    const [item] = await tx.select({ id: schema.item.id }).from(schema.item).where(eq(schema.item.id, itemId));
+    if (!item) throw errors.notFound('Sản phẩm');
+    const [file] = await tx.select().from(schema.file).where(eq(schema.file.id, data.fileId));
+    if (!file?.mime.startsWith('image/')) throw new AppError(400, 'not_an_image', 'Tệp này không phải ảnh.');
+    const [{ next } = { next: 0 }] = await tx.execute<{ next: number }>(
+      sql`select coalesce(max(sort) + 1, 0)::int as next from catalog.item_image where item_id = ${itemId}::uuid`,
+    );
+    const [row] = await tx.insert(schema.itemImage).values({ itemId, fileId: data.fileId, sort: next, alt: (data.alt ?? null) as never }).returning({ id: schema.itemImage.id });
+    await touchItem(tx, itemId);
+    return { id: row!.id, sort: next };
+  });
+}
+
+export async function removeImage(ctx: Ctx, itemId: string, imageId: string) {
+  requirePermission(ctx, 'catalog.edit');
+  await ctx.db.transaction(async (tx) => {
+    const [row] = await tx.delete(schema.itemImage).where(and(eq(schema.itemImage.id, imageId), eq(schema.itemImage.itemId, itemId))).returning({ id: schema.itemImage.id });
+    if (!row) throw errors.notFound('Ảnh');
+    await touchItem(tx, itemId);
+  });
 }

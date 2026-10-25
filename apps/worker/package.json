@@ -1,0 +1,23 @@
+{
+  "name": "@bookstore/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@bookstore/db": "workspace:*",
+    "@bookstore/modules": "workspace:*",
+    "pg-boss": "^12.37.1",
+    "pino": "^10.4.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@bookstore/testkit": "workspace:*",
+    "tsx": "^4.23.15"
+  }
+}

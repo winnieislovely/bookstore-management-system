@@ -173,7 +173,8 @@ export async function post(tx: Tx, ctx: Ctx, e: PointsEntry, opts: { floorAtZero
     refType: e.refType ?? null,
     refId: e.refId ?? null,
     note: e.note ?? null,
-    expiresAt: e.reason === 'earn' ? pointsExpiry(now, cfg['loyalty.expiry_months']) : null,
+    // Earned and imported points expire (BR-07); imported ones count from the import date (TDD §4.12).
+    expiresAt: e.reason === 'earn' || e.reason === 'import' ? pointsExpiry(now, cfg['loyalty.expiry_months']) : null,
     actorId: ctx.actor?.userId ?? null,
     at: now,
   });
@@ -256,3 +257,5 @@ export async function adjustCredit(ctx: Ctx, customerId: string, input: z.input<
     return { balanceVnd: balance };
   });
 }
+
+export * from './privacy.js';

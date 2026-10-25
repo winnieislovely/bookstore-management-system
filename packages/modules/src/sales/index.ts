@@ -591,7 +591,8 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
           note: lineNotes.get(l.lineId)?.note ?? null,
         })
         .returning({ id: schema.saleLine.id });
-      await allocateConsignment(tx, row!.id, l.variantId, l.qty, l.totalVnd === 0 ? 0 : divRoundHalfUp(l.totalVnd, l.qty), now);
+      // Consignors are paid on the selling price before store discounts (TDD §4.3).
+      await allocateConsignment(tx, row!.id, l.variantId, l.qty, l.unitPriceVnd, now);
     }
 
     for (const p of data.payments) {
@@ -720,7 +721,7 @@ export async function listSales(ctx: Ctx, input: z.input<typeof SalesQuery>) {
     .innerJoin(schema.appUser, eq(schema.appUser.id, s.cashierId))
     .leftJoin(schema.customer, eq(schema.customer.id, s.customerId))
     .where(where.length ? and(...where) : undefined)
-    .orderBy(desc(s.soldAt))
+    .orderBy(desc(s.soldAt), desc(s.id))
     .limit(q.limit)
     .offset((q.page - 1) * q.limit);
   return { items: rows, page: q.page };

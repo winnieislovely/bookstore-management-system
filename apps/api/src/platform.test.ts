@@ -1,3 +1,4 @@
+import { LocalDiskStorage } from '@bookstore/modules/files';
 import { createFieldCrypto } from '@bookstore/modules/platform';
 import { FakeClock, startTestDb, type TestDb } from '@bookstore/testkit';
 import { randomBytes } from 'node:crypto';
@@ -16,7 +17,7 @@ const ORIGIN = 'http://localhost:5173';
 beforeAll(async () => {
   t = await startTestDb();
   const config = loadConfig({ FIELD_ENCRYPTION_KEY: randomBytes(32).toString('base64'), APP_ORIGIN: ORIGIN, NODE_ENV: 'test' });
-  app = createApp({ db: t.db, clock, crypto: createFieldCrypto(config.FIELD_ENCRYPTION_KEY), config, log: pino({ level: 'silent' }) });
+  app = createApp({ db: t.db, clock, crypto: createFieldCrypto(config.FIELD_ENCRYPTION_KEY), storage: new LocalDiskStorage('./.test-files'), config, log: pino({ level: 'silent' }) });
 }, 180_000);
 
 afterAll(async () => {

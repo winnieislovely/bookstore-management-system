@@ -1,4 +1,8 @@
+import { LocalDiskStorage } from '@bookstore/modules/files';
 import { createFieldCrypto, type Ctx } from '@bookstore/modules/platform';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { FakeClock, startTestDb, type TestDb } from '@bookstore/testkit';
 import { randomBytes, randomUUID } from 'node:crypto';
 import pino from 'pino';
@@ -33,7 +37,8 @@ export async function startHarness(): Promise<Harness> {
   const clock = new FakeClock();
   const config = loadConfig({ FIELD_ENCRYPTION_KEY: randomBytes(32).toString('base64'), APP_ORIGIN: ORIGIN, NODE_ENV: 'test' });
   const crypto = createFieldCrypto(config.FIELD_ENCRYPTION_KEY);
-  const app = createApp({ db: t.db, clock, crypto, config, log: pino({ level: 'silent' }) });
+  const storage = new LocalDiskStorage(mkdtempSync(join(tmpdir(), 'bms-files-')));
+  const app = createApp({ db: t.db, clock, crypto, storage, config, log: pino({ level: 'silent' }) });
 
   const call: Harness['call'] = async (method, path, opts = {}) => {
     const headers: Record<string, string> = { origin: ORIGIN };

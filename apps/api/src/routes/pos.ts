@@ -110,6 +110,17 @@ export function posRoutes(app: OpenAPIHono<AppEnv>): void {
     async ({ ctx, params, body }) => customers.adjustCredit(ctx, params.id, body),
   );
 
+  defineRoute(
+    app,
+    { method: 'post', path: '/api/v1/customers/:id/points-adjust', access: 'customer.adjust_points', summary: 'Manual points with reason', params: IdParams, body: customers.PointsAdjustSchema },
+    async ({ ctx, params, body }) => customers.adjustPoints(ctx, params.id, body),
+  );
+  defineRoute(
+    app,
+    { method: 'post', path: '/api/v1/customers/:id/erase', access: 'customer.erase', summary: 'Anonymise on request', params: IdParams, body: customers.EraseSchema },
+    async ({ ctx, params, body }) => customers.erase(ctx, params.id, body),
+  );
+
   // --- Promotions -----------------------------------------------------------------------------
   defineRoute(app, { method: 'get', path: '/api/v1/promotions', access: 'promotion.manage', summary: 'Promotions with state' }, async ({ ctx }) => ({ items: await promotions.list(ctx) }));
   defineRoute(app, { method: 'post', path: '/api/v1/promotions', access: 'promotion.manage', summary: 'Create a promotion', status: 201, body: promotions.PromotionSchema }, async ({ ctx, body }) =>

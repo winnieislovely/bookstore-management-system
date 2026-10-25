@@ -81,7 +81,8 @@ export const NewProductLineSchema = z.object({
   kind: z.literal('new'),
   item: catalog.ItemSchema.omit({ variants: true }),
   variant: catalog.VariantSchema.omit({ priceVnd: true }),
-  imageFileIds: z.array(z.uuid()).min(1, 'Cần ít nhất một ảnh sản phẩm.'),
+  /** Required on the form (FR-PUR-02); bulk import may leave it empty (FR-CAT-11, “missing image”). */
+  imageFileIds: z.array(z.uuid()).default([]),
   costVnd: money,
   sellingPriceVnd: money,
   qty: z.number().int().positive(),
@@ -124,9 +125,12 @@ export interface StockInLineResult {
  * created for new lines, moving-average cost, price history, margin flags, a payable or a
  * consignment lot, and the `stock_in.posted` event (TDD §4.3). Used by the form and by bulk import.
  */
-export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput) {
+export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts: { allowMissingImage?: boolean } = {}) {
   const actor = requirePermission(ctx, 'purchasing.manage');
   const data = StockInSchema.parse(input);
+  if (!opts.allowMissingImage && data.lines.some((l) => l.kind === 'new' && l.imageFileIds.length === 0)) {
+    throw new AppError(400, 'image_required', 'Sản phẩm mới cần ít nhất một ảnh.');
+  }
   const cfg = await settings.snapshot(ctx, tx);
 
   let supplier: typeof schema.supplier.$inferSelect | undefined;
@@ -172,7 +176,9 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput) {
       variantId = created.variantIds[0]!;
       createdProduct = true;
       vatBp = line.variant.vatBp;
-      await tx.insert(schema.itemImage).values(line.imageFileIds.map((fileId, sort) => ({ itemId: created.itemId, fileId, sort })));
+      if (line.imageFileIds.length) {
+        await tx.insert(schema.itemImage).values(line.imageFileIds.map((fileId, sort) => ({ itemId: created.itemId, fileId, sort })));
+      }
     } else {
       const [v] = await tx.select().from(schema.itemVariant).where(eq(schema.itemVariant.id, line.variantId));
       if (!v) throw errors.notFound('Sản phẩm');
@@ -282,7 +288,7 @@ export async function listStockIns(ctx: Ctx, input: z.input<typeof StockInQuery>
     .from(e)
     .leftJoin(schema.supplier, eq(schema.supplier.id, e.supplierId))
     .where(where.length ? and(...where) : undefined)
-    .orderBy(desc(e.createdAt))
+    .orderBy(desc(e.createdAt), desc(e.id))
     .limit(q.limit)
     .offset((q.page - 1) * q.limit);
   return { items: rows, page: q.page };
@@ -358,3 +364,5 @@ export async function payPayable(ctx: Ctx, payableId: string, input: z.input<typ
     return { balanceVnd: row.amountVnd - row.paidVnd, status: row.status };
   });
 }
+
+export * from './consignment.js';

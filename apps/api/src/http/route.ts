@@ -88,6 +88,7 @@ export function defineRoute<
     const query = def.query ? def.query.parse(c.req.query()) : undefined;
     const params = def.params ? def.params.parse(c.req.param()) : undefined;
     const result = await handler({ ctx, body, query, params, c } as Handled<z.infer<B>, z.infer<Q>, z.infer<P>>);
+    if (result instanceof Response) return result;
     if (def.status === 204 || result === undefined) return c.body(null, 204);
     return c.json(result as object, def.status ?? 200);
   });

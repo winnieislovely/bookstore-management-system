@@ -42,7 +42,7 @@ export function can(actor: Actor | null, permission: Permission): boolean {
  */
 export class AppError extends Error {
   constructor(
-    readonly status: 400 | 401 | 403 | 404 | 409 | 412 | 422 | 423 | 429,
+    readonly status: 400 | 401 | 403 | 404 | 409 | 412 | 415 | 422 | 423 | 429,
     readonly code: string,
     message: string,
     readonly details?: unknown,
@@ -137,4 +137,9 @@ export async function emit(tx: Tx, type: string, payload: Record<string, unknown
 /** Database round trip for the health check (TDD §11.5). */
 export async function ping(db: Db): Promise<void> {
   await db.execute(sql`select 1`);
+}
+
+/** Bind a Date inside raw `sql` fragments (the driver does not serialise Date objects there). */
+export function tsParam(d: Date) {
+  return sql`${d.toISOString()}::timestamptz`;
 }

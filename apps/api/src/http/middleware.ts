@@ -64,12 +64,22 @@ export function csrf(deps: Deps): MiddlewareHandler<AppEnv> {
   };
 }
 
-export const limitBody = bodyLimit({
+const smallBody = bodyLimit({
   maxSize: 1024 * 1024,
   onError: () => {
     throw new AppError(400, 'body_too_large', 'Dữ liệu gửi lên quá lớn.');
   },
 });
+const uploadBody = bodyLimit({
+  maxSize: 10 * 1024 * 1024,
+  onError: () => {
+    throw new AppError(400, 'file_too_large', 'Tệp phải nhỏ hơn 10 MB.');
+  },
+});
+
+/** 1 MB for JSON; 10 MB for file uploads and import previews (TDD §4.12). */
+export const limitBody: MiddlewareHandler<AppEnv> = (c, next) =>
+  c.req.path === '/api/v1/files' || /^\/api\/v1\/admin\/import\/[a-z_]+\/preview$/.test(c.req.path) ? uploadBody(c, next) : smallBody(c, next);
 
 /** Paths a locked or must-change-password session may still call. */
 const LOCKED_ALLOWED = new Set(['/api/v1/auth/unlock', '/api/v1/auth/logout', '/api/v1/me']);

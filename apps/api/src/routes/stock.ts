@@ -161,4 +161,32 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
     { method: 'post', path: '/api/v1/purchasing/payables/:id/payments', access: 'purchasing.payables', summary: 'Record a payment', status: 201, params: IdParams, body: purchasing.PaymentSchema },
     async ({ ctx, params, body }) => purchasing.payPayable(ctx, params.id, body),
   );
+
+  // --- Consignment ----------------------------------------------------------------------------
+  defineRoute(
+    app,
+    { method: 'get', path: '/api/v1/purchasing/consignment/lots', access: 'purchasing.manage', summary: 'Consignment lots', query: z.object({ supplier: z.uuid().optional() }) },
+    async ({ ctx, query }) => ({ items: await purchasing.listLots(ctx, query.supplier) }),
+  );
+  defineRoute(
+    app,
+    { method: 'post', path: '/api/v1/purchasing/consignment/statements', access: 'purchasing.payables', summary: 'Generate a monthly statement', status: 201, body: purchasing.StatementSchema },
+    async ({ ctx, body }) => purchasing.generateStatement(ctx, body),
+  );
+  defineRoute(
+    app,
+    { method: 'get', path: '/api/v1/purchasing/consignment/statements', access: 'purchasing.payables', summary: 'Statements', query: z.object({ supplier: z.uuid().optional() }) },
+    async ({ ctx, query }) => ({ items: await purchasing.listStatements(ctx, query.supplier) }),
+  );
+  defineRoute(app, { method: 'get', path: '/api/v1/purchasing/consignment/statements/:id', access: 'purchasing.payables', summary: 'Statement with lines', params: IdParams }, async ({ ctx, params }) =>
+    purchasing.getStatement(ctx, params.id),
+  );
+  defineRoute(app, { method: 'post', path: '/api/v1/purchasing/consignment/statements/:id/approve', access: 'purchasing.payables', summary: 'Approve: creates the payable', params: IdParams }, async ({ ctx, params }) =>
+    purchasing.approveStatement(ctx, params.id),
+  );
+  defineRoute(
+    app,
+    { method: 'post', path: '/api/v1/purchasing/consignment/returns', access: 'purchasing.manage', summary: 'Return unsold consignment stock', status: 201, body: purchasing.ConsignmentReturnSchema },
+    async ({ ctx, body }) => purchasing.returnConsignment(ctx, body),
+  );
 }

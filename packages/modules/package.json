@@ -14,7 +14,11 @@
     "./customers": "./src/customers/index.ts",
     "./notifications": "./src/notifications/index.ts",
     "./promotions": "./src/promotions/index.ts",
-    "./sales": "./src/sales/index.ts"
+    "./sales": "./src/sales/index.ts",
+    "./jobs": "./src/jobs/index.ts",
+    "./integrations/einvoice": "./src/integrations/einvoice.ts",
+    "./imports": "./src/imports/index.ts",
+    "./files": "./src/files/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -24,7 +28,10 @@
     "@bookstore/db": "workspace:*",
     "@bookstore/domain": "workspace:*",
     "@node-rs/argon2": "^2.2.2",
+    "@opentelemetry/api": "1.9.1",
     "drizzle-orm": "^0.45.4",
+    "exceljs": "^4.4.0",
+    "postgres": "3.4.9",
     "zod": "^4.6.5"
   },
   "devDependencies": {

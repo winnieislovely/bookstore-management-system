@@ -1,4 +1,5 @@
 import type { Db } from '@bookstore/db';
+import type { StorageAdapter } from '@bookstore/modules/files';
 import type { Clock, Ctx, FieldCrypto } from '@bookstore/modules/platform';
 import type { Logger } from 'pino';
 import type { Config } from '../config.js';
@@ -8,6 +9,7 @@ export interface Deps {
   db: Db;
   clock: Clock;
   crypto: FieldCrypto;
+  storage: StorageAdapter;
   config: Config;
   log: Logger;
 }
