@@ -4,6 +4,7 @@ import { and, asc, count, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
 import * as settings from '../settings/index.js';
+import { availableSql } from './bundles.js';
 import { AppError, can, emit, errors, requirePermission, type Ctx, type Tx } from '../platform/index.js';
 
 /**
@@ -418,7 +419,8 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
         union all select c.id from catalog.category c join tree on c.parent_id = tree.id)
       select 1 from catalog.item_category ic where ic.item_id = ${v.itemId} and ic.category_id in (select id from tree))`);
   }
-  const avail = sql<number>`coalesce((select sum(s.on_hand - s.reserved) from inventory.stock_level s where s.variant_id = ${v.id}), 0)::int`;
+  // Bundles show what their components allow (TDD §4.1).
+  const avail = sql<number>`${availableSql(sql`${v.id}`)}`;
   if (q.stock === 'out') where.push(sql`${avail} <= 0`);
   if (q.stock === 'low') where.push(sql`${avail} > 0 and ${v.minStock} is not null and ${avail} <= ${v.minStock}`);
   if (q.stock === 'in_stock') where.push(sql`${avail} > 0`);
@@ -605,3 +607,4 @@ export async function removeImage(ctx: Ctx, itemId: string, imageId: string) {
 }
 
 export * from './labels.js';
+export * from './bundles.js';

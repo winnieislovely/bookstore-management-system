@@ -6,6 +6,7 @@ import * as audit from '../audit/index.js';
 import * as catalog from '../catalog/index.js';
 import * as inventory from '../inventory/index.js';
 import * as settings from '../settings/index.js';
+import * as orders from './orders.js';
 import { AppError, emit, errors, nextDocNo, requirePermission, type Ctx, type Tx } from '../platform/index.js';
 
 /** Purchasing, suppliers and payables (FR-PUR-01..06, FR-PUR-09, TDD §4.3). */
@@ -71,6 +72,8 @@ export const ExistingLineSchema = z.object({
   sellingPriceVnd: money,
   qty: z.number().int().positive(),
   location: z.enum(['floor', 'back']).default('floor'),
+  /** Receiving against an optional supplier order (FR-PUR-07). */
+  orderLineId: z.uuid().optional(),
 });
 
 /**
@@ -180,8 +183,15 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
         await tx.insert(schema.itemImage).values(line.imageFileIds.map((fileId, sort) => ({ itemId: created.itemId, fileId, sort })));
       }
     } else {
-      const [v] = await tx.select().from(schema.itemVariant).where(eq(schema.itemVariant.id, line.variantId));
+      const [v] = await tx
+        .select({ id: schema.itemVariant.id, vatBp: schema.itemVariant.vatBp, kind: schema.item.kind })
+        .from(schema.itemVariant)
+        .innerJoin(schema.item, eq(schema.item.id, schema.itemVariant.itemId))
+        .where(eq(schema.itemVariant.id, line.variantId));
       if (!v) throw errors.notFound('Sản phẩm');
+      // A bundle holds no stock of its own: stock its components instead (TDD §4.1).
+      if (v.kind === 'bundle') throw new AppError(400, 'bundle_has_no_stock', 'Combo không có tồn kho riêng. Hãy nhập hàng cho từng sản phẩm trong combo.');
+      if (line.orderLineId) await orders.receiveLine(tx, line.orderLineId, v.id, line.qty);
       variantId = v.id;
       vatBp = v.vatBp;
       // A changed selling price is saved in the price history (FR-PUR-03).
@@ -211,6 +221,7 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
         newPriceVnd: priceChanged || createdProduct ? line.sellingPriceVnd : null,
         createdProduct,
         marginFlag,
+        orderLineId: line.kind === 'existing' ? (line.orderLineId ?? null) : null,
       })
       .returning({ id: schema.stockInLine.id });
     if (data.consignment) {
@@ -366,3 +377,4 @@ export async function payPayable(ctx: Ctx, payableId: string, input: z.input<typ
 }
 
 export * from './consignment.js';
+export * from './orders.js';

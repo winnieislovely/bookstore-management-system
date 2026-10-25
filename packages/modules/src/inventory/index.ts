@@ -420,3 +420,15 @@ export async function approveCount(ctx: Ctx, id: string) {
     return { posted };
   });
 }
+
+/**
+ * Undo the moving-average effect of an inbound quantity that is being taken back out (import
+ * rollback): avg_before = (H × avg − qty × unit) ÷ (H − qty), when stock remains afterwards.
+ */
+export async function restoreAverageCost(tx: Tx, variantId: string, location: Location, qty: number, unitCostVnd: number): Promise<void> {
+  const sl = schema.stockLevel;
+  const [cur] = await tx.select().from(sl).where(and(eq(sl.variantId, variantId), eq(sl.location, location))).for('update');
+  if (!cur || cur.onHand - qty <= 0) return;
+  const before = Math.round((cur.onHand * cur.avgCostVnd - qty * unitCostVnd) / (cur.onHand - qty));
+  if (before >= 0) await tx.update(sl).set({ avgCostVnd: before }).where(and(eq(sl.variantId, variantId), eq(sl.location, location)));
+}

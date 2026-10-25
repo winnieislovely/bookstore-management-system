@@ -57,6 +57,13 @@
       "when": 1792919326382,
       "tag": "0007_offline_pos",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792921719869,
+      "tag": "0008_payable_cancelled",
+      "breakpoints": true
     }
   ]
 }

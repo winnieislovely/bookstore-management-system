@@ -2,6 +2,7 @@ import * as catalog from '@bookstore/modules/catalog';
 import * as customers from '@bookstore/modules/customers';
 import * as imports from '@bookstore/modules/imports';
 import * as masterdata from '@bookstore/modules/masterdata';
+import * as purchasing from '@bookstore/modules/purchasing';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import type { AppEnv } from '../http/context.js';
@@ -53,5 +54,33 @@ export function moreRoutes(app: OpenAPIHono<AppEnv>): void {
       'Content-Disposition': `attachment; filename="khach-hang-${params.id.slice(0, 8)}.json"`,
       'Cache-Control': 'no-store',
     }),
+  );
+}
+
+/** Supplier orders, reorder suggestions and bundle components (TDD §6.2). */
+export function purchasingExtraRoutes(app: OpenAPIHono<AppEnv>): void {
+  defineRoute(app, { method: 'get', path: '/api/v1/purchasing/orders', access: 'purchasing.manage', summary: 'Supplier orders', query: z.object({ status: z.string().optional() }) }, async ({ ctx, query }) => ({
+    items: await purchasing.listOrders(ctx, query.status),
+  }));
+  defineRoute(app, { method: 'post', path: '/api/v1/purchasing/orders', access: 'purchasing.manage', summary: 'Create a draft supplier order', status: 201, body: purchasing.OrderSchema }, async ({ ctx, body }) =>
+    purchasing.createOrder(ctx, body),
+  );
+  defineRoute(app, { method: 'get', path: '/api/v1/purchasing/orders/:id', access: 'purchasing.manage', summary: 'Supplier order with lines', params: IdParams }, async ({ ctx, params }) =>
+    purchasing.getOrder(ctx, params.id),
+  );
+  for (const [action, fn] of [['send', purchasing.sendOrder], ['cancel', purchasing.cancelOrder], ['close', purchasing.closeOrder]] as const) {
+    defineRoute(app, { method: 'post', path: `/api/v1/purchasing/orders/:id/${action}`, access: 'purchasing.manage', summary: `${action} a supplier order`, params: IdParams }, async ({ ctx, params }) => fn(ctx, params.id));
+  }
+  defineRoute(app, { method: 'get', path: '/api/v1/purchasing/suggestions', access: 'purchasing.manage', summary: 'Reorder suggestions by supplier' }, async ({ ctx }) => purchasing.suggestions(ctx));
+  defineRoute(
+    app,
+    { method: 'put', path: '/api/v1/catalog/variants/:id/components', access: 'catalog.edit', summary: 'Set bundle components', params: IdParams, body: catalog.ComponentsSchema },
+    async ({ ctx, params, body }) => catalog.setComponents(ctx, params.id, body),
+  );
+}
+
+export function rollbackRoutes(app: OpenAPIHono<AppEnv>): void {
+  defineRoute(app, { method: 'post', path: '/api/v1/admin/import/jobs/:id/rollback', access: 'session', summary: 'Reverse a committed import while nothing depends on it', params: IdParams }, async ({ ctx, params }) =>
+    imports.rollback(ctx, params.id),
   );
 }

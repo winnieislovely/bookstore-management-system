@@ -1,0 +1,151 @@
+/* Design tokens – Design Guide §9 (copied as specified). Light theme only in v1. */
+@import "tailwindcss";
+@import "@fontsource/be-vietnam-pro/vietnamese-400.css";
+@import "@fontsource/be-vietnam-pro/vietnamese-500.css";
+@import "@fontsource/be-vietnam-pro/vietnamese-600.css";
+@import "@fontsource/be-vietnam-pro/vietnamese-700.css";
+@import "@fontsource/be-vietnam-pro/latin-400.css";
+@import "@fontsource/be-vietnam-pro/latin-500.css";
+@import "@fontsource/be-vietnam-pro/latin-600.css";
+@import "@fontsource/be-vietnam-pro/latin-700.css";
+@import "@fontsource/cormorant-garamond/vietnamese-600.css";
+@import "@fontsource/cormorant-garamond/latin-600.css";
+
+@theme {
+  /* Brand */
+  --color-navy-50:  #EEF1F5;
+  --color-navy-100: #DCE2EA;
+  --color-navy-700: #22344F;
+  --color-navy-800: #1A2A41;
+  --color-navy-900: #142033;
+
+  --color-sand-50:  #FAF6EE;
+  --color-sand-100: #F0E8D8;
+  --color-sand-300: #D8C7A6;
+  --color-sand-700: #7A6640;
+
+  --color-sky-50:  #EEF4F8;
+  --color-sky-100: #DCE8EF;
+  --color-sky-300: #A9C4D4;
+  --color-sea-500: #7FA3B8;
+  --color-sea-700: #3E6680;
+
+  --color-olive-50:  #EEF1E6;
+  --color-olive-100: #DDE3CD;
+  --color-olive-600: #5B6B3A;
+  --color-olive-700: #4A5830;
+
+  /* Neutrals */
+  --color-paper-50:  #FBFAF6;
+  --color-paper-100: #F5F2EA;
+  --color-paper-200: #EDE9DF;
+  --color-paper-300: #D9D3C4;
+  --color-paper-500: #8C8574;
+  --color-ink-300: #A3A9B3;
+  --color-ink-500: #5C6675;
+  --color-ink-700: #3D4A5C;
+  --color-ink-900: #1A2638;
+
+  /* Semantic */
+  --color-success-50:  #E7F1EA;
+  --color-success-700: #2E6B45;
+  --color-warning-50:  #FBF1DE;
+  --color-warning-500: #D99A2B;
+  --color-warning-700: #8A5A12;
+  --color-danger-50:   #F8E9E6;
+  --color-danger-700:  #A63A2B;
+  --color-info-50:     #E6EFF5;
+  --color-info-700:    #2F6385;
+
+  /* Charts */
+  --color-chart-1: #22344F;
+  --color-chart-2: #7FA3B8;
+  --color-chart-3: #5B6B3A;
+  --color-chart-4: #C9A15A;
+  --color-chart-5: #A9C4D4;
+  --color-chart-6: #A63A2B;
+
+  /* Gold tier badge only */
+  --color-gold-300: #F6D96B;
+  --color-gold-800: #5C4300;
+
+  /* Type */
+  --font-display: "Cormorant Garamond", "Times New Roman", serif;
+  --font-sans: "Be Vietnam Pro", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-code: var(--font-sans);   /* codes: Be Vietnam Pro 500 + tabular-nums */
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(34, 52, 79, 0.06);
+  --shadow-md: 0 4px 12px rgba(34, 52, 79, 0.10);
+  --shadow-lg: 0 12px 32px rgba(34, 52, 79, 0.16);
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+}
+
+/* shadcn/ui semantic variables (light theme only in v1) */
+:root {
+  --background: var(--color-paper-100);
+  --foreground: var(--color-ink-900);
+  --card: #FFFFFF;
+  --card-foreground: var(--color-ink-900);
+  --popover: #FFFFFF;
+  --popover-foreground: var(--color-ink-900);
+  --primary: var(--color-navy-700);
+  --primary-foreground: #FFFFFF;
+  --secondary: var(--color-paper-200);
+  --secondary-foreground: var(--color-ink-900);
+  --muted: var(--color-paper-200);
+  --muted-foreground: var(--color-ink-500);
+  --accent: var(--color-navy-50);          /* shadcn "accent" = hover surface, NOT brand olive */
+  --accent-foreground: var(--color-ink-900);
+  --destructive: var(--color-danger-700);
+  --destructive-foreground: #FFFFFF;
+  --border: var(--color-paper-300);
+  --input: var(--color-paper-500);
+  --ring: var(--color-navy-700);
+  --radius: 0.5rem;
+
+  /* Brand accent – named explicitly to avoid the shadcn "accent" clash */
+  --brand-accent: var(--color-olive-600);
+  --brand-accent-hover: var(--color-olive-700);
+  --brand-accent-foreground: #FFFFFF;
+
+  --sidebar: var(--color-navy-700);
+  --sidebar-foreground: rgba(255, 255, 255, 0.80);
+  --sidebar-primary: var(--color-sand-300);
+  --sidebar-primary-foreground: var(--color-navy-900);
+  --sidebar-accent: var(--color-navy-800);
+  --sidebar-accent-foreground: #FFFFFF;
+  --sidebar-border: rgba(216, 199, 166, 0.20);
+  --sidebar-ring: var(--color-sand-300);
+}
+
+html { font-family: var(--font-sans); color: var(--foreground); background: var(--background); }
+
+/* Design §5.2 type scale and §5.3 numbers */
+.font-display { font-family: var(--font-display); }
+.code { font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+.num { font-variant-numeric: tabular-nums; }
+body { font-size: 14px; line-height: 22px; }
+
+/* Design §4.6 focus ring: 2 px navy + 2 px white offset; on navy surfaces sand */
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.on-navy :focus-visible { outline-color: var(--sidebar-ring); }
+
+/* Design §6.5 touch density */
+@media (pointer: coarse) {
+  .touch-target { min-height: 44px; }
+}
+
+/* Design §7.4 reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 1ms !important; animation-duration: 1ms !important; }
+}

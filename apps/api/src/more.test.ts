@@ -61,7 +61,7 @@ const sell = async (customerId: string | null, qty = 1) => {
 describe('master data (FR-ADM-10)', () => {
   it('is seeded, readable by staff and editable by the owner', async () => {
     const reasons = (await h.call('GET', '/api/v1/admin/master-data/reason_code', { cookie: warehouse })).body.items;
-    expect(reasons.map((r: { code: string }) => r.code)).toEqual(['damaged', 'lost', 'found', 'correction', 'expired', 'gift']);
+    expect(reasons.map((r: { code: string }) => r.code)).toEqual(['damaged', 'lost', 'found', 'correction', 'expired', 'gift', 'import_rollback']);
     expect((await h.call('GET', '/api/v1/admin/master-data/order_source', { cookie: cashier })).body.items).toHaveLength(8);
     expect((await h.call('PUT', '/api/v1/admin/master-data/reason_code/gift', { cookie: manager, body: { name: 'x' } })).status).toBe(403);
     const renamed = await h.call('PUT', '/api/v1/admin/master-data/reason_code/damaged', { cookie: owner, body: { name: 'Hỏng, rách' } });

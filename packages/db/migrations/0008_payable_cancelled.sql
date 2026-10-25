@@ -1,0 +1,2 @@
+ALTER TABLE "purchasing"."payable" DROP CONSTRAINT "payable_status_ck";--> statement-breakpoint
+ALTER TABLE "purchasing"."payable" ADD CONSTRAINT "payable_status_ck" CHECK ("purchasing"."payable"."status" in ('open', 'paid', 'cancelled'));

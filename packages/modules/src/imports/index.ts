@@ -528,22 +528,25 @@ async function commitStockIn(tx: Tx, ctx: Ctx, jobId: string, v: ReturnType<type
 async function commitProducts(tx: Tx, ctx: Ctx, jobId: string, v: ReturnType<typeof validateRows>) {
   let created = 0;
   let openingUnits = 0;
+  const variantIds: string[] = [];
   for (const r of v.rows) {
-    const { variantIds } = await catalog.createItemTx(tx, ctx, await newItemInput(r));
+    const made = await catalog.createItemTx(tx, ctx, await newItemInput(r));
+    variantIds.push(made.variantIds[0]!);
     created++;
     const qty = r.parsed.openingQty as number;
     if (qty > 0) {
-      await inventory.apply(tx, ctx, { variantId: variantIds[0]!, type: 'stock_in', qtyDelta: qty, unitCostVnd: r.parsed.costVnd as number, refType: 'import_job', refId: jobId, note: 'Tồn đầu kỳ' });
+      await inventory.apply(tx, ctx, { variantId: made.variantIds[0]!, type: 'stock_in', qtyDelta: qty, unitCostVnd: r.parsed.costVnd as number, refType: 'import_job', refId: jobId, note: 'Tồn đầu kỳ' });
       openingUnits += qty;
     }
   }
-  return { created, openingUnits };
+  return { created, openingUnits, variantIds };
 }
 
 /** Customers with points (FR-CRM-09): imported points expire 12 months after import (TDD §4.12). */
 async function commitCustomers(tx: Tx, ctx: Ctx, v: ReturnType<typeof validateRows>) {
   let created = 0;
   let points = 0;
+  const customerIds: string[] = [];
   for (const r of v.rows) {
     const p = r.parsed as { name: string; phone: string; email?: string; birthDate?: string; points: number };
     const c = await customers.createCustomerTx(tx, ctx, {
@@ -553,13 +556,14 @@ async function commitCustomers(tx: Tx, ctx: Ctx, v: ReturnType<typeof validateRo
       ...(p.birthDate && { birthDate: p.birthDate }),
       source: 'import',
     });
+    customerIds.push(c.id);
     if (p.points > 0) {
       await customers.post(tx, ctx, { customerId: c.id, delta: p.points, reason: 'import', note: 'Điểm chuyển từ hệ thống cũ' });
       points += p.points;
     }
     created++;
   }
-  return { created, points };
+  return { created, points, customerIds };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -649,3 +653,5 @@ export async function exportCatalog(ctx: Ctx): Promise<Uint8Array> {
   await audit.record(ctx.db, ctx, { action: 'catalog.export', entity: 'catalog', after: { rows: body.length } });
   return writeTable('Sản phẩm', fields.map((f) => f.label), body);
 }
+
+export { rollback } from './rollback.js';

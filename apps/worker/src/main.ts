@@ -43,6 +43,7 @@ const JOBS: { name: string; cron: string; run: () => Promise<unknown> }[] = [
     },
   },
   { name: 'session.cleanup', cron: '15 * * * *', run: () => jobs.cleanupSessions(ctx()) },
+  { name: 'consignment.deadline_alert', cron: '0 7 * * *', run: () => jobs.consignmentDeadlineAlert(ctx()) },
 ];
 
 async function main() {

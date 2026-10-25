@@ -5,7 +5,7 @@ import { csrf, errorHandler, limitBody, requestContext, securityHeaders, session
 import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
 import { importRoutes } from './routes/imports.js';
-import { moreRoutes } from './routes/more.js';
+import { moreRoutes, purchasingExtraRoutes, rollbackRoutes } from './routes/more.js';
 import { offlineRoutes } from './routes/offline.js';
 import { posRoutes } from './routes/pos.js';
 import { reportRoutes } from './routes/reports.js';
@@ -36,6 +36,8 @@ export function createApp(deps: Deps): OpenAPIHono<AppEnv> {
   reportRoutes(app);
   offlineRoutes(app);
   moreRoutes(app);
+  purchasingExtraRoutes(app);
+  rollbackRoutes(app);
 
   app.openAPIRegistry.registerComponent('securitySchemes', 'session', { type: 'apiKey', in: 'cookie', name: '__Host-bms_sid' });
   app.doc31('/api/v1/openapi.json', { openapi: '3.1.0', info: { title: 'Bookstore Management System – staff API', version: '1.0.0' } });

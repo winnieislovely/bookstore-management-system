@@ -135,7 +135,7 @@ export const payable = purchasing.table(
   (t) => [
     index('payable_supplier_idx').on(t.supplierId, t.status),
     check('payable_source_ck', inList(t.source, ['stock_in', 'consignment'])),
-    check('payable_status_ck', inList(t.status, ['open', 'paid'])),
+    check('payable_status_ck', inList(t.status, ['open', 'paid', 'cancelled'])),
     check('payable_amount_ck', sql`${t.amountVnd} >= 0 and ${t.paidVnd} >= 0 and ${t.paidVnd} <= ${t.amountVnd}`),
   ],
 );

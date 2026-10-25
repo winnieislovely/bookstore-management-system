@@ -4,6 +4,7 @@ import { asc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import * as customers from '../customers/index.js';
 import type { EInvoiceAdapter, IssueRequest } from '../integrations/einvoice.js';
 import * as notifications from '../notifications/index.js';
+import * as settings from '../settings/index.js';
 import { tsParam, type Ctx, type Tx } from '../platform/index.js';
 
 /**
@@ -227,3 +228,24 @@ export async function integrityCheck(ctx: Ctx): Promise<Drift[]> {
   return rows.map((r) => ({ check: r.check, ref: r.ref, expected: Number(r.expected), actual: Number(r.actual) }));
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// consignment.deadline_alert (FR-PUR-13, TDD §4.3)
+
+/** Notify payables holders once per lot whose deadline is near and that still has unsold stock. */
+export async function consignmentDeadlineAlert(ctx: Ctx): Promise<number> {
+  const now = ctx.clock.now();
+  const cfg = await settings.snapshot(ctx);
+  const until = new Date(now.getTime() + cfg['purchasing.consignment_alert_days'] * 86_400_000);
+  const lots = await ctx.db.execute<{ id: string; sku: string; supplier: string; deadline_at: Date; remaining: number }>(sql`
+    select l.id, v.sku, s.name as supplier, l.deadline_at, (l.qty_received - l.qty_sold - l.qty_returned)::int as remaining
+    from purchasing.consignment_lot l join catalog.item_variant v on v.id = l.variant_id join purchasing.supplier s on s.id = l.supplier_id
+    where l.deadline_at is not null and l.deadline_at <= ${tsParam(until)} and l.qty_received - l.qty_sold - l.qty_returned > 0
+      and not exists (select 1 from platform.notification n where n.template = 'consignment.deadline' and n.vars ->> 'lotId' = l.id::text)`);
+  for (const lot of lots) {
+    await ctx.db.transaction((tx) =>
+      notifications.notifyHolders(tx, 'purchasing.payables', 'consignment.deadline', { lotId: lot.id, sku: lot.sku, supplier: lot.supplier, deadlineAt: lot.deadline_at, remaining: lot.remaining }),
+    );
+  }
+  return lots.length;
+}
