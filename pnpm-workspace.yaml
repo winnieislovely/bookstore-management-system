@@ -1,0 +1,12 @@
+packages:
+  - apps/*
+  - packages/*
+
+# TDD §10.7: adopt new package versions only after a release-age cooldown (14 days, in minutes).
+minimumReleaseAge: 20160
+
+# TDD §10.7: install scripts are disabled by default; allow-list the ones we need.
+onlyBuiltDependencies:
+  - esbuild
+  - "@node-rs/argon2"
+  - sharp

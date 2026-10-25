@@ -1,0 +1,29 @@
+{
+  "name": "@bookstore/modules",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./platform": "./src/platform/index.ts",
+    "./identity": "./src/identity/index.ts",
+    "./settings": "./src/settings/index.ts",
+    "./audit": "./src/audit/index.ts",
+    "./catalog": "./src/catalog/index.ts",
+    "./inventory": "./src/inventory/index.ts",
+    "./purchasing": "./src/purchasing/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@bookstore/db": "workspace:*",
+    "@bookstore/domain": "workspace:*",
+    "@node-rs/argon2": "^2.2.2",
+    "drizzle-orm": "^0.45.4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@bookstore/testkit": "workspace:*"
+  }
+}

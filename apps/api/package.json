@@ -1,0 +1,26 @@
+{
+  "name": "@bookstore/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@bookstore/db": "workspace:*",
+    "@bookstore/domain": "workspace:*",
+    "@bookstore/modules": "workspace:*",
+    "@hono/node-server": "^2.1.4",
+    "@hono/zod-openapi": "^1.6.3",
+    "hono": "^4.13.13",
+    "pino": "^10.4.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@bookstore/testkit": "workspace:*",
+    "tsx": "^4.23.15"
+  }
+}

@@ -1,0 +1,37 @@
+import { ping } from '@bookstore/modules/platform';
+import { OpenAPIHono } from '@hono/zod-openapi';
+import type { AppEnv, Deps } from './http/context.js';
+import { csrf, errorHandler, limitBody, requestContext, securityHeaders, session } from './http/middleware.js';
+import { adminRoutes } from './routes/admin.js';
+import { authRoutes } from './routes/auth.js';
+import { stockRoutes } from './routes/stock.js';
+
+/** The `api` process (TDD §3.2): staff API now; public API, webhooks and POS sync follow. */
+export function createApp(deps: Deps): OpenAPIHono<AppEnv> {
+  const app = new OpenAPIHono<AppEnv>();
+  app.onError(errorHandler(deps));
+  app.notFound((c) =>
+    c.json({ error: { code: 'not_found', message: 'Không tìm thấy địa chỉ này.', requestId: c.get('requestId') ?? 'unknown' } }, 404),
+  );
+
+  app.use('*', requestContext(deps));
+  app.use('*', securityHeaders);
+  app.use('/api/*', csrf(deps));
+  app.use('/api/*', limitBody);
+  app.use('/api/*', session);
+
+  authRoutes(app, deps);
+  adminRoutes(app);
+  stockRoutes(app);
+
+  app.openAPIRegistry.registerComponent('securitySchemes', 'session', { type: 'apiKey', in: 'cookie', name: '__Host-bms_sid' });
+  app.doc31('/api/v1/openapi.json', { openapi: '3.1.0', info: { title: 'Bookstore Management System – staff API', version: '1.0.0' } });
+
+  /** Health check: database reachable (TDD §11.5). */
+  app.get('/healthz', async (c) => {
+    await ping(deps.db);
+    return c.json({ ok: true });
+  });
+
+  return app;
+}

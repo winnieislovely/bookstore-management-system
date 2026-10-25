@@ -1,0 +1,17 @@
+{
+  "name": "@bookstore/testkit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@bookstore/db": "workspace:*",
+    "@testcontainers/postgresql": "^12.2.0",
+    "postgres": "^3.4.9"
+  }
+}

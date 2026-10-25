@@ -1,0 +1,21 @@
+# Local development database (TDD §12.1). Production topology is in docker-compose.yml.
+name: bookstore-dev
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: bookstore
+      POSTGRES_PASSWORD: bookstore
+      POSTGRES_DB: bookstore
+      TZ: UTC
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookstore -d bookstore"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  pgdata:
