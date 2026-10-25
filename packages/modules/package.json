@@ -20,7 +20,8 @@
     "./imports": "./src/imports/index.ts",
     "./files": "./src/files/index.ts",
     "./reports": "./src/reports/index.ts",
-    "./sales/sync": "./src/sales/sync.ts"
+    "./sales/sync": "./src/sales/sync.ts",
+    "./masterdata": "./src/masterdata/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

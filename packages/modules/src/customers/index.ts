@@ -259,3 +259,5 @@ export async function adjustCredit(ctx: Ctx, customerId: string, input: z.input<
 }
 
 export * from './privacy.js';
+
+export * from './merge.js';

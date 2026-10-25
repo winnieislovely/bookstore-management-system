@@ -7,7 +7,7 @@ import * as customers from '../customers/index.js';
 import * as inventory from '../inventory/index.js';
 import * as purchasing from '../purchasing/index.js';
 import * as settings from '../settings/index.js';
-import { AppError, errors, requirePermission, type Ctx, type Tx } from '../platform/index.js';
+import { AppError, can, errors, requirePermission, type Ctx, type Tx } from '../platform/index.js';
 import { readTable, writeTable } from './parse.js';
 
 /**
@@ -592,3 +592,60 @@ export async function errorReport(ctx: Ctx, jobId: string): Promise<Uint8Array> 
 
 
 export { readTable, writeTable } from './parse.js';
+
+// ---------------------------------------------------------------------------------------------
+// Catalogue export (FR-CAT-11): the product import layout, so a file can be edited and imported
+// again. Cost appears only with `catalog.view_cost`; "Tồn đầu kỳ" carries the current stock.
+
+export async function exportCatalog(ctx: Ctx): Promise<Uint8Array> {
+  const actor = requirePermission(ctx, 'catalog.import');
+  const showCost = can(actor, 'catalog.view_cost');
+  const rows = await ctx.db.execute<{
+    sku: string;
+    isbn13: string | null;
+    kind: string;
+    title: string;
+    title_vi: string | null;
+    description: string | null;
+    category: string | null;
+    authors: string[];
+    publisher: string | null;
+    price_vnd: string;
+    avg_cost: string | null;
+    vat_bp: number;
+    weight_g: number;
+    on_hand: number;
+    min_stock: number | null;
+  }>(sql`
+    select v.sku, v.isbn13, i.kind, i.i18n -> 'en' ->> 'title' as title, i.i18n -> 'vi' ->> 'title' as title_vi,
+           i.i18n -> 'en' ->> 'description' as description,
+           (select c.i18n -> 'en' ->> 'name' from catalog.item_category ic join catalog.category c on c.id = ic.category_id where ic.item_id = i.id order by c.sort, c.slug limit 1) as category,
+           i.authors, (select p.i18n -> 'en' ->> 'name' from catalog.publisher p where p.id = i.publisher_id) as publisher,
+           v.price_vnd, (select max(s.avg_cost_vnd) from inventory.stock_level s where s.variant_id = v.id) as avg_cost,
+           v.vat_bp, v.weight_g, coalesce((select sum(s.on_hand) from inventory.stock_level s where s.variant_id = v.id), 0)::int as on_hand, v.min_stock
+    from catalog.item_variant v join catalog.item i on i.id = v.item_id order by v.sku`);
+  const typeLabel: Record<string, string> = { book: 'Sách', stationery: 'Văn phòng phẩm', other: 'Khác', bundle: 'Khác' };
+  const fields = FIELDS.products.filter((f) => showCost || f.key !== 'cost');
+  const body = rows.map((r) => {
+    const values: Record<string, string | number | null> = {
+      sku: r.sku,
+      isbn: r.isbn13,
+      item_type: typeLabel[r.kind] ?? 'Khác',
+      name: r.title,
+      name_vi: r.title_vi,
+      description: r.description,
+      category: r.category,
+      authors: r.authors.join('; '),
+      publisher: r.publisher,
+      price: Number(r.price_vnd),
+      cost: r.avg_cost === null ? null : Number(r.avg_cost),
+      vat: r.vat_bp / 100,
+      weight: r.weight_g,
+      opening_qty: r.on_hand,
+      min_stock: r.min_stock,
+    };
+    return fields.map((f) => values[f.key] ?? null);
+  });
+  await audit.record(ctx.db, ctx, { action: 'catalog.export', entity: 'catalog', after: { rows: body.length } });
+  return writeTable('Sản phẩm', fields.map((f) => f.label), body);
+}

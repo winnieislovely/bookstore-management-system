@@ -603,3 +603,5 @@ export async function removeImage(ctx: Ctx, itemId: string, imageId: string) {
     await touchItem(tx, itemId);
   });
 }
+
+export * from './labels.js';

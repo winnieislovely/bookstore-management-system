@@ -4,6 +4,7 @@ import { and, asc, desc, eq, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
 import * as identity from '../identity/index.js';
+import * as masterdata from '../masterdata/index.js';
 import * as settings from '../settings/index.js';
 import { AppError, can, emit, errors, nextDocNo, requirePermission, type Ctx, type Tx } from '../platform/index.js';
 
@@ -206,6 +207,9 @@ export async function adjust(ctx: Ctx, input: z.input<typeof AdjustmentSchema>) 
   const actor = requirePermission(ctx, 'inventory.adjust');
   const data = AdjustmentSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
+    if (!(await masterdata.isActive(tx, 'reason_code', data.reasonCode))) {
+      throw new AppError(400, 'invalid_reason_code', 'Lý do điều chỉnh không có trong danh mục. Hãy chọn một lý do có sẵn.');
+    }
     const cfg = await settings.snapshot(ctx, tx);
     const [level] = await tx
       .select()

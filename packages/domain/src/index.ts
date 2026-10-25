@@ -13,3 +13,4 @@ export * from './shift.js';
 export * from './payment-ref.js';
 export * from './state-machines.js';
 export * from './docno.js';
+export * from './barcode.js';

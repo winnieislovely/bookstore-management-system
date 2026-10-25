@@ -897,103 +897,113 @@ export const ReturnSchema = z.object({
 export async function returnSale(ctx: Ctx, saleId: string, input: z.input<typeof ReturnSchema>) {
   requirePermission(ctx, 'return.create');
   const data = ReturnSchema.parse(input);
-  return ctx.db.transaction(async (tx) => {
-    const [s] = await tx.select().from(schema.sale).where(eq(schema.sale.id, saleId)).for('update');
-    if (!s) throw errors.notFound('Đơn bán');
-    if (s.status !== 'completed') throw errors.conflict('sale_not_completed', 'Đơn đã bị hủy, không thể trả hàng.');
-    await openShiftRow(tx, data.shiftId);
-    const cfg = await settings.snapshot(ctx, tx);
-    const now = ctx.clock.now();
+  return ctx.db.transaction((tx) => returnSaleTx(tx, ctx, saleId, data));
+}
 
-    // Return window (BR-04): exceptions need approval (FR-POS-12).
-    const windowEnd = s.soldAt.getTime() + cfg['sale.return_window_days'] * 86_400_000;
-    let approvedBy: string | null = null;
-    if (now.getTime() > windowEnd) {
-      approvedBy = await requireOrApprove(tx, ctx, 'return.approve', 'return_exception', data.approvalToken, saleId, `Đơn đã quá hạn đổi trả ${cfg['sale.return_window_days']} ngày, cần quản lý duyệt.`);
-    }
-    // Refund to the original payment method or as store credit to the sale's customer (FR-POS-13, FR-CRM-10).
-    if (data.refundMethod === 'store_credit') {
-      if (!s.customerId) {
-        throw new AppError(422, 'store_credit_needs_customer', 'Đơn không có khách hàng nên không thể ghi có. Hãy hoàn tiền theo phương thức đã thanh toán.');
-      }
-    } else {
-      const methods = (await tx.select({ m: schema.salePayment.method }).from(schema.salePayment).where(eq(schema.salePayment.saleId, saleId))).map((p) => p.m);
-      if (!methods.includes(data.refundMethod)) {
-        throw new AppError(422, 'refund_method_mismatch', 'Chỉ hoàn tiền theo phương thức khách đã thanh toán, hoặc ghi có cho khách.', { paidWith: methods });
-      }
-    }
+/** Options for returns recorded offline on the device that sold the sale (TDD §7.1). */
+export interface ReturnOptions {
+  offline?: { at: Date; approverId: string | null };
+}
 
-    const saleLines = await tx.select().from(schema.saleLine).where(eq(schema.saleLine.saleId, saleId));
-    const prior = await tx.execute<{ sale_line_id: string; qty: number }>(sql`
-      select rl.sale_line_id, sum(rl.qty)::int as qty from sales.sale_return_line rl
-      join sales.sale_return r on r.id = rl.return_id where r.sale_id = ${saleId}::uuid group by rl.sale_line_id`);
-    const priorQty = (id: string) => prior.find((p) => p.sale_line_id === id)?.qty ?? 0;
+export async function returnSaleTx(tx: Tx, ctx: Ctx, saleId: string, data: z.infer<typeof ReturnSchema>, opts: ReturnOptions = {}) {
+  const [s] = await tx.select().from(schema.sale).where(eq(schema.sale.id, saleId)).for('update');
+  if (!s) throw errors.notFound('Đơn bán');
+  if (s.status !== 'completed') throw errors.conflict('sale_not_completed', 'Đơn đã bị hủy, không thể trả hàng.');
+  if (!opts.offline) await openShiftRow(tx, data.shiftId);
+  const cfg = await settings.snapshot(ctx, tx);
+  const now = opts.offline?.at ?? ctx.clock.now();
 
-    // Cumulative refund of n units of a line: exact once the whole line is returned.
-    const refundOf = (total: number, lineQty: number, n: number) => divRoundHalfUp(total * n, lineQty);
-    let refund = 0;
-    let earningBefore = 0;
-    let earningAfter = 0;
-    let pointsDiscBefore = 0;
-    let pointsDiscAfter = 0;
-    const planned: { line: (typeof saleLines)[number]; qty: number; amount: number; restock: boolean }[] = [];
-    for (const r of data.lines) {
-      const line = saleLines.find((l) => l.id === r.saleLineId);
-      if (!line) throw new AppError(400, 'line_not_in_sale', 'Dòng hàng không thuộc đơn này.');
-      const done = priorQty(line.id);
-      if (done + r.qty > line.qty) {
-        throw new AppError(422, 'return_exceeds_sold', `Chỉ còn ${line.qty - done} sản phẩm '${line.description}' có thể trả.`);
-      }
-      const amount = refundOf(line.totalVnd, line.qty, done + r.qty) - refundOf(line.totalVnd, line.qty, done);
-      refund += amount;
-      planned.push({ line, qty: r.qty, amount, restock: r.restock });
+  // Return window (BR-04): exceptions need approval (FR-POS-12).
+  const windowEnd = s.soldAt.getTime() + cfg['sale.return_window_days'] * 86_400_000;
+  let approvedBy: string | null = null;
+  if (now.getTime() > windowEnd) {
+    // Offline returns were approved on the device; the sync processor re-checks the approver (TDD §7.6).
+    approvedBy = opts.offline
+      ? opts.offline.approverId
+      : await requireOrApprove(tx, ctx, 'return.approve', 'return_exception', data.approvalToken, saleId, `Đơn đã quá hạn đổi trả ${cfg['sale.return_window_days']} ngày, cần quản lý duyệt.`);
+  }
+  // Refund to the original payment method or as store credit to the sale's customer (FR-POS-13, FR-CRM-10).
+  if (data.refundMethod === 'store_credit') {
+    if (!s.customerId) {
+      throw new AppError(422, 'store_credit_needs_customer', 'Đơn không có khách hàng nên không thể ghi có. Hãy hoàn tiền theo phương thức đã thanh toán.');
     }
-    // Points reversal on the share of point-earning value returned, cumulative so it never over-reverses (BR-19).
-    const earningTotal = saleLines.filter((l) => l.itemClass === 'goods').reduce((a, l) => a + l.totalVnd, 0);
-    for (const l of saleLines.filter((x) => x.itemClass === 'goods')) {
-      const done = priorQty(l.id);
-      const now2 = done + (planned.find((p) => p.line.id === l.id)?.qty ?? 0);
-      earningBefore += refundOf(l.totalVnd, l.qty, done);
-      earningAfter += refundOf(l.totalVnd, l.qty, now2);
-      const lineGross = l.unitPriceVnd * l.qty;
-      pointsDiscBefore += refundOf(lineGross, l.qty, done);
-      pointsDiscAfter += refundOf(lineGross, l.qty, now2);
+  } else {
+    const methods = (await tx.select({ m: schema.salePayment.method }).from(schema.salePayment).where(eq(schema.salePayment.saleId, saleId))).map((p) => p.m);
+    if (!methods.includes(data.refundMethod)) {
+      throw new AppError(422, 'refund_method_mismatch', 'Chỉ hoàn tiền theo phương thức khách đã thanh toán, hoặc ghi có cho khách.', { paidWith: methods });
     }
-    const reverse = pointsToReverse(s.pointsEarned, earningTotal, earningAfter) - pointsToReverse(s.pointsEarned, earningTotal, earningBefore);
-    const grossTotal = saleLines.filter((x) => x.itemClass === 'goods').reduce((a, l) => a + l.unitPriceVnd * l.qty, 0);
-    const pointsBack =
-      s.pointsRedeemed > 0 ? pointsToReverse(s.pointsRedeemed, grossTotal, pointsDiscAfter) - pointsToReverse(s.pointsRedeemed, grossTotal, pointsDiscBefore) : 0;
+  }
 
-    const docNo = await nextDocNo(tx, 'RET', now);
-    const [ret] = await tx
-      .insert(schema.saleReturn)
-      .values({ docNo, saleId, shiftId: data.shiftId, refundMethod: data.refundMethod, refundVnd: refund, pointsReversed: reverse, reason: data.reason ?? null, approvedBy, createdBy: ctx.actor!.userId, createdAt: now })
-      .returning({ id: schema.saleReturn.id });
-    for (const p of planned) {
-      await tx.insert(schema.saleReturnLine).values({ returnId: ret!.id, saleLineId: p.line.id, qty: p.qty, refundVnd: p.amount, restock: p.restock });
-      // Damaged returns do not restock (BR-04); they stay off the shelf.
-      if (p.restock && p.line.variantId) await restock(tx, ctx, 'sale_return', ret!.id, p.line.variantId, p.qty, p.line.qty ? divRoundHalfUp(p.line.costVnd, p.line.qty) : 0);
-      await reverseConsignment(tx, p.line.id, p.qty);
+  const saleLines = await tx.select().from(schema.saleLine).where(eq(schema.saleLine.saleId, saleId));
+  const prior = await tx.execute<{ sale_line_id: string; qty: number }>(sql`
+    select rl.sale_line_id, sum(rl.qty)::int as qty from sales.sale_return_line rl
+    join sales.sale_return r on r.id = rl.return_id where r.sale_id = ${saleId}::uuid group by rl.sale_line_id`);
+  const priorQty = (id: string) => prior.find((p) => p.sale_line_id === id)?.qty ?? 0;
+
+  // Cumulative refund of n units of a line: exact once the whole line is returned.
+  const refundOf = (total: number, lineQty: number, n: number) => divRoundHalfUp(total * n, lineQty);
+  let refund = 0;
+  let earningBefore = 0;
+  let earningAfter = 0;
+  let pointsDiscBefore = 0;
+  let pointsDiscAfter = 0;
+  const planned: { line: (typeof saleLines)[number]; qty: number; amount: number; restock: boolean }[] = [];
+  for (const r of data.lines) {
+    const line = saleLines.find((l) => l.id === r.saleLineId);
+    if (!line) throw new AppError(400, 'line_not_in_sale', 'Dòng hàng không thuộc đơn này.');
+    const done = priorQty(line.id);
+    if (done + r.qty > line.qty) {
+      throw new AppError(422, 'return_exceeds_sold', `Chỉ còn ${line.qty - done} sản phẩm '${line.description}' có thể trả.`);
     }
-    if (data.refundMethod === 'store_credit' && refund > 0) {
-      // A return of a sale paid by store credit is refunded as credit too (spend reversal).
-      const [paidByCredit] = await tx.execute<{ n: number }>(sql`select count(*)::int as n from sales.sale_payment where sale_id = ${saleId}::uuid and method = 'store_credit'`);
-      await customers.postCredit(tx, ctx, {
-        customerId: s.customerId!,
-        deltaVnd: refund,
-        reason: paidByCredit!.n > 0 ? 'spend_reversal' : 'refund',
-        refType: 'sale_return',
-        refId: ret!.id,
-      });
-    }
-    if (s.customerId) {
-      if (reverse > 0) await customers.post(tx, ctx, { customerId: s.customerId, delta: -reverse, reason: 'return_reversal', refType: 'sale_return', refId: ret!.id }, { floorAtZero: true });
-      if (pointsBack > 0) await customers.post(tx, ctx, { customerId: s.customerId, delta: pointsBack, reason: 'redeem_refund', refType: 'sale_return', refId: ret!.id });
-    }
-    await audit.record(tx, ctx, { action: 'sale.return', entity: 'sale', entityId: saleId, after: { docNo, refundVnd: refund, refundMethod: data.refundMethod, approvedBy, pointsReversed: reverse } });
-    await emit(tx, 'sale.returned', { saleId, returnId: ret!.id });
-    return { id: ret!.id, docNo, refundVnd: refund, pointsReversed: reverse, pointsRefunded: pointsBack };
-  });
+    const amount = refundOf(line.totalVnd, line.qty, done + r.qty) - refundOf(line.totalVnd, line.qty, done);
+    refund += amount;
+    planned.push({ line, qty: r.qty, amount, restock: r.restock });
+  }
+  // Points reversal on the share of point-earning value returned, cumulative so it never over-reverses (BR-19).
+  const earningTotal = saleLines.filter((l) => l.itemClass === 'goods').reduce((a, l) => a + l.totalVnd, 0);
+  for (const l of saleLines.filter((x) => x.itemClass === 'goods')) {
+    const done = priorQty(l.id);
+    const now2 = done + (planned.find((p) => p.line.id === l.id)?.qty ?? 0);
+    earningBefore += refundOf(l.totalVnd, l.qty, done);
+    earningAfter += refundOf(l.totalVnd, l.qty, now2);
+    const lineGross = l.unitPriceVnd * l.qty;
+    pointsDiscBefore += refundOf(lineGross, l.qty, done);
+    pointsDiscAfter += refundOf(lineGross, l.qty, now2);
+  }
+  const reverse = pointsToReverse(s.pointsEarned, earningTotal, earningAfter) - pointsToReverse(s.pointsEarned, earningTotal, earningBefore);
+  const grossTotal = saleLines.filter((x) => x.itemClass === 'goods').reduce((a, l) => a + l.unitPriceVnd * l.qty, 0);
+  const pointsBack =
+    s.pointsRedeemed > 0 ? pointsToReverse(s.pointsRedeemed, grossTotal, pointsDiscAfter) - pointsToReverse(s.pointsRedeemed, grossTotal, pointsDiscBefore) : 0;
+
+  const docNo = await nextDocNo(tx, 'RET', now);
+  const [ret] = await tx
+    .insert(schema.saleReturn)
+    .values({ docNo, saleId, shiftId: data.shiftId, refundMethod: data.refundMethod, refundVnd: refund, pointsReversed: reverse, reason: data.reason ?? null, approvedBy, createdBy: ctx.actor!.userId, createdAt: now })
+    .returning({ id: schema.saleReturn.id });
+  for (const p of planned) {
+    await tx.insert(schema.saleReturnLine).values({ returnId: ret!.id, saleLineId: p.line.id, qty: p.qty, refundVnd: p.amount, restock: p.restock });
+    // Damaged returns do not restock (BR-04); they stay off the shelf.
+    if (p.restock && p.line.variantId) await restock(tx, ctx, 'sale_return', ret!.id, p.line.variantId, p.qty, p.line.qty ? divRoundHalfUp(p.line.costVnd, p.line.qty) : 0);
+    await reverseConsignment(tx, p.line.id, p.qty);
+  }
+  if (data.refundMethod === 'store_credit' && refund > 0) {
+    // A return of a sale paid by store credit is refunded as credit too (spend reversal).
+    const [paidByCredit] = await tx.execute<{ n: number }>(sql`select count(*)::int as n from sales.sale_payment where sale_id = ${saleId}::uuid and method = 'store_credit'`);
+    await customers.postCredit(tx, ctx, {
+      customerId: s.customerId!,
+      deltaVnd: refund,
+      reason: paidByCredit!.n > 0 ? 'spend_reversal' : 'refund',
+      refType: 'sale_return',
+      refId: ret!.id,
+    });
+  }
+  if (s.customerId) {
+    if (reverse > 0) await customers.post(tx, ctx, { customerId: s.customerId, delta: -reverse, reason: 'return_reversal', refType: 'sale_return', refId: ret!.id }, { floorAtZero: true });
+    if (pointsBack > 0) await customers.post(tx, ctx, { customerId: s.customerId, delta: pointsBack, reason: 'redeem_refund', refType: 'sale_return', refId: ret!.id });
+  }
+  await audit.record(tx, ctx, { action: 'sale.return', entity: 'sale', entityId: saleId, after: { docNo, refundVnd: refund, refundMethod: data.refundMethod, approvedBy, pointsReversed: reverse } });
+  await emit(tx, 'sale.returned', { saleId, returnId: ret!.id });
+  return { id: ret!.id, docNo, refundVnd: refund, pointsReversed: reverse, pointsRefunded: pointsBack };
 }
 
 // =============================================================================================

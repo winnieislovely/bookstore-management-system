@@ -10,7 +10,7 @@ import * as notifications from '../notifications/index.js';
 import * as promotions from '../promotions/index.js';
 import * as settings from '../settings/index.js';
 import { AppError, can, emit, errors, requirePermission, tsParam, type Ctx, type Tx } from '../platform/index.js';
-import { allocateConsignment, deductStock, shiftCash } from './index.js';
+import { allocateConsignment, deductStock, returnSaleTx, shiftCash } from './index.js';
 
 /**
  * Offline POS (FR-POS-23..26, NFR-OFF-01..03, TDD §7). A completed offline sale is a fact: the
@@ -324,9 +324,25 @@ const SaleCompleted = z.object({
   }),
 });
 
+const SaleReturned = z.object({
+  type: z.literal('sale.returned'),
+  payload: z.object({
+    /** A sale made on this device (TDD §7.1); returns of other sales need the server. */
+    saleDocNo: z.string().min(3).max(30),
+    clientShiftId: z.uuid().optional(),
+    shiftId: z.uuid().optional(),
+    lines: z.array(z.object({ lineNo: z.number().int().positive(), qty: z.number().int().positive(), restock: z.boolean() })).min(1),
+    refundMethod: z.enum(['cash', 'transfer', 'card', 'store_credit']),
+    reason: z.string().max(500).optional(),
+    by: z.uuid(),
+    at: z.iso.datetime(),
+    approvals: z.array(z.object({ approverId: z.uuid(), action: z.enum(['return_exception', 'refund']) })).default([]),
+  }),
+});
+
 export const SyncEvent = z.intersection(
   z.object({ clientEventId: z.uuid(), seq: z.number().int().min(0), createdAt: z.iso.datetime() }),
-  z.discriminatedUnion('type', [ShiftOpened, ShiftClosed, CashMoved, SaleCompleted]),
+  z.discriminatedUnion('type', [ShiftOpened, ShiftClosed, CashMoved, SaleCompleted, SaleReturned]),
 );
 export type SyncEvent = z.infer<typeof SyncEvent>;
 
@@ -428,6 +444,41 @@ async function processEvent(tx: Tx, ctx: Ctx, device: Device, e: SyncEvent): Pro
     }
     await emit(tx, 'shift.closed', { shiftId: s.id, varianceVnd: variance });
     return { exceptions, ref: s.id };
+  }
+
+  if (e.type === 'sale.returned') {
+    const r = e.payload;
+    const [orig] = await tx.select().from(schema.sale).where(and(eq(schema.sale.docNo, r.saleDocNo), eq(schema.sale.deviceId, device.id)));
+    if (!orig) throw new Rejected('sale_not_on_device', 'Chỉ trả hàng ngoại tuyến cho đơn bán trên chính thiết bị này.');
+    const shift = await resolveShift(tx, device, r);
+    await activeUser(tx, r.by);
+    const saleLines = await tx.select({ id: schema.saleLine.id, lineNo: schema.saleLine.lineNo }).from(schema.saleLine).where(eq(schema.saleLine.saleId, orig.id));
+    const lines = r.lines.map((l) => {
+      const sl = saleLines.find((x) => x.lineNo === l.lineNo);
+      if (!sl) throw new Rejected('line_not_in_sale', 'Dòng hàng không thuộc đơn này.');
+      return { saleLineId: sl.id, qty: l.qty, restock: l.restock };
+    });
+    for (const a of r.approvals) {
+      const u = await activeUser(tx, a.approverId);
+      const ok = await tx.execute<{ ok: boolean }>(sql`
+        select (ro.is_owner or exists (select 1 from platform.role_permission rp where rp.role_id = ro.id and rp.permission = 'return.approve')) as ok
+        from platform.app_user u join platform.role ro on ro.id = u.role_id where u.id = ${a.approverId}::uuid`);
+      const code: SyncException = u.status === 'active' && ok[0]?.ok ? 'offline_approval' : 'approval_revoked';
+      if (!exceptions.includes(code)) exceptions.push(code);
+    }
+    try {
+      const done = await returnSaleTx(
+        tx,
+        ctx,
+        orig.id,
+        { shiftId: shift.id, lines, refundMethod: r.refundMethod, ...(r.reason && { reason: r.reason }) },
+        { offline: { at: new Date(r.at), approverId: r.approvals[0]?.approverId ?? null } },
+      );
+      return { exceptions, ref: done.id };
+    } catch (err) {
+      if (err instanceof AppError) throw new Rejected(err.code, err.message);
+      throw err;
+    }
   }
 
   // ---- sale.completed --------------------------------------------------------------------------
