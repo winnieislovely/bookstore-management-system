@@ -10,7 +10,11 @@
     "./audit": "./src/audit/index.ts",
     "./catalog": "./src/catalog/index.ts",
     "./inventory": "./src/inventory/index.ts",
-    "./purchasing": "./src/purchasing/index.ts"
+    "./purchasing": "./src/purchasing/index.ts",
+    "./customers": "./src/customers/index.ts",
+    "./notifications": "./src/notifications/index.ts",
+    "./promotions": "./src/promotions/index.ts",
+    "./sales": "./src/sales/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

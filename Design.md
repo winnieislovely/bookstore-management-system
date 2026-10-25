@@ -6,7 +6,7 @@
 | --- | --- |
 | **Document version** | 1.1 – Draft for review |
 | **Date** | 24 October 2026 |
-| **Changes in 1.1** | Lists: on phones status chips fold into the filter button beside search; product list shows SKU only (no ISBN, no channel column); order source shown as text without colour dot; gold tier badge is yellow. Codes set in Be Vietnam Pro (IBM Plex Mono dropped); all buttons are pills, text links for actions became tonal pill buttons; website descriptions required in English; waiting states show no time; order inbox is a table; dashboard alert tiles removed; POS: no lock or offline-test buttons, search reads “Nhập SKUs/tên sản phẩm” with the scan button at the end, confirm button reads “Xác nhận”, no keyboard shortcuts. **25 Oct 2026:** bank transfer at the POS shows the amount and payment reference only; the customer uses the store’s printed QR code, and no QR is generated (13.4). |
+| **Changes in 1.1** | Lists: on phones status chips fold into the filter button beside search; product list shows SKU only (no ISBN, no channel column); order source shown as text without colour dot; gold tier badge is yellow. Codes set in Be Vietnam Pro (IBM Plex Mono dropped); all buttons are pills, text links for actions became tonal pill buttons; website descriptions required in English; waiting states show no time; order inbox is a table; dashboard alert tiles removed; POS: no lock or offline-test buttons, search reads “Nhập SKUs/tên sản phẩm” with the scan button at the end, confirm button reads “Xác nhận”, no keyboard shortcuts. **25 Oct 2026:** bank transfer at the POS shows the amount and payment reference only; the customer uses the store’s printed QR code, and no QR is generated (13.4); store credit tile on the payment screen (13.4). |
 | **Based on** | SRS v1.1 Final and TDD v1.1 Final (both revised 24 Oct 2026) |
 | **Applies to** | `apps/staff` (React PWA: back office + POS), `packages/ui` (tokens and components), browser print templates, system emails |
 | **Not covered** | The public website interface (built by a separate front-end team, SRS §1.2, FR-WEB-23). This guide does not style the website. |
@@ -996,10 +996,11 @@ Features unavailable offline (TDD §7.1) stay visible but disabled with an inlin
 Full-width sheet/dialog over the cart:
 
 - Amount due in `pos-total` at the top.
-- Method tiles (96 px tall, radius `xl`, icon 32 px): Tiền mặt (`Banknote`), Chuyển khoản (`QrCode`), Thẻ (`CreditCard`). Selected tile: `navy-700` border 2 px + `navy-50` fill.
+- Method tiles (96 px tall, radius `xl`, icon 32 px): Tiền mặt (`Banknote`), Chuyển khoản (`QrCode`), Thẻ (`CreditCard`) and, only when the attached customer has a balance, Tiền ghi có (store credit, `WalletCards`) showing the balance (“Còn 120.000 ₫”). Selected tile: `navy-700` border 2 px + `navy-50` fill.
 - **Cash:** numeric keypad (64 px keys) + quick-amount chips (exact, 50.000, 100.000, 200.000, 500.000 ₫); “Tiền thừa” (change) in `pos-total` `success-700`.
 - **Bank transfer:** the store uses its **printed QR code** at the counter; the screen shows **no QR**. It shows the amount and the payment reference in `code-xl` (copy-able code display, 10.13) with the hint “Khách quét mã QR in sẵn tại quầy và ghi mã tham chiếu vào nội dung chuyển khoản”; buttons “Đã nhận tiền” (primary, pressed after checking amount and reference) and “Hủy” (FR-POS-06). Offline: recorded as unverified with a warning chip.
 - **Card:** field for approval code (code style, required).
+- **Store credit (“Tiền ghi có”):** amount defaults to the lower of the balance and the amount due; the remaining balance after payment is shown below in `body-sm` (FR-CRM-10). Returns offer “Ghi có cho khách” as a refund choice when a customer is on the sale.
 - **Split payment:** list of tenders with remaining amount shown prominently until it reaches 0.
 - **Completion:** checkmark in a `success-50` circle, sale number `code-xl`, change due, and actions: “Đơn mới” (primary), “Gửi hóa đơn điện tử qua email” (opens buyer details form, FR-POS-16), “In” only if a slip is wanted. No receipt is printed by default (FR-POS-07).
 

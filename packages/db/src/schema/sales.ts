@@ -168,8 +168,8 @@ export const saleLine = sales.table(
   ],
 );
 
-/** Tenders: cash, bank transfer (printed QR + reference) and card. Points are not a tender. */
-export const PAYMENT_METHODS = ['cash', 'transfer', 'card'] as const;
+/** Tenders: cash, bank transfer (printed QR + reference), card and store credit (FR-CRM-10). Points are not a tender. */
+export const PAYMENT_METHODS = ['cash', 'transfer', 'card', 'store_credit'] as const;
 
 export const salePayment = sales.table(
   'sale_payment',
@@ -264,6 +264,8 @@ export const einvoiceJob = sales.table(
     invoiceNo: text(),
     buyer: jsonb(),
     emailRequested: boolean().notNull().default(false),
+    /** Buyer details arrived after issue: cancel or adjust and reissue as regulation allows (TDD §8.3). */
+    reissueRequested: boolean().notNull().default(false),
     emailStatus: text(),
     error: text(),
     createdAt: createdAt(),

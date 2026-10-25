@@ -345,7 +345,8 @@ async function seedRoles(tx: Tx): Promise<Record<RoleCode, string>> {
   return ids as Record<RoleCode, string>;
 }
 
-export async function runSetup(ctx: Ctx, input: z.infer<typeof SetupSchema>) {
+/** `seed` lets the delivery layer add feature-module seeds (tiers, register) to the same transaction; platform never calls upward (TDD §3.3). */
+export async function runSetup(ctx: Ctx, input: z.infer<typeof SetupSchema>, seed?: (tx: Tx, ctx: Ctx) => Promise<void>) {
   const data = SetupSchema.parse(input);
   const passwordHash = await hashSecret(data.owner.password);
   return ctx.db.transaction(async (tx) => {
@@ -370,6 +371,7 @@ export async function runSetup(ctx: Ctx, input: z.infer<typeof SetupSchema>) {
       { 'store.name': data.store.name, 'store.address': data.store.address, 'store.tax_code': data.store.taxCode, 'store.phone': data.store.phone },
       tx,
     );
+    if (seed) await seed(tx, ownerCtx);
     await audit.record(tx, ownerCtx, { action: 'setup.completed', entity: 'app_user', entityId: owner!.id });
     return { ownerId: owner!.id };
   });

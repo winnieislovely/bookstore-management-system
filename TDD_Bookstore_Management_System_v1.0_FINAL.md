@@ -7,7 +7,7 @@
 | **Document version** | 1.1 – Final |
 | **Date** | 21 October 2026 (revised 24 October 2026) |
 | **Derived from** | SRS v1.1 – Bookstore Management System (255 requirements) |
-| **Changes in 1.1** | Import kind `stock_in` added for bulk stock-in (FR-PUR-14); SKU and ISBN stay separate import columns. Website text is stored English-first (`{ en, vi? }`) and the public API falls back to English (FR-WEB-22). The dashboard drops the operational alert tiles (orders waiting, overdue to-notify tasks, shift variances, failed e-invoices); these become in-app notifications and menu count badges (FR-RPT-01, FR-ADM-08). **25 Oct 2026:** loyalty points are a discount, not a payment method (§4.4, `sale_payment`); settings `inventory.adjust_approval_vnd`, `catalog.duplicate_mode`, store profile, sales-slip footer and MISA credentials added to Appendix A; document number prefixes (§3.6) and the derived permission keys (§10.3) recorded; bank transfers use the store’s printed QR code and a `payment_ref` the customer types; the VietQR generator and `PaymentQrAdapter` are removed (§4.4, §4.5, §4.6, §6.2, §8.1, §8.4); `search_text` is maintained by the catalogue service (§4.1); setup wizard, PIN and account-unlock endpoints added (§6.2); permission `user.unlock` for owner and manager (§6.2, §10.3); catalogue variant, price, lookup and category endpoints, count submit, low-stock, valuation and multi-line stock-in endpoints listed (§6.2). |
+| **Changes in 1.1** | Import kind `stock_in` added for bulk stock-in (FR-PUR-14); SKU and ISBN stay separate import columns. Website text is stored English-first (`{ en, vi? }`) and the public API falls back to English (FR-WEB-22). The dashboard drops the operational alert tiles (orders waiting, overdue to-notify tasks, shift variances, failed e-invoices); these become in-app notifications and menu count badges (FR-RPT-01, FR-ADM-08). **25 Oct 2026:** loyalty points are a discount, not a payment method (§4.4, `sale_payment`); settings `inventory.adjust_approval_vnd`, `catalog.duplicate_mode`, store profile, sales-slip footer and MISA credentials added to Appendix A; document number prefixes (§3.6) and the derived permission keys (§10.3) recorded; bank transfers use the store’s printed QR code and a `payment_ref` the customer types; the VietQR generator and `PaymentQrAdapter` are removed (§4.4, §4.5, §4.6, §6.2, §8.1, §8.4); `search_text` is maintained by the catalogue service (§4.1); setup wizard, PIN and account-unlock endpoints added (§6.2); permission `user.unlock` for owner and manager (§6.2, §10.3); catalogue variant, price, lookup and category endpoints, count submit, low-stock, valuation and multi-line stock-in endpoints listed (§6.2); POS registers, shift reads, sale detail and e-invoice list endpoints; void and out-of-window return approval by supervisor token; shift-variance notification recipients (§4.4); default tier seeding (§4.9); store-credit ledger and payment method (§4.4, §4.9, §5.3, §5.4, §6.2). |
 | **Hosting** | One Vietnam-based VPS, Docker Compose; S3-compatible backup storage in Vietnam |
 | **Status** | Approved for construction |
 
@@ -291,9 +291,9 @@ Each module lists responsibilities, the data it owns, the important algorithms a
 | Pricing engine | `priceCart(cart, context)` in `packages/domain` is a **pure function**: inputs are lines, customer tier, active promotions (a snapshot with version ids), settings; output is each line’s unit price, discounts, VAT and the totals. The same function runs in the browser (offline) and on the server. |
 | Completing a sale | One transaction: validate shift open → insert sale and lines (with the promotion versions applied) → payments → stock movements → consignment allocations → points → audit → outbox events (points, reports) and, according to `pos.einvoice_mode`, an `einvoice_job`. Sale number from `doc_counter` (row lock, gap-free) online, or the device’s own series offline. |
 | No routine receipt (FR-POS-07) | Nothing is printed by default. The sale is stored and found by sale number, customer, phone, date or item. The setting `pos.print_sales_slip` (default false) prints a slip for every sale. Returns find the sale in the system (FR-POS-12). |
-| Payments | Cash, bank transfer (the customer scans the store’s printed QR code and types the payment reference shown on screen; staff confirm by amount and reference; the system generates no QR, Section 8.4), card (terminal approval code), split and partial (deposits). Sum of payments must equal total unless the sale is a deposit sale (deferred constraint trigger). **Loyalty points are not a payment method:** redeemed points are a discount computed by `priceCart`, spread over the point-earning lines (so VAT and returns use the net line amounts) and stored as `sale.points_redeemed` / `sale.points_discount_vnd` (FR-POS-05, BR-07). |
+| Payments | Cash, bank transfer (the customer scans the store’s printed QR code and types the payment reference shown on screen; staff confirm by amount and reference; the system generates no QR, Section 8.4), card (terminal approval code), store credit of the attached customer (FR-CRM-10, debited from its ledger in the sale transaction), split and partial (deposits). Sum of payments must equal total unless the sale is a deposit sale (deferred constraint trigger). **Loyalty points are not a payment method:** redeemed points are a discount computed by `priceCart`, spread over the point-earning lines (so VAT and returns use the net line amounts) and stored as `sale.points_redeemed` / `sale.points_discount_vnd` (FR-POS-05, BR-07). |
 | Returns | Return lines reference sale lines; `SUM(returned) <= sold` enforced in the transaction; refund method and restock/damaged classification recorded; points reversed proportionally; exceptions need an `approval_token` (Section 10.2). |
-| Shifts (FR-POS-18..22) | One open shift per register (partial unique index). Close computes expected cash from opening float, cash payments, refunds and cash movements and stores counted cash and variance. **Close is never blocked and needs no approval.** A non-zero variance requires `variance_reason` (validation on the close command). Variances above `shift.variance_alert_vnd` (default 50,000) appear in the shift report and send managers an in-app notification (`shift.variance_exceeded`); they are not shown on the dashboard (FR-RPT-01). |
+| Shifts (FR-POS-18..22) | One open shift per register (partial unique index). Close computes expected cash from opening float, cash payments, refunds and cash movements and stores counted cash and variance. **Close is never blocked and needs no approval.** A non-zero variance requires `variance_reason` (validation on the close command). Variances above `shift.variance_alert_vnd` (default 50,000) appear in the shift report and send an in-app notification (`shift.variance_exceeded`) to every active user holding `shift.view_all` (managers and the owner by default); they are not shown on the dashboard (FR-RPT-01). |
 | E-invoice (FR-POS-15..17) | Mode `every_sale` (default): every completed sale creates an `einvoice_job`; a sale without buyer details is invoiced to a retail customer. Mode `on_request`: a job is created only when the customer asks. A request carries buyer name, tax code, address and email; when an invoice already exists without buyer details the adapter cancels/adjusts and reissues as regulation allows. If the customer asked for it, the worker calls MISA meInvoice to **email the invoice to the buyer** and stores `email_status`; nobody is emailed otherwise. Failures never block sales (NFR-REL-03). |
 | Events | `sale.completed`, `sale.returned`, `shift.closed`. |
 | API | `/api/v1/pos/*`, `/pos/v1/sync`. |
@@ -456,10 +456,11 @@ Footer   = { groups: { title{vi,en}, links: { label{vi,en}, target: Target }[] }
 
 | Aspect | Design |
 | --- | --- |
-| Owns | `customer`, `customer_contact`, `customer_consent`, `points_ledger`, `tier`, `customer_tier_history`, `promotion`, `promotion_version`, `promotion_usage`, `coupon`. |
+| Owns | `customer`, `customer_contact`, `customer_consent`, `points_ledger`, `store_credit_ledger`, `tier`, `customer_tier_history`, `promotion`, `promotion_version`, `promotion_usage`, `coupon`. |
 | Identity | Phone number unique (normalised E.164); email optional; merge moves references through a registry of foreign keys (`customer_ref_registry`) so adding a table that references customers fails a test until registered. |
 | Points ledger | Append-only; `balance` is maintained in the same transaction and equals `SUM(delta)`. Earn on payment completion; reversal on return is proportional; expiry job writes `expire` rows; redemption validates balance with a row lock. |
-| Tiers | Rolling-12-month net spend; `loyalty.tier_recalc` nightly writes history (no message is sent). Tier benefits are rows in `tier`, evaluated by the pricing engine. |
+| Store credit (FR-CRM-10) | Append-only `store_credit_ledger` in VND; `customer.store_credit_vnd` is kept equal to its sum in the same transaction, debited with an atomic conditional update so it never goes negative. Reasons: `refund` (store-credit refund), `spend` (POS payment), `spend_reversal` (return or void of a sale paid by credit), `adjust` (manual, `customer.adjust_points`, with reason and audit). No expiry. |
+| Tiers | Rolling-12-month net spend; `loyalty.tier_recalc` nightly writes history (no message is sent). Tier benefits are rows in `tier`, evaluated by the pricing engine. The first-run wizard seeds Standard, Silver and Gold with the BR-08 thresholds and no benefits (0 % discount, 1× points) until the owner sets them. |
 | Promotions | Rules are JSON validated by a Zod discriminated union (percent, fixed, buy X get Y, bundle price, free shipping, gift, coupon). Each edit creates a `promotion_version`; sales store the version applied. The per-category maximum discount (default none) is enforced inside the engine (FR-PRM-05). |
 | Privacy | Consent rows record purpose, time and channel; erase = anonymise personal fields and keep the id and financial history (FR-CRM-08). |
 | API | `/api/v1/customers/*`, `/api/v1/promotions/*`. |
@@ -523,7 +524,7 @@ Footer   = { groups: { title{vi,en}, links: { label{vi,en}, target: Target }[] }
 | Translations | Website-facing translatable text is `i18n jsonb` shaped `{ en: {...}, vi?: {...} }` (English required, FR-WEB-22). Staff-only labels in `master_data` are Vietnamese (`{ vi: {...} }`), since the staff UI is Vietnamese only. |
 | Editing | Editable aggregates carry `version int not null default 1`; updates use `WHERE version = :v`. |
 | Deletion | Financial and stock documents are never deleted (reverse with a new document). Master data uses `status` (active/archived). |
-| Immutability | Ledger tables (`stock_movement`, `points_ledger`, `deposit_txn`, `audit_entry`, `order_event`, `attendance_punch`) have a trigger that raises on UPDATE and DELETE. |
+| Immutability | Ledger tables (`stock_movement`, `points_ledger`, `store_credit_ledger`, `deposit_txn`, `audit_entry`, `order_event`, `attendance_punch`) have a trigger that raises on UPDATE and DELETE. |
 | Extensions | `unaccent`, `pg_trgm`, `btree_gist`, `pgcrypto`. |
 | Migrations | Forward-only SQL migrations generated by drizzle-kit and reviewed. **Expand/contract**: add nullable column → deploy code that writes both → backfill → switch reads → drop later, so a deploy can be rolled back without a database restore. |
 
@@ -584,8 +585,8 @@ Columns marked **FK** reference the named table. Only columns that carry design 
 | cash_movement | shift_id FK, direction, amount_vnd, reason | index(shift_id) |
 | sale | doc_no, client_event_id, device_id FK null, shift_id FK, cashier_id, customer_id FK null, channel, total_vnd, discount_vnd, vat_vnd, status, offline bool, sold_at, event_id FK null | unique(doc_no); unique(device_id, client_event_id) where not null |
 | sale_line | sale_id FK, variant_id FK, qty, unit_price_vnd, discount_vnd, vat_bp, cost_vnd, promotion_version_ids[] | index(variant_id, sale_id) |
-| sale_payment | sale_id FK, method (cash|transfer|card), amount_vnd, ref, confirmed_by, confirmed_at | `CHECK` amount > 0; points are a discount on `sale` (`points_redeemed`, `points_discount_vnd`), not a payment |
-| sale_return / sale_return_line | sale_id FK, approved_by, refund_method / return_id FK, sale_line_id FK, qty, restock bool | `SUM(qty)` per sale_line enforced in the transaction |
+| sale_payment | sale_id FK, method (cash|transfer|card|store_credit), amount_vnd, ref, confirmed_by, confirmed_at | `CHECK` amount > 0; points are a discount on `sale` (`points_redeemed`, `points_discount_vnd`), not a payment |
+| sale_return / sale_return_line | sale_id FK, approved_by, refund_method (cash|transfer|card|store_credit; store credit needs a customer on the sale) / return_id FK, sale_line_id FK, qty, restock bool | `SUM(qty)` per sale_line enforced in the transaction |
 | held_cart | register_id FK, cashier_id, payload jsonb, held_at | index(register_id) |
 | einvoice_job | sale_id FK or order_id FK, status, attempts, next_attempt_at, provider_ref, invoice_no, buyer jsonb, email_requested, email_status, error | unique(sale_id) |
 | doc_counter | series (SALE, SI, REG, ...), year, last_no | primary key(series, year); updated under row lock |
@@ -654,9 +655,10 @@ Columns marked **FK** reference the named table. Only columns that carry design 
 
 | Table | Key columns | Constraints and indexes |
 | --- | --- | --- |
-| customer | name, phone_e164, email, birth_date, addresses jsonb, tags[], tier_id FK, points_balance, anonymised_at | unique(phone_e164); trigram on name |
+| customer | name, phone_e164, email, birth_date, addresses jsonb, tags[], tier_id FK, points_balance, store_credit_vnd, anonymised_at | unique(phone_e164); trigram on name |
 | customer_contact / customer_consent | customer_id FK, kind, value / purpose, granted_at, withdrawn_at, channel | index(customer_id) |
 | points_ledger | customer_id FK, delta, reason, ref_type, ref_id, at | immutable; balance = sum |
+| store_credit_ledger | customer_id FK, delta_vnd, reason (refund|spend|spend_reversal|adjust), ref_type, ref_id, note, actor_id, at | immutable; `store_credit_vnd` = sum; `CHECK (store_credit_vnd >= 0)` |
 | tier / customer_tier_history | name, min_spend_vnd, benefits jsonb / customer_id FK, tier_id FK, from_at | unique(name) |
 | promotion / promotion_version | name, status, scope / promotion_id FK, rule jsonb, version, starts_at, ends_at | unique(promotion_id, version) |
 | promotion_usage / coupon | promotion_id FK, customer_id FK, ref / code, promotion_id FK, usage_limit, used | unique(code) |
@@ -701,10 +703,10 @@ Columns marked **FK** reference the named table. Only columns that carry design 
 | Partial unique indexes | One open loan per copy; one open shift per register; unique external order id per source. |
 | Exclusion constraint (`btree_gist`) | No overlapping bookings of a venue. |
 | `CHECK` constraints | Non-negative money, `seats_taken <= capacity`, `qty_sold + qty_returned <= qty_received`, variance requires a reason, status enums. |
-| Immutability triggers | Stock ledger, points ledger, deposit ledger, audit log, order events, attendance punches. |
+| Immutability triggers | Stock ledger, points ledger, store-credit ledger, deposit ledger, audit log, order events, attendance punches. |
 | Deferred constraint trigger | Sum of `sale_payment` equals sale total at commit. |
 | Atomic conditional updates | Stock, reservations, seats, check-in, points redemption. |
-| Nightly invariant job | `stock_level = SUM(movement)`, `points_balance = SUM(ledger)`, deposit balance, report totals; mismatches raise an alert. |
+| Nightly invariant job | `stock_level = SUM(movement)`, `points_balance = SUM(ledger)`, `store_credit_vnd = SUM(store_credit_ledger)`, deposit balance, report totals; mismatches raise an alert. |
 
 ### 5.5 Volume and retention
 
@@ -794,17 +796,21 @@ Permissions use the catalogue in SRS Appendix A. `P` means public, `C` customer 
 
 | Endpoint | Permission | Purpose |
 | --- | --- | --- |
+| GET/POST /api/v1/pos/registers | sale.create / settings.manage | List registers (counters); the owner adds them. The first-run wizard creates register `Q1`. |
 | POST /api/v1/pos/shifts/open, /close | shift.open / shift.close | Open with float; close with count and variance reason. |
+| GET /api/v1/pos/shifts/current?register=; GET /api/v1/pos/shifts; GET /api/v1/pos/shifts/{id} | session / shift.view_all / shift.view_all | Open shift of a register; shift history with variances, reasons and cashiers (FR-POS-22); shift report with expected cash. |
 | POST /api/v1/pos/cash-movements | shift.cash_movement | Cash in/out. |
 | POST /api/v1/pos/price | sale.create | Server-side price calculation (same engine as the client). |
 | POST /api/v1/pos/sales | sale.create | Complete a sale (Idempotency-Key). |
 | GET /api/v1/pos/sales?q=&from=&to=&cashier= | sale.create / sale.view_all | Sales list, filters. |
-| POST /api/v1/pos/sales/{id}/void | sale.void_paid | Void with reason and approval token. |
-| POST /api/v1/pos/sales/{id}/returns | return.create / return.approve | Return or exchange. |
+| GET /api/v1/pos/sales/{id} | sale.create (own) / sale.view_all | Sale record with lines, payments, returns and e-invoice status. |
+| POST /api/v1/pos/sales/{id}/void | sale.create + `sale.void_paid` held by the caller or by the approver of a `void_sale` approval token | Void with reason (FR-POS-14, FR-ADM-09): a cashier asks a supervisor for PIN approval at the point of action. |
+| POST /api/v1/pos/sales/{id}/returns | return.create; outside the return window `return.approve` held by the caller or a `return_exception` approval token | Return or exchange (FR-POS-12, FR-POS-13). |
 | POST/GET/DELETE /api/v1/pos/held-carts | sale.hold | Hold and recall. |
 | POST /api/v1/pos/sales/{id}/print | sale.reprint | Optional sales slip or e-invoice copy. |
 | POST /api/v1/pos/sales/{id}/einvoice-request | sale.create | Customer asks for the invoice: buyer details, email. |
 | POST /api/v1/pos/sales/{id}/einvoice/retry | einvoice.manage | Retry a failed invoice. |
+| GET /api/v1/pos/einvoices?status= | einvoice.manage | E-invoice list, for example the failed ones (FR-POS-17). |
 | POST /pos/v1/sync | device + sale.create | Batch of offline events with cursor; returns per-event result and catalogue delta. |
 | GET /pos/v1/bootstrap | device | First-time/full catalogue and settings snapshot. |
 
@@ -892,6 +898,7 @@ Permissions use the catalogue in SRS Appendix A. `P` means public, `C` customer 
 | --- | --- | --- |
 | GET/POST/PATCH /api/v1/customers; POST /{id}/merge | customer.view / customer.manage | Profiles and duplicate merge. |
 | POST /api/v1/customers/{id}/points-adjust | customer.adjust_points | Manual points with reason. |
+| POST /api/v1/customers/{id}/store-credit-adjust | customer.adjust_points | Manual store-credit adjustment with reason (FR-CRM-10). |
 | POST /api/v1/customers/{id}/erase | customer.erase | Anonymise on request. |
 | GET/POST/PATCH /api/v1/promotions; POST /{id}/pause|resume | promotion.manage | Programmes. |
 | GET/POST /api/v1/hr/employees, /roster, /leave | hr.manage | Staff files, rosters, leave. |

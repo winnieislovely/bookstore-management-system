@@ -36,6 +36,8 @@ export const customer = crm.table(
     source: text(),
     tierId: uuid().references(() => tier.id),
     pointsBalance: integer().notNull().default(0),
+    /** Store-credit balance in VND = SUM(store_credit_ledger) (FR-CRM-10). */
+    storeCreditVnd: vndCol().notNull().default(0),
     searchText: text().notNull().default(''),
     mergedInto: uuid(),
     anonymisedAt: ts(),
@@ -47,6 +49,7 @@ export const customer = crm.table(
     uniqueIndex('customer_phone_uq').on(t.phoneE164).where(sql`${t.phoneE164} is not null`),
     index('customer_search_trgm_idx').using('gin', sql`${t.searchText} gin_trgm_ops`),
     check('customer_points_ck', sql`${t.pointsBalance} >= 0`),
+    check('customer_store_credit_ck', sql`${t.storeCreditVnd} >= 0`),
   ],
 );
 
@@ -102,6 +105,31 @@ export const pointsLedger = crm.table(
     index('points_ledger_customer_idx').on(t.customerId, t.at),
     check('points_ledger_reason_ck', inList(t.reason, POINTS_REASONS)),
     check('points_ledger_delta_ck', sql`${t.delta} <> 0`),
+  ],
+);
+
+export const STORE_CREDIT_REASONS = ['refund', 'spend', 'spend_reversal', 'adjust'] as const;
+
+/** Immutable store-credit ledger in VND (FR-CRM-10). */
+export const storeCreditLedger = crm.table(
+  'store_credit_ledger',
+  {
+    id: id(),
+    customerId: uuid()
+      .notNull()
+      .references(() => customer.id),
+    deltaVnd: vndCol().notNull(),
+    reason: text().notNull(),
+    refType: text(),
+    refId: uuid(),
+    note: text(),
+    actorId: uuid(),
+    at: createdAt(),
+  },
+  (t) => [
+    index('store_credit_ledger_customer_idx').on(t.customerId, t.at),
+    check('store_credit_ledger_reason_ck', inList(t.reason, STORE_CREDIT_REASONS)),
+    check('store_credit_ledger_delta_ck', sql`${t.deltaVnd} <> 0`),
   ],
 );
 

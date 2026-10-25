@@ -29,6 +29,20 @@
       "when": 1792915633443,
       "tag": "0003_catalog_sequences",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792916448584,
+      "tag": "0004_einvoice_reissue",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792917015680,
+      "tag": "0005_store_credit",
+      "breakpoints": true
     }
   ]
 }

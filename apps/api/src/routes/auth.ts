@@ -1,4 +1,6 @@
+import * as customers from '@bookstore/modules/customers';
 import * as identity from '@bookstore/modules/identity';
+import * as sales from '@bookstore/modules/sales';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { deleteCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
@@ -118,6 +120,10 @@ export function authRoutes(app: OpenAPIHono<AppEnv>, deps: Deps): void {
       status: 201,
       body: identity.SetupSchema,
     },
-    async ({ ctx, body }) => identity.runSetup(ctx, body),
+    async ({ ctx, body }) =>
+      identity.runSetup(ctx, body, async (tx, c) => {
+        await customers.seedTiers(tx, c);
+        await sales.seedRegister(tx);
+      }),
   );
 }

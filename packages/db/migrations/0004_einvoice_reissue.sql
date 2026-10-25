@@ -1,0 +1,1 @@
+ALTER TABLE "sales"."einvoice_job" ADD COLUMN "reissue_requested" boolean DEFAULT false NOT NULL;
