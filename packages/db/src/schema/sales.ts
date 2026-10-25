@@ -51,10 +51,14 @@ export const shift = sales.table(
     expectedVnd: vndCol(),
     varianceVnd: vndCol(),
     varianceReason: text(),
+    /** Shifts opened offline: the device and its client id (TDD §7.2). */
+    deviceId: uuid().references(() => posDevice.id),
+    clientId: uuid(),
   },
   (t) => [
     uniqueIndex('shift_one_open_per_register_uq').on(t.registerId).where(sql`${t.closedAt} is null`),
     uniqueIndex('shift_no_uq').on(t.shiftNo),
+    uniqueIndex('shift_device_client_uq').on(t.deviceId, t.clientId).where(sql`${t.clientId} is not null`),
     check('shift_float_ck', sql`${t.floatVnd} >= 0`),
     // BR-06: a closed shift with a non-zero variance must carry a reason.
     check(
@@ -302,8 +306,13 @@ export const posInbox = sales.table(
     type: text().notNull(),
     result: jsonb().notNull(),
     exceptionCode: text(),
+    /** All exceptions raised by the event (TDD §7.6); `exceptionCode` is the first. */
+    exceptions: jsonb().notNull().default([]),
     payload: jsonb(),
     receivedAt: createdAt(),
+    resolvedAt: ts(),
+    resolvedBy: uuid(),
+    resolutionNote: text(),
   },
   (t) => [uniqueIndex('pos_inbox_uq').on(t.deviceId, t.clientEventId)],
 );

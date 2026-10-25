@@ -22,6 +22,7 @@ export const PERMISSIONS = {
   'shift.cash_movement': 'Thu/chi tiền mặt trong ca',
   'shift.view_all': 'Xem lịch sử ca', // derived: FR-POS-22 managers see all shifts
   'einvoice.manage': 'Quản lý hóa đơn điện tử',
+  'pos.offline.manage': 'Thiết bị POS và ngoại lệ đồng bộ', // derived: FR-POS-24/26 manager review
   // Catalogue and stock
   'catalog.view': 'Xem danh mục',
   'catalog.edit': 'Sửa danh mục và giá',

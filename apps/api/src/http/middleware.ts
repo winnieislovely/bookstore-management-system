@@ -79,7 +79,7 @@ const uploadBody = bodyLimit({
 
 /** 1 MB for JSON; 10 MB for file uploads and import previews (TDD §4.12). */
 export const limitBody: MiddlewareHandler<AppEnv> = (c, next) =>
-  c.req.path === '/api/v1/files' || /^\/api\/v1\/admin\/import\/[a-z_]+\/preview$/.test(c.req.path) ? uploadBody(c, next) : smallBody(c, next);
+  c.req.path === '/api/v1/files' || c.req.path === '/pos/v1/sync' || /^\/api\/v1\/admin\/import\/[a-z_]+\/preview$/.test(c.req.path) ? uploadBody(c, next) : smallBody(c, next);
 
 /** Paths a locked or must-change-password session may still call. */
 const LOCKED_ALLOWED = new Set(['/api/v1/auth/unlock', '/api/v1/auth/logout', '/api/v1/me']);

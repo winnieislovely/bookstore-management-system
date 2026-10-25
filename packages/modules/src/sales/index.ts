@@ -83,7 +83,7 @@ export async function openShift(ctx: Ctx, input: z.input<typeof OpenShiftSchema>
   });
 }
 
-async function shiftCash(tx: Tx, shiftId: string) {
+export async function shiftCash(tx: Tx, shiftId: string) {
   const [row] = await tx.execute<{ cash_sales: string; cash_refunds: string; cash_in: string; cash_out: string }>(sql`
     select
       coalesce((select sum(p.amount_vnd) from sales.sale_payment p join sales.sale s on s.id = p.sale_id
@@ -484,7 +484,7 @@ async function useApprovals(tx: Tx, ctx: Ctx, priced: PriceCartResult, tokens: {
 }
 
 /** Deduct stock for a goods line; bundles deduct their components (FR-CAT-12, `bundle_use`). */
-async function deductStock(tx: Tx, ctx: Ctx, saleId: string, variantId: string, qty: number, allowNegative: boolean): Promise<number> {
+export async function deductStock(tx: Tx, ctx: Ctx, saleId: string, variantId: string, qty: number, allowNegative: boolean): Promise<number> {
   const components = await tx.select().from(schema.bundleComponent).where(eq(schema.bundleComponent.bundleVariantId, variantId)).orderBy(asc(schema.bundleComponent.componentVariantId));
   if (components.length) {
     let cost = 0;
@@ -499,7 +499,7 @@ async function deductStock(tx: Tx, ctx: Ctx, saleId: string, variantId: string, 
 }
 
 /** Allocate sold units of consignment variants to lots, oldest first (TDD §4.3). */
-async function allocateConsignment(tx: Tx, saleLineId: string, variantId: string, qty: number, unitPriceVnd: number, at: Date) {
+export async function allocateConsignment(tx: Tx, saleLineId: string, variantId: string, qty: number, unitPriceVnd: number, at: Date) {
   const lots = await tx.execute<{ id: string; remaining: number }>(sql`
     select id, (qty_received - qty_sold - qty_returned)::int as remaining from purchasing.consignment_lot
     where variant_id = ${variantId}::uuid and qty_received - qty_sold - qty_returned > 0
