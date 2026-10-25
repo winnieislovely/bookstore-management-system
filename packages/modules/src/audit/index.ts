@@ -1,5 +1,5 @@
 import { schema } from '@bookstore/db';
-import { and, desc, eq, gte, lt, lte, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, gte, lt, lte, sql, type SQL } from 'drizzle-orm';
 import { requirePermission, type Ctx, type Tx } from '../platform/index.js';
 
 /**
@@ -53,8 +53,9 @@ export async function search(ctx: Ctx, q: AuditQuery) {
   if (q.cursor) where.push(lt(a.at, new Date(q.cursor)));
   const limit = Math.min(q.limit ?? 40, 200);
   const rows = await ctx.db
-    .select()
+    .select({ ...getTableColumns(a), actorName: schema.appUser.displayName })
     .from(a)
+    .leftJoin(schema.appUser, eq(schema.appUser.id, a.actorId))
     .where(where.length ? and(...where) : undefined)
     .orderBy(desc(a.at), desc(a.id))
     .limit(limit + 1);

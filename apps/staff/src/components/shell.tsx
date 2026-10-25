@@ -88,6 +88,8 @@ function notificationTitle(n: NotificationItem): string {
       return t('notify.shift.variance_exceeded', { shiftNo: String(v.shiftNo ?? ''), variance: formatVnd(Number(v.varianceVnd ?? 0)) });
     case 'einvoice.failed':
       return t('notify.einvoice.failed', { docNo: String(v.docNo ?? '') });
+    case 'backup.problem':
+      return t(v.problem === 'wal_lagging' ? 'notify.backup.walLagging' : 'notify.backup.stale');
     case 'consignment.deadline':
       return t('notify.consignment.deadline', { sku: String(v.sku ?? '') });
     default:

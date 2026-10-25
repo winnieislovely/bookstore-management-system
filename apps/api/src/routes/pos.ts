@@ -93,6 +93,9 @@ export function posRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'post', path: '/api/v1/customers', access: 'customer.manage', summary: 'Create a customer', status: 201, body: customers.CustomerSchema }, async ({ ctx, body }) =>
     customers.createCustomer(ctx, body),
   );
+  defineRoute(app, { method: 'patch', path: '/api/v1/customers/:id', access: 'customer.manage', summary: 'Edit a customer', params: IdParams, body: customers.CustomerUpdateSchema }, async ({ ctx, params, body }) =>
+    customers.updateCustomer(ctx, params.id, body),
+  );
   defineRoute(app, { method: 'get', path: '/api/v1/customers/:id', access: 'customer.view', summary: 'Customer profile', params: IdParams }, async ({ ctx, params }) =>
     customers.getCustomer(ctx, params.id),
   );
@@ -125,6 +128,9 @@ export function posRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'get', path: '/api/v1/promotions', access: 'promotion.manage', summary: 'Promotions with state' }, async ({ ctx }) => ({ items: await promotions.list(ctx) }));
   defineRoute(app, { method: 'post', path: '/api/v1/promotions', access: 'promotion.manage', summary: 'Create a promotion', status: 201, body: promotions.PromotionSchema }, async ({ ctx, body }) =>
     promotions.create(ctx, body),
+  );
+  defineRoute(app, { method: 'patch', path: '/api/v1/promotions/:id', access: 'promotion.manage', summary: 'Edit a promotion (new version)', params: IdParams, body: promotions.PromotionUpdateSchema }, async ({ ctx, params, body }) =>
+    promotions.update(ctx, params.id, body),
   );
   for (const action of ['pause', 'resume'] as const) {
     defineRoute(app, { method: 'post', path: `/api/v1/promotions/:id/${action}`, access: 'promotion.manage', summary: `${action} a promotion`, status: 204, params: IdParams }, async ({ ctx, params }) => {

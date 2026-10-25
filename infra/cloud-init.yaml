@@ -1,0 +1,22 @@
+#cloud-config
+# Base VPS for the Bookstore system (TDD §12.5): Ubuntu LTS, Docker, firewall, unattended upgrades.
+# After first boot: copy /etc/bookstore/.env from the password manager, clone the repository into
+# /opt/bookstore at the release tag, then `docker compose -f infra/docker-compose.yml up -d --build`.
+package_update: true
+package_upgrade: true
+packages: [ca-certificates, curl, git, ufw, unattended-upgrades, fail2ban]
+timezone: Asia/Ho_Chi_Minh
+write_files:
+  - path: /etc/docker/daemon.json
+    content: |
+      { "log-driver": "json-file", "log-opts": { "max-size": "50m", "max-file": "7" } }
+runcmd:
+  - curl -fsSL https://get.docker.com | sh
+  - ufw default deny incoming
+  - ufw allow OpenSSH
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+  - mkdir -p /etc/bookstore /opt/bookstore /srv/bookstore-dumps
+  - chmod 700 /etc/bookstore
+  - systemctl enable --now unattended-upgrades fail2ban

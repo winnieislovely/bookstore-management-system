@@ -21,7 +21,8 @@
     "./files": "./src/files/index.ts",
     "./reports": "./src/reports/index.ts",
     "./sales/sync": "./src/sales/sync.ts",
-    "./masterdata": "./src/masterdata/index.ts"
+    "./masterdata": "./src/masterdata/index.ts",
+    "./system": "./src/system/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

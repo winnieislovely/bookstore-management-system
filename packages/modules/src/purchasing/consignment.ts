@@ -4,6 +4,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
 import * as inventory from '../inventory/index.js';
+import * as settings from '../settings/index.js';
 import { AppError, errors, nextDocNo, requirePermission, tsParam, type Ctx } from '../platform/index.js';
 
 /** Consignment statements and returns (FR-PUR-10..12, BR-11, TDD §4.3). */
@@ -175,7 +176,10 @@ export async function getStatement(ctx: Ctx, id: string) {
     .innerJoin(schema.supplier, eq(schema.supplier.id, schema.consignmentStatement.supplierId))
     .where(eq(schema.consignmentStatement.id, id));
   if (!st) throw errors.notFound('Bảng đối soát');
-  return { ...st.s, supplierName: st.supplierName, supplierTaxCode: st.supplierTaxCode };
+  // Store header for the A4 print (Design §16.1, §16.8).
+  const cfg = await settings.snapshot(ctx);
+  const store = { name: cfg['store.name'], address: cfg['store.address'], taxCode: cfg['store.tax_code'], phone: cfg['store.phone'] };
+  return { ...st.s, supplierName: st.supplierName, supplierTaxCode: st.supplierTaxCode, store };
 }
 
 export const ConsignmentReturnSchema = z.object({

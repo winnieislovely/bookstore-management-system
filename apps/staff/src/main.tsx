@@ -4,6 +4,7 @@ import { Construction, Lock } from 'lucide-react';
 import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, Navigate, RouterProvider, useLocation } from 'react-router';
+import { Toaster } from './components/data';
 import { Shell } from './components/shell';
 import { EmptyState, ErrorState, Skeleton } from './components/ui';
 import { ApiError } from './lib/api';
@@ -12,7 +13,22 @@ import { can, useMe, useSetupStatus } from './lib/session';
 import { landingPath, NAV } from './nav';
 import { ChangePasswordPage, LoginPage, SetupPage } from './pages/auth';
 import { DashboardPage } from './pages/dashboard';
+import { ImportPage } from './pages/import';
+import { AuditPage, DevicesPage, RolesPage, UsersPage } from './pages/admin';
+import { ConsignmentPage } from './pages/consignment';
+import { CountDetailPage, CountsPage } from './pages/counts';
+import { CustomerDetailPage, CustomersPage } from './pages/customers';
+import { ProductDetailPage } from './pages/productDetail';
 import { ProductsPage } from './pages/products';
+import { PromotionsPage } from './pages/promotions';
+import { ReportsPage } from './pages/reports';
+import { SaleDetailPage, SalesPage } from './pages/sales';
+import { SettingsPage } from './pages/settings';
+import { ShiftDetailPage, ShiftsPage } from './pages/shifts';
+import { StockPage } from './pages/stock';
+import { StockInPage } from './pages/stockin';
+import { SupplierOrderDetailPage, SupplierOrdersPage } from './pages/supplierOrders';
+import { SuppliersPage } from './pages/suppliers';
 import { PosPage } from './pos/PosPage';
 
 const queryClient = new QueryClient({
@@ -67,7 +83,34 @@ function Placeholder() {
 const BUILT: Record<string, ReactNode> = {
   '/dashboard': <DashboardPage />,
   '/products': <ProductsPage />,
+  '/sales': <SalesPage />,
+  '/shifts': <ShiftsPage />,
+  '/customers': <CustomersPage />,
+  '/promotions': <PromotionsPage />,
+  '/stock-in': <StockInPage />,
+  '/stock': <StockPage />,
+  '/counts': <CountsPage />,
+  '/suppliers': <SuppliersPage />,
+  '/supplier-orders': <SupplierOrdersPage />,
+  '/consignment': <ConsignmentPage />,
+  '/users': <UsersPage />,
+  '/roles': <RolesPage />,
+  '/reports': <ReportsPage />,
+  '/settings': <SettingsPage />,
+  '/import': <ImportPage />,
+  '/devices': <DevicesPage />,
+  '/audit': <AuditPage />,
 };
+
+/** Detail pages, guarded by the permission of their list (Design §12.3). */
+const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
+  { path: 'sales/:id', anyOf: ['sale.create'], element: <SaleDetailPage /> },
+  { path: 'shifts/:id', anyOf: ['shift.view_all'], element: <ShiftDetailPage /> },
+  { path: 'customers/:id', anyOf: ['customer.view'], element: <CustomerDetailPage /> },
+  { path: 'products/:id', anyOf: ['catalog.view'], element: <ProductDetailPage /> },
+  { path: 'counts/:id', anyOf: ['inventory.count'], element: <CountDetailPage /> },
+  { path: 'supplier-orders/:id', anyOf: ['purchasing.manage'], element: <SupplierOrderDetailPage /> },
+];
 
 const router = createBrowserRouter([
   { path: '/setup', element: <SetupPage /> },
@@ -99,7 +142,7 @@ const router = createBrowserRouter([
           element: <RequirePermission anyOf={item.anyOf}>{BUILT[item.path] ?? <Placeholder />}</RequirePermission>,
         })),
       ),
-      { path: 'products/:id', element: <Placeholder /> },
+      ...DETAILS.map((d) => ({ path: d.path, element: <RequirePermission anyOf={d.anyOf}>{d.element}</RequirePermission> })),
       { path: 'no-access', element: <EmptyState icon={Lock} title={t('error.noPermission')} /> },
       { path: '*', element: <Landing /> },
     ],
@@ -113,6 +156,7 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
+      <Toaster />
     </QueryClientProvider>
   </StrictMode>,
 );

@@ -505,7 +505,7 @@ Footer   = { groups: { title{vi,en}, links: { label{vi,en}, target: Target }[] }
 | Audit | `audit_entry(actor, action, entity, entity_id, before, after, at, ip, request_id)`; insert-only enforced by trigger; sensitive reads (payroll, export, personal data) are also logged. |
 | Notifications | Templates with variables, a `notification` row per message, an email adapter, retries and delivery status. Email is limited to event reminders, library due-soon and overdue reminders, email verification and password reset (FR-ADM-08). Staff get in-app notices and the to-notify worklist. **Operational alerts** replace the former dashboard tiles: `order.needs_action`, `contact_task.overdue`, `shift.variance_exceeded` and `einvoice.failed` create in-app notifications for users holding the matching permission, and `GET /api/v1/me/badges` returns per-menu counts (orders waiting, overdue to-notify tasks, failed e-invoices) filtered by permission; changed counts are pushed on `GET /api/v1/stream`. |
 | Files | Metadata in `file`, bytes in object storage behind `StorageAdapter` (local disk in development, S3-compatible in production); signed, short-lived URLs; type and size allow-list (images: JPEG, PNG, WebP up to 10 MB; imports: XLSX, CSV up to 10 MB). |
-| Backup & restore | Operated at infrastructure level (Section 11.4); the UI shows last backup and WAL archive lag; restoring is an operator procedure. |
+| Backup & restore | Operated at infrastructure level (Section 11.4). The `backup` container records every base backup in `platform.backup_run(kind, status, requested_by, requested_at, started_at, finished_at, size_bytes, label, error)`; WAL archive lag is read from `pg_stat_archiver`. The UI (Settings → Backup & data) shows the last successful backup, its age, archive lag and recent runs; the owner can **request a manual backup**, which inserts a `requested` row that the backup container picks up within a minute (FR-ADM-06). Restoring is an operator procedure (`docs/runbooks/restore.md`). |
 | Master data (FR-ADM-10) | `master_data(kind, code, i18n, active)` holds units, payment methods, reason codes, order sources, holidays and locations; other tables reference codes, so values can be renamed without code changes. The first-run wizard seeds: units (cuốn, cái, hộp, bộ, quyển), adjustment reason codes (damaged, lost, found, correction, expired, gift, import_rollback), payment methods (cash, transfer, card, store_credit; labels only, the codes are fixed), order sources (website, facebook, zalo, instagram, tiktok, marketplace, phone, other) and locations (floor, back). A stock adjustment must use an active reason code. |
 | Retention (FR-ADM-11) | Job `retention.archive` runs yearly and moves financial, invoice, payroll and personnel records older than `retention.financial_years` (default 10) to archive tables that reports can still read; customer data is never deleted automatically. |
 | Import wizard (FR-ADM-07) | Staged importer (upload → map columns → validate → preview → commit with rollback batch id) for products with opening stock, stock-in entries (`stock_in`, FR-PUR-14), customers with points, suppliers, library copies and employees. Products: an existing SKU is a duplicate error (FR-CAT-05); opening stock posts a `stock_in` movement at the row cost with the import job as source document. Customers: the phone is the key (BR-16); imported points are written as `import` ledger rows that expire 12 months after the import date, because the original earning dates are unknown. **Rollback** (FR-ADM-07) posts reversing documents, never deletes (BR-17), and is allowed only while nothing depends on the import: for `stock_in` and `products`, every unit it added is still on hand and no created product has been sold, and the payable (if any) is unpaid; for `customers`, no imported customer has a sale and their points are untouched. It posts negative `adjustment` movements (reason `import_rollback`), cancels the payable, marks created products discontinued and releases their SKUs, and anonymises imported customers. |
@@ -763,7 +763,8 @@ Permissions use the catalogue in SRS Appendix A. `P` means public, `C` customer 
 | POST /api/v1/admin/import/{kind}/preview|commit | catalog.import, data.import | Staged imports. |
 | GET /api/v1/admin/import/{kind}/template; GET /api/v1/admin/import/jobs/{id}; GET /api/v1/admin/import/jobs/{id}/errors; POST /api/v1/admin/import/jobs/{id}/commit | catalog.import (kinds `products`, `stock_in`) / data.import (`customers`) | Template download, preview result, downloadable error report (XLSX), commit of a validated job (all rows or none). The preview body is the uploaded file itself (XLSX or CSV); columns map by template header, and an optional `mapping` overrides it. |
 | POST /api/v1/files; GET /api/v1/files/{id} | session (uploader) / session | Upload an image or import file; read it back. |
-| GET /api/v1/admin/system | settings.manage | Version, backup age, WAL lag, queue depth. |
+| GET /api/v1/admin/system | settings.manage | Version, backup age, WAL lag, queue depth, recent backup runs. |
+| POST /api/v1/admin/backups | settings.manage | Request a manual backup (one pending request at a time). |
 
 #### Catalogue and inventory
 
@@ -1105,7 +1106,7 @@ All jobs run in the worker with pg-boss. Schedules use the Asia/Ho_Chi_Minh time
 | `content.link_check` | Daily | List menu items, banners and sections hidden because their target is unpublished or empty. |
 | `retention.archive` | Yearly (1 January) | Archive records older than the retention period. |
 | `session.cleanup` | Hourly | Delete expired sessions and tokens. |
-| `backup.verify` | Daily | Check archive lag and last base backup age; alert. |
+| `backup.verify` | Hourly | Check WAL archive lag (over 5 minutes) and last successful base backup age (over 26 hours) and notify holders of `settings.manage` once per problem per day. |
 
 ### 9.2 Domain events and the outbox
 
@@ -1236,7 +1237,7 @@ Values are validated against the load test and `pg_stat_statements` after the fi
 | Item | Design |
 | --- | --- |
 | Continuous archiving (RPO) | pgBackRest archives WAL every 60 seconds or 16 MB to S3-compatible storage in Vietnam; the data-loss window is minutes, within the 15-minute target (NFR-AVL-02). |
-| Base backups | Daily full or differential; retention 7 days of base backups plus WAL for point-in-time recovery; encrypted with a key held outside the VPS. |
+| Base backups | Daily full or differential; retention 7 days of base backups plus WAL for point-in-time recovery; encrypted with a key held outside the VPS. A `backup` container (same image as `postgres`, sharing its data volume and socket) runs the schedule, executes manual requests and records each run in `platform.backup_run`. |
 | Logical safety copy | Weekly `pg_dump` kept 12 months, encrypted, stored in a second location in Vietnam. |
 | Restore test | Automated monthly restore into a scratch container with an integrity check; a full disaster drill quarterly. |
 | RTO (4 hours) | Runbook: provision a new VPS from the `cloud-init` and Compose files → restore the latest base backup and WAL → start containers → repoint DNS. The POS keeps selling offline for up to 72 hours meanwhile. |
@@ -1272,7 +1273,8 @@ Values are validated against the load test and `pg_stat_statements` after the fi
 | api | `bookstore-app` `node apps/api` | Health check `/healthz`; `restart: unless-stopped`; read-only root filesystem; non-root user. |
 | worker | `bookstore-app` `node apps/worker` | Same image as api; no published ports. |
 | migrate | `bookstore-app` `node packages/db/migrate` | One-shot job before api/worker start (`depends_on: service_completed_successfully`). |
-| postgres | `postgres:18` | Named volume on the VPS disk; private network only; tuned config; pgBackRest configured for WAL archiving. |
+| postgres | `bookstore-postgres` (`postgres:18` + pgBackRest) | Named volume on the VPS disk; private network only; tuned config; pgBackRest configured for WAL archiving. |
+| backup | `bookstore-postgres` `backup-loop.sh` | Same image as postgres with pgBackRest; shares the data volume and socket; daily base backup at 02:00, weekly `pg_dump`, manual requests from `platform.backup_run`. |
 | uptime (optional) | Uptime monitor container or an external checker | Checks `/healthz` and a public API read. |
 
 ### 12.3 Environment configuration

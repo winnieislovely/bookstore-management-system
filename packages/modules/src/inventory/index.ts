@@ -309,6 +309,31 @@ export async function createCount(ctx: Ctx, input: z.input<typeof CreateCountSch
   });
 }
 
+/** Stock counts, newest first, with progress (TDD §6.2 GET /inventory/counts). */
+export async function listCounts(ctx: Ctx, status?: string) {
+  requirePermission(ctx, 'inventory.count');
+  const c = schema.stockCount;
+  return ctx.db
+    .select({
+      id: c.id,
+      docNo: c.docNo,
+      scope: c.scope,
+      location: c.location,
+      blind: c.blind,
+      status: c.status,
+      createdAt: c.createdAt,
+      approvedAt: c.approvedAt,
+      createdBy: schema.appUser.displayName,
+      lines: sql<number>`(select count(*)::int from inventory.stock_count_line l where l.count_id = ${c.id})`,
+      counted: sql<number>`(select count(*)::int from inventory.stock_count_line l where l.count_id = ${c.id} and l.counted is not null)`,
+    })
+    .from(c)
+    .leftJoin(schema.appUser, eq(schema.appUser.id, c.createdBy))
+    .where(status ? eq(c.status, status) : undefined)
+    .orderBy(desc(c.createdAt))
+    .limit(100);
+}
+
 /** Blind mode hides expected quantities in the API response for non-approvers (TDD §4.2). */
 export async function getCount(ctx: Ctx, id: string) {
   requirePermission(ctx, 'inventory.count');

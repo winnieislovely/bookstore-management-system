@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Button, Field, InlineAlert } from '../components/ui';
 import { ApiError, post } from '../lib/api';
 import { formatNumber, formatPhone, formatVnd } from '../lib/format';
+import { printSlip } from '../lib/print';
 import { approveOffline, approveOnline, findCustomerByPhone, type CartApproval, type CartCustomer, type CartLine } from './cart';
 import type { Payment, SaleOutcome } from './actions';
 import { Dialog, Keypad, MoneyInput, PinPad } from './widgets';
@@ -278,7 +279,7 @@ export function SaleDone({ outcome, online, onNew }: { outcome: SaleOutcome; onl
               </Button>
             )}
             {outcome.printSlip && outcome.saleId && (
-              <Button variant="secondary" full icon={Printer} onClick={() => window.open(`/api/v1/pos/sales/${outcome.saleId}/print`, '_blank')}>
+              <Button variant="secondary" full icon={Printer} onClick={() => void printSlip(outcome.saleId!)}>
                 In
               </Button>
             )}

@@ -1,6 +1,6 @@
 import { schema } from '@bookstore/db';
 import { defaultTiers, foldText, normalizePhone, pointsExpiry } from '@bookstore/domain';
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
 import * as settings from '../settings/index.js';
@@ -57,6 +57,42 @@ export async function createCustomer(ctx: Ctx, input: z.input<typeof CustomerSch
   requirePermission(ctx, 'customer.manage');
   const row = await ctx.db.transaction((tx) => createCustomerTx(tx, ctx, input));
   return { id: row.id };
+}
+
+export const CustomerUpdateSchema = CustomerSchema.partial()
+  .extend({ email: z.email().nullable().optional(), birthDate: z.iso.date().nullable().optional(), note: z.string().trim().max(1000).nullable().optional(), version: z.number().int() });
+
+/** Edit a profile (FR-CRM-01); the phone stays unique (BR-16), optimistic concurrency by version. */
+export async function updateCustomer(ctx: Ctx, id: string, input: z.input<typeof CustomerUpdateSchema>) {
+  requirePermission(ctx, 'customer.manage');
+  const data = CustomerUpdateSchema.parse(input);
+  return ctx.db.transaction(async (tx) => {
+    const [before] = await tx.select().from(schema.customer).where(eq(schema.customer.id, id)).for('update');
+    if (!before || before.anonymisedAt || before.mergedInto) throw errors.notFound('Khách hàng');
+    if (before.version !== data.version) throw errors.stale();
+    let phoneE164 = before.phoneE164;
+    if (data.phone !== undefined) {
+      phoneE164 = normalizePhone(data.phone);
+      if (!phoneE164) throw new AppError(400, 'invalid_phone', `Số điện thoại '${data.phone}' không hợp lệ.`);
+      const [dup] = await tx.select({ id: schema.customer.id, name: schema.customer.name }).from(schema.customer).where(and(eq(schema.customer.phoneE164, phoneE164), ne(schema.customer.id, id)));
+      if (dup) throw errors.conflict('duplicate_phone', `Đã có khách hàng với số này: ${dup.name}.`, { customerId: dup.id });
+    }
+    const next = {
+      name: data.name ?? before.name,
+      phoneE164,
+      email: data.email === undefined ? before.email : data.email,
+      birthDate: data.birthDate === undefined ? before.birthDate : data.birthDate,
+      note: data.note === undefined ? before.note : data.note,
+      tags: data.tags ?? before.tags,
+      source: data.source ?? before.source,
+    };
+    await tx
+      .update(schema.customer)
+      .set({ ...next, searchText: searchTextOf(next), updatedAt: ctx.clock.now(), version: before.version + 1 })
+      .where(eq(schema.customer.id, id));
+    await audit.record(tx, ctx, { action: 'customer.update', entity: 'customer', entityId: id, before: { name: before.name, phoneE164: before.phoneE164, email: before.email }, after: { name: next.name, phoneE164: next.phoneE164, email: next.email } });
+    return { version: before.version + 1 };
+  });
 }
 
 /** Find by phone (POS attach, FR-POS-04): exact on the normalised number. */

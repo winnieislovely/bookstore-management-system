@@ -1,6 +1,7 @@
 import * as audit from '@bookstore/modules/audit';
 import * as identity from '@bookstore/modules/identity';
 import * as settings from '@bookstore/modules/settings';
+import * as system from '@bookstore/modules/system';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import type { AppEnv } from '../http/context.js';
@@ -108,5 +109,13 @@ export function adminRoutes(app: OpenAPIHono<AppEnv>): void {
         from: query.from ? new Date(query.from) : undefined,
         to: query.to ? new Date(query.to) : undefined,
       }),
+  );
+
+  defineRoute(app, { method: 'get', path: '/api/v1/admin/system', access: 'settings.manage', summary: 'Version, backup age, WAL lag, queue depth, recent backup runs' }, async ({ ctx }) =>
+    system.status(ctx),
+  );
+
+  defineRoute(app, { method: 'post', path: '/api/v1/admin/backups', access: 'settings.manage', summary: 'Request a manual backup', status: 201 }, async ({ ctx }) =>
+    system.requestBackup(ctx),
   );
 }

@@ -57,3 +57,17 @@ export const get = <T>(path: string, query?: Query) => api<T>('GET', path, { ...
 export const post = <T>(path: string, body?: unknown) => api<T>('POST', path, { ...(body !== undefined && { body }) });
 export const put = <T>(path: string, body?: unknown) => api<T>('PUT', path, { ...(body !== undefined && { body }) });
 export const patch = <T>(path: string, body?: unknown) => api<T>('PATCH', path, { ...(body !== undefined && { body }) });
+export const del = <T>(path: string) => api<T>('DELETE', path);
+
+/** Upload a file as the raw body (images, imports); returns the stored file id. */
+export async function upload(file: File, purpose: 'image' | 'import'): Promise<{ id: string }> {
+  let res: Response;
+  try {
+    res = await fetch(withQuery('/api/v1/files', { purpose }), { method: 'POST', credentials: 'same-origin', headers: { 'x-bms-request': '1', 'content-type': file.type || 'application/octet-stream' }, body: file });
+  } catch {
+    throw new ApiError(0, 'network_error', t('error.network'));
+  }
+  const data = (await res.json()) as { id: string; error?: { code: string; message: string; details?: unknown; requestId?: string } };
+  if (!res.ok) throw new ApiError(res.status, data.error?.code ?? 'http_error', data.error?.message ?? `HTTP ${res.status}`, data.error?.details, data.error?.requestId);
+  return data;
+}

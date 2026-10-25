@@ -2,6 +2,7 @@ import { createDb } from '@bookstore/db';
 import { MockEInvoiceAdapter, type EInvoiceAdapter } from '@bookstore/modules/integrations/einvoice';
 import * as jobs from '@bookstore/modules/jobs';
 import { createFieldCrypto, systemClock, type Ctx } from '@bookstore/modules/platform';
+import * as system from '@bookstore/modules/system';
 import { PgBoss } from 'pg-boss';
 import pino from 'pino';
 import { randomUUID } from 'node:crypto';
@@ -44,6 +45,7 @@ const JOBS: { name: string; cron: string; run: () => Promise<unknown> }[] = [
   },
   { name: 'session.cleanup', cron: '15 * * * *', run: () => jobs.cleanupSessions(ctx()) },
   { name: 'consignment.deadline_alert', cron: '0 7 * * *', run: () => jobs.consignmentDeadlineAlert(ctx()) },
+  { name: 'backup.verify', cron: '10 * * * *', run: () => system.verifyBackups(ctx()) },
 ];
 
 async function main() {

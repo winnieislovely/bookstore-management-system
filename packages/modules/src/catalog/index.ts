@@ -487,10 +487,21 @@ export async function getItem(ctx: Ctx, id: string) {
     .innerJoin(schema.category, eq(schema.category.id, schema.itemCategory.categoryId))
     .where(eq(schema.itemCategory.itemId, id));
   const images = await ctx.db.select().from(schema.itemImage).where(eq(schema.itemImage.itemId, id)).orderBy(asc(schema.itemImage.sort));
+  // Bundle contents (FR-CAT-12).
+  const components =
+    item.kind === 'bundle' && variantIds.length
+      ? await ctx.db
+          .select({ bundleVariantId: schema.bundleComponent.bundleVariantId, variantId: schema.bundleComponent.componentVariantId, qty: schema.bundleComponent.qty, sku: schema.itemVariant.sku, title: sql<string>`${schema.item.i18n} -> 'en' ->> 'title'` })
+          .from(schema.bundleComponent)
+          .innerJoin(schema.itemVariant, eq(schema.itemVariant.id, schema.bundleComponent.componentVariantId))
+          .innerJoin(schema.item, eq(schema.item.id, schema.itemVariant.itemId))
+          .where(inArray(schema.bundleComponent.bundleVariantId, variantIds))
+      : [];
   return {
     ...item,
     categories,
     images,
+    components,
     variants: variants.map((v) => {
       const ls = levels.filter((l) => l.variantId === v.id);
       const onHand = ls.reduce((a, l) => a + l.onHand, 0);

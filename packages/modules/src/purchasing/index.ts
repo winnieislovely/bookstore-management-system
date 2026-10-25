@@ -1,6 +1,6 @@
 import { schema } from '@bookstore/db';
 import { isMarginTooLow, netOfVat, vnd } from '@bookstore/domain';
-import { and, asc, desc, eq, gte, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte, ne, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
 import * as catalog from '../catalog/index.js';
@@ -52,6 +52,35 @@ export async function createSupplier(ctx: Ctx, input: z.input<typeof SupplierSch
       .returning({ id: schema.supplier.id });
     await audit.record(tx, ctx, { action: 'supplier.create', entity: 'supplier', entityId: row!.id, after: { name: data.name, tracksPayables: data.tracksPayables } });
     return { id: row!.id };
+  });
+}
+
+export const SupplierUpdateSchema = SupplierSchema.partial().extend({ status: z.enum(['active', 'inactive']).optional(), version: z.number().int() });
+
+/** Edit the supplier master (TDD §6.2); bank details stay write-only and encrypted. */
+export async function updateSupplier(ctx: Ctx, id: string, input: z.input<typeof SupplierUpdateSchema>) {
+  requirePermission(ctx, 'purchasing.manage');
+  const data = SupplierUpdateSchema.parse(input);
+  return ctx.db.transaction(async (tx) => {
+    const [before] = await tx.select().from(schema.supplier).where(eq(schema.supplier.id, id)).for('update');
+    if (!before) throw errors.notFound('Nhà cung cấp');
+    if (before.version !== data.version) throw errors.stale();
+    if (data.taxCode && data.taxCode !== before.taxCode) {
+      const [dupe] = await tx.select({ name: schema.supplier.name }).from(schema.supplier).where(and(eq(schema.supplier.taxCode, data.taxCode), ne(schema.supplier.id, id)));
+      if (dupe) throw errors.conflict('duplicate_tax_code', `Mã số thuế ${data.taxCode} đã có cho nhà cung cấp '${dupe.name}'.`);
+    }
+    const { bank, version, ...rest } = data;
+    await tx
+      .update(schema.supplier)
+      .set({
+        ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)),
+        ...(bank !== undefined && { bankEnc: bank ? ctx.crypto.encrypt(JSON.stringify(bank)) : null }),
+        updatedAt: ctx.clock.now(),
+        version: before.version + 1,
+      })
+      .where(eq(schema.supplier.id, id));
+    await audit.record(tx, ctx, { action: 'supplier.update', entity: 'supplier', entityId: id, before: { name: before.name, status: before.status }, after: { ...rest, bankChanged: bank !== undefined } });
+    return { version: before.version + 1 };
   });
 }
 

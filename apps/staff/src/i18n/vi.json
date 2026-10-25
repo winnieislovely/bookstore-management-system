@@ -61,6 +61,8 @@
   "shell.menu": "Mở menu",
   "notify.shift.variance_exceeded": "Ca {shiftNo} lệch tiền {variance}",
   "notify.einvoice.failed": "Chưa xuất được hóa đơn {docNo}",
+  "notify.backup.stale": "Chưa có bản sao lưu thành công trong 26 giờ qua",
+  "notify.backup.walLagging": "Sao lưu liên tục (WAL) đang chậm quá 5 phút",
   "notify.consignment.deadline": "Lô ký gửi {sku} sắp đến hạn",
   "nav.overview": "Tổng quan",
   "nav.group.store": "CỬA HÀNG",

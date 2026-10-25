@@ -8,7 +8,7 @@ import { errors, type Ctx, type Tx } from '../platform/index.js';
  * the matching permission; they are not dashboard tiles (FR-RPT-01).
  */
 
-export type InAppTemplate = 'shift.variance_exceeded' | 'einvoice.failed' | 'order.needs_action' | 'contact_task.overdue' | 'consignment.deadline';
+export type InAppTemplate = 'shift.variance_exceeded' | 'einvoice.failed' | 'order.needs_action' | 'contact_task.overdue' | 'consignment.deadline' | 'backup.problem';
 
 /** Active users who hold `permission` (owners always do). */
 async function holders(tx: Tx, permission: Permission): Promise<string[]> {

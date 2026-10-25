@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, integer, jsonb, pgSchema, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, check, index, integer, jsonb, pgSchema, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, id, inList, ts, updatedAt, version } from './_common.js';
 
 /** Administration and platform (TDD §4.12, §5.3 “Platform”). */
@@ -244,3 +244,26 @@ export const downloadToken = platform.table('download_token', {
   usedAt: ts(),
   createdAt: createdAt(),
 });
+
+/** Base backups and manual requests, written by the `backup` container (TDD §4.12 Backup, §11.4). */
+export const backupRun = platform.table(
+  'backup_run',
+  {
+    id: id(),
+    kind: text().notNull(),
+    status: text().notNull(),
+    requestedBy: uuid().references(() => appUser.id),
+    requestedAt: createdAt(),
+    startedAt: ts(),
+    finishedAt: ts(),
+    sizeBytes: bigint({ mode: 'number' }),
+    label: text(),
+    error: text(),
+  },
+  (t) => [
+    check('backup_run_kind', inList(t.kind, ['full', 'diff', 'dump', 'manual'])),
+    check('backup_run_status', inList(t.status, ['requested', 'running', 'succeeded', 'failed'])),
+    index('backup_run_recent_idx').on(t.requestedAt),
+    uniqueIndex('backup_run_one_pending').on(t.status).where(sql`${t.status} in ('requested', 'running')`),
+  ],
+);

@@ -35,6 +35,31 @@ export async function create(ctx: Ctx, input: z.input<typeof PromotionSchema>) {
   });
 }
 
+export const PromotionUpdateSchema = PromotionSchema.extend({ version: z.number().int() });
+
+/** Edit = a new version (TDD §4.9); sales keep pointing at the version they applied. */
+export async function update(ctx: Ctx, id: string, input: z.input<typeof PromotionUpdateSchema>) {
+  const actor = requirePermission(ctx, 'promotion.manage');
+  const data = PromotionUpdateSchema.parse(input);
+  return ctx.db.transaction(async (tx) => {
+    const [p] = await tx.select().from(schema.promotion).where(eq(schema.promotion.id, id)).for('update');
+    if (!p) throw errors.notFound('Khuyến mãi');
+    if (p.version !== data.version) throw errors.stale();
+    const [last] = await tx.select({ n: sql<number>`max(${schema.promotionVersion.version})::int` }).from(schema.promotionVersion).where(eq(schema.promotionVersion.promotionId, id));
+    const [v] = await tx
+      .insert(schema.promotionVersion)
+      .values({ promotionId: id, version: (last?.n ?? 0) + 1, rule: data.rule, startsAt: new Date(data.startsAt), endsAt: data.endsAt ? new Date(data.endsAt) : null, createdBy: actor.userId })
+      .returning({ id: schema.promotionVersion.id });
+    await tx.update(schema.promotion).set({ name: data.name, currentVersionId: v!.id, updatedAt: ctx.clock.now(), version: p.version + 1 }).where(eq(schema.promotion.id, id));
+    const code = data.rule.conditions.couponCode?.toUpperCase();
+    const [coupon] = await tx.select().from(schema.coupon).where(eq(schema.coupon.promotionId, id));
+    if (code && coupon) await tx.update(schema.coupon).set({ code, usageLimit: data.rule.conditions.totalLimit ?? null }).where(eq(schema.coupon.id, coupon.id));
+    else if (code) await tx.insert(schema.coupon).values({ code, promotionId: id, usageLimit: data.rule.conditions.totalLimit ?? null });
+    await audit.record(tx, ctx, { action: 'promotion.update', entity: 'promotion', entityId: id, after: data });
+    return { versionId: v!.id, version: p.version + 1 };
+  });
+}
+
 export async function setPaused(ctx: Ctx, id: string, paused: boolean) {
   requirePermission(ctx, 'promotion.manage');
   await ctx.db.transaction(async (tx) => {
@@ -60,6 +85,7 @@ export async function list(ctx: Ctx) {
     startsAt: v.startsAt,
     endsAt: v.endsAt,
     versionId: v.id,
+    version: p.version,
   }));
 }
 
