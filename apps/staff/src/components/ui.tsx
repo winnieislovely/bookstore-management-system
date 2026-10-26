@@ -23,11 +23,11 @@ const VARIANT: Record<ButtonVariant, string> = {
 };
 const SIZE: Record<ButtonSize, string> = {
   sm: 'h-8 px-3 text-[13px] font-medium gap-1.5',
-  md: 'h-10 px-[18px] text-sm font-medium gap-2',
-  lg: 'h-12 px-5 text-base font-semibold gap-2',
-  xl: 'h-16 px-7 text-xl font-semibold gap-3',
+  md: 'h-9 px-4 text-sm font-medium gap-2',
+  lg: 'h-11 px-5 text-sm font-semibold gap-2',
+  xl: 'h-13 px-6 text-lg font-semibold gap-2',
 };
-const ICON_SIZE: Record<ButtonSize, number> = { sm: 16, md: 20, lg: 20, xl: 24 };
+const ICON_SIZE: Record<ButtonSize, number> = { sm: 16, md: 18, lg: 20, xl: 20 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -100,7 +100,7 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field({ l
           aria-invalid={error ? true : undefined}
           aria-describedby={helper || error ? describedBy : undefined}
           className={clsx(
-            'h-10 w-full rounded-md border bg-white px-3 text-sm text-ink-900 placeholder:text-ink-500 sm:text-sm max-sm:text-base pointer-coarse:h-12',
+            'h-10 w-full rounded-md border bg-white px-3 text-sm text-ink-900 placeholder:text-ink-500 sm:text-sm max-sm:text-base pointer-coarse:h-11',
             'hover:border-ink-500 focus:border-navy-700 read-only:bg-paper-50 disabled:bg-paper-200 disabled:text-ink-300',
             error ? 'border-danger-700' : 'border-paper-500',
             suffix && 'pr-8 text-right num',
@@ -131,7 +131,7 @@ export function Card({ title, action, children, className }: { title?: string; a
   return (
     <section className={clsx('rounded-lg border border-paper-300 bg-white p-4 sm:p-6', className)}>
       {(title || action) && (
-        <header className="mb-4 flex items-center justify-between gap-2">
+        <header className="mb-4 flex flex-wrap items-center justify-between gap-2">
           {title && <h2 className="text-base font-semibold text-ink-900">{title}</h2>}
           {action}
         </header>
@@ -172,14 +172,23 @@ export function CountBadge({ count, tone = 'default' }: { count: number; tone?: 
 // ---------------------------------------------------------------------------------------------
 // Page header, empty, error and loading states (§6.3, §10.12)
 
-export function PageHeader({ title, actions, breadcrumb }: { title: string; actions?: ReactNode; breadcrumb?: ReactNode }) {
+/** Page header (Design §6.3, §12.3). `menu` is the overflow ⋯ button: on the title row on phones, last of the actions on sm+. */
+export function PageHeader({ title, actions, breadcrumb, menu }: { title: string; actions?: ReactNode; breadcrumb?: ReactNode; menu?: ReactNode }) {
   return (
     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div>
         {breadcrumb && <div className="mb-1 text-[13px] text-ink-500">{breadcrumb}</div>}
-        <h1 className="font-display text-[26px] leading-8 font-semibold text-navy-700 sm:text-[32px] sm:leading-10">{title}</h1>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="min-w-0 text-[22px] leading-[30px] font-semibold text-navy-700 sm:text-[28px] sm:leading-9">{title}</h1>
+          {menu && <div className="shrink-0 sm:hidden">{menu}</div>}
+        </div>
       </div>
-      {actions && <div className="flex flex-wrap gap-2 max-sm:[&>*]:w-full">{actions}</div>}
+      {(actions || menu) && (
+        <div className={clsx('flex flex-wrap items-center gap-2', !actions && 'max-sm:hidden')}>
+          {actions}
+          {menu && <div className="max-sm:hidden">{menu}</div>}
+        </div>
+      )}
     </div>
   );
 }

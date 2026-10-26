@@ -1,15 +1,20 @@
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { VAT_RATES_BP } from '@bookstore/domain';
+import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, AlertTriangle, BookOpen, CalendarClock, Check, Download, EyeOff, ImageOff, Package, Plus, Search, Upload, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
-import { Button, EmptyState, ErrorState, PageHeader, Skeleton, StatusChip } from '../components/ui';
-import { get } from '../lib/api';
-import { formatNumber, formatVnd } from '../lib/format';
+import { AlertOctagon, AlertTriangle, BookOpen, CalendarClock, EyeOff, ImageOff, Package, Plus, Printer, Search, Upload } from 'lucide-react';
+import { useState } from 'react';
+import { useNavigate } from 'react-router';
+import { ConfirmDialog, DataTable, FilterMenu, Pager, SearchBox, SelectField, TextArea, toast, useListParam, useParam, type Column } from '../components/data';
+import { Button, Field, PageHeader, StatusChip } from '../components/ui';
+import { get, post } from '../lib/api';
+import { formatDate, formatNumber, formatVnd } from '../lib/format';
 import { t } from '../lib/i18n';
+import { printHtml } from '../lib/print';
 import { can, useMe } from '../lib/session';
+import { Dialog } from '../pos/widgets';
+import { ImportWizard } from './import';
 
-/** Product list (FR-CAT-11, Design §12.1): SKU is the only code column; no channel column. */
+/** Product list (FR-CAT-01, FR-CAT-11, FR-CAT-13, Design §12.1): SKU first; create on the page; bulk barcode printing. */
 
 interface ProductRow {
   variantId: string;
@@ -21,6 +26,9 @@ interface ProductRow {
   sku: string;
   priceVnd: number;
   available: number;
+  onHand: number;
+  avgCostVnd?: number | null;
+  updatedAt: string;
   minStock: number | null;
   status: string;
   releaseDate: string | null;
@@ -33,23 +41,40 @@ interface ProductPage {
   page: number;
   limit: number;
 }
+interface Category {
+  id: string;
+  parentId: string | null;
+  i18n: { vi?: { name?: string }; en?: { name?: string } };
+  kinds: string[];
+}
+interface Named {
+  id: string;
+  i18n: { vi?: { name?: string }; en?: { name?: string } };
+}
+const nameOf = (n: Named) => n.i18n.vi?.name || n.i18n.en?.name || '';
 
-type Chip = { key: string; label: string; params: Record<string, string> };
-const CHIPS: Chip[] = [
-  { key: 'active', label: 'Đang bán', params: { status: 'active' } },
-  { key: 'low', label: t('stock.low'), params: { stock: 'low' } },
-  { key: 'out', label: t('stock.out'), params: { stock: 'out' } },
-  { key: 'hidden', label: 'Ẩn', params: { status: 'hidden' } },
-  { key: 'missing', label: t('item.missingImage'), params: { image: 'missing' } },
+const KINDS = [
+  { key: 'book', label: 'Sách' },
+  { key: 'stationery', label: 'Văn phòng phẩm' },
+  { key: 'other', label: 'Sản phẩm khác' },
+  { key: 'bundle', label: 'Combo' },
 ];
 
-function useDebounced<T>(value: T, ms = 300): T {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setV(value), ms);
-    return () => clearTimeout(id);
-  }, [value, ms]);
-  return v;
+/** Category tree in display order with depth; with kinds set, only branches holding items of those kinds (Design §12.1). */
+function categoryOptions(all: Category[], kinds: string[]): { key: string; label: string }[] {
+  const children = new Map<string | null, Category[]>();
+  for (const c of all) children.set(c.parentId, [...(children.get(c.parentId) ?? []), c]);
+  const holds = (c: Category): boolean => c.kinds.some((k) => kinds.includes(k)) || (children.get(c.id) ?? []).some(holds);
+  const out: { key: string; label: string }[] = [];
+  const walk = (parent: string | null, depth: number) => {
+    for (const c of children.get(parent) ?? []) {
+      if (kinds.length && !holds(c)) continue;
+      out.push({ key: c.id, label: `${' '.repeat(depth)}${nameOf(c)}` });
+      walk(c.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
 }
 
 /** Cover 40 × 60 for books, square for other goods; placeholder instead of a broken image (Design §8.2). */
@@ -83,45 +108,56 @@ function StockStatus({ row }: { row: ProductRow }) {
 export function ProductsPage() {
   const { data: me } = useMe();
   const navigate = useNavigate();
-  const [params, setParams] = useSearchParams();
-  const [q, setQ] = useState(params.get('q') ?? '');
-  const debounced = useDebounced(q);
-  const page = Number(params.get('page') ?? 1);
-  const chip = CHIPS.find((c) => Object.entries(c.params).every(([k, v]) => params.get(k) === v));
+  const [q, setQ] = useParam('q');
+  const [stock, setStock] = useListParam('stock');
+  const [kind, setKind] = useListParam('kind');
+  const [category, setCategory] = useListParam('category');
+  const [status, setStatus] = useListParam('status');
+  const [image, setImage] = useListParam('image');
+  const [page, setPage] = useParam('page', '1');
+  const [selected, setSelected] = useState<Map<string, ProductRow>>(new Map());
+  const [dialog, setDialog] = useState<null | 'create' | 'labels' | 'import'>(null);
+  const categories = useQuery({ queryKey: ['categories'], queryFn: () => get<{ items: Category[] }>('/api/v1/catalog/categories') });
 
-  // Filters, search and page live in the URL (Design §12.1).
-  useEffect(() => {
-    const next = new URLSearchParams(params);
-    if (debounced) next.set('q', debounced);
-    else next.delete('q');
-    if (debounced !== (params.get('q') ?? '')) next.delete('page');
-    if (next.toString() !== params.toString()) setParams(next, { replace: true });
-  }, [debounced]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const query = { q: params.get('q') ?? undefined, ...(chip?.params ?? {}), page, limit: 40 };
+  const csv = (v: string[]) => v.join(',') || undefined;
+  const query = { q: q || undefined, stock: csv(stock), kind: csv(kind), category: csv(category), status: csv(status), image: csv(image), page: Number(page), limit: 40 };
+  const filtered = !!(q || stock.length || kind.length || category.length || status.length || image.length);
   const list = useQuery({ queryKey: ['products', query], queryFn: () => get<ProductPage>('/api/v1/catalog/items', query) });
-  const counts = useQueries({
-    queries: CHIPS.map((c) => ({
-      queryKey: ['products-count', c.key, params.get('q') ?? ''],
-      queryFn: () => get<ProductPage>('/api/v1/catalog/items', { q: params.get('q') ?? undefined, ...c.params, limit: 1 }),
-    })),
-  });
+  const showCost = list.data?.items.some((r) => 'avgCostVnd' in r) ?? false;
 
-  const toggleChip = (c: Chip) => {
-    const next = new URLSearchParams(params);
-    for (const k of ['status', 'stock', 'image', 'page']) next.delete(k);
-    if (chip?.key !== c.key) for (const [k, v] of Object.entries(c.params)) next.set(k, v);
-    setParams(next);
-  };
-  const goPage = (p: number) => {
-    const next = new URLSearchParams(params);
-    next.set('page', String(p));
-    setParams(next);
-  };
+  const columns: Column<ProductRow>[] = [
+    { header: t('products.col.sku'), cell: (r) => <span className="code">{r.sku}</span> },
+    { header: t('products.col.image'), className: 'w-16', cell: (r) => <Thumb row={r} /> },
+    {
+      header: t('products.col.name'),
+      className: 'min-w-[200px]',
+      cell: (r) => (
+        <>
+          <span className="font-medium text-ink-900">{r.titleVi || r.title}</span>
+          {r.authors.length > 0 && <span className="block text-[13px] text-ink-500">{r.authors.join(', ')}</span>}
+        </>
+      ),
+    },
+    { header: t('products.col.stock'), align: 'right', cell: (r) => <span className={clsx(r.onHand <= 0 && 'text-danger-700')}>{formatNumber(r.onHand)}</span> },
+    { header: t('products.col.price'), align: 'right', cell: (r) => formatVnd(r.priceVnd) },
+    // Cost only with `catalog.view_cost` (FR-CAT-07); the API omits it otherwise.
+    ...(showCost ? [{ header: t('products.col.cost'), align: 'right' as const, cell: (r: ProductRow) => (r.avgCostVnd ? formatVnd(r.avgCostVnd) : '—') }] : []),
+    { header: t('products.col.status'), cell: (r) => <StockStatus row={r} /> },
+    { header: t('products.col.updated'), className: 'whitespace-nowrap', cell: (r) => formatDate(r.updatedAt) },
+  ];
 
-  const total = list.data?.total ?? 0;
-  const from = total ? (page - 1) * 40 + 1 : 0;
-  const to = Math.min(page * 40, total);
+  // Selection survives paging; the bar acts on everything ticked (Design §10.6).
+  const selection = {
+    selected: new Set(selected.keys()),
+    onChange: (keys: Set<string>) => {
+      const next = new Map<string, ProductRow>();
+      for (const k of keys) {
+        const row = selected.get(k) ?? list.data?.items.find((r) => r.variantId === k);
+        if (row) next.set(k, row);
+      }
+      setSelected(next);
+    },
+  };
 
   return (
     <>
@@ -130,145 +166,248 @@ export function ProductsPage() {
         actions={
           <>
             {can(me, 'catalog.import') && (
-              <>
-                <a className="inline-flex h-10 items-center gap-2 rounded-full px-[18px] text-sm font-medium text-navy-700 hover:bg-navy-50" href="/api/v1/admin/import/products/template">
-                  <Download size={20} aria-hidden /> {t('products.template')}
-                </a>
-                <Button variant="secondary" icon={Upload} onClick={() => navigate('/import?kind=products')}>
-                  {t('products.import')}
-                </Button>
-              </>
+              <Button variant="secondary" icon={Upload} onClick={() => setDialog('import')}>
+                {t('products.import')}
+              </Button>
             )}
-            {can(me, 'purchasing.manage') && (
-              <Button variant="primary" icon={Plus} onClick={() => navigate('/stock-in')}>
+            {can(me, 'catalog.edit') && (
+              <Button variant="primary" icon={Plus} onClick={() => setDialog('create')}>
                 {t('products.add')}
               </Button>
             )}
           </>
         }
       />
-      <div className="mb-4 flex flex-col gap-3">
-        <div className="relative max-w-xl">
-          <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
-          <input
-            className="h-10 w-full rounded-md border border-paper-500 bg-white pr-10 pl-10 text-sm placeholder:text-ink-500 focus:border-navy-700 max-sm:text-base"
-            placeholder={t('products.search')}
-            aria-label={t('products.search')}
-            aria-describedby="search-hint"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
+      {selected.size > 0 ? (
+        <div className="mb-4 flex min-h-12 flex-wrap items-center gap-3 rounded-lg bg-navy-50 px-4 py-2 text-sm" role="region" aria-label="Thao tác hàng loạt">
+          <span className="font-medium text-navy-700 num">Đã chọn {formatNumber(selected.size)} sản phẩm</span>
+          <Button size="sm" variant="primary" icon={Printer} onClick={() => setDialog('labels')}>
+            In mã vạch
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Map())}>
+            Bỏ chọn
+          </Button>
+        </div>
+      ) : (
+        <div className="mb-4 flex items-center gap-2">
+          <SearchBox value={q} onChange={setQ} placeholder={t('products.search')} />
+          <FilterMenu
+            groups={[
+              {
+                label: 'Tồn kho',
+                options: [
+                  { key: 'in_stock', label: t('stock.inStock') },
+                  { key: 'low', label: t('stock.low') },
+                  { key: 'out', label: t('stock.out') },
+                ],
+                values: stock,
+                onChange: setStock,
+              },
+              { label: 'Loại', options: KINDS, values: kind, onChange: setKind },
+              { label: 'Phân loại', options: categoryOptions(categories.data?.items ?? [], kind), values: category, onChange: setCategory },
+              {
+                label: 'Trạng thái',
+                options: [
+                  { key: 'active', label: 'Đang bán' },
+                  { key: 'hidden', label: 'Ẩn' },
+                  { key: 'discontinued', label: 'Ngừng bán' },
+                ],
+                values: status,
+                onChange: setStatus,
+              },
+              { label: 'Ảnh', options: [{ key: 'missing', label: t('item.missingImage') }], values: image, onChange: setImage },
+            ]}
           />
-          {q && (
-            <button type="button" className="absolute top-1/2 right-2 inline-flex size-8 -translate-y-1/2 items-center justify-center rounded-full hover:bg-navy-50" aria-label={t('common.clearFilters')} onClick={() => setQ('')}>
-              <X size={16} aria-hidden />
-            </button>
-          )}
-          <p id="search-hint" className="mt-1 text-[13px] text-ink-500">
-            {t('common.searchHint')}
-          </p>
         </div>
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t('common.filters')}>
-          {CHIPS.map((c, i) => {
-            const selected = chip?.key === c.key;
-            const n = counts[i]?.data?.total;
-            return (
-              <button
-                key={c.key}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => toggleChip(c)}
-                className={clsx('inline-flex h-8 items-center gap-1 rounded-full border px-3 text-sm', selected ? 'border-navy-700 bg-navy-100 text-navy-700' : 'border-paper-500 bg-white text-ink-700 hover:bg-navy-50')}
-              >
-                {selected && <Check size={16} aria-hidden />}
-                {c.label}
-                {n !== undefined && <span className="num">({formatNumber(n)})</span>}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-lg border border-paper-300 bg-white">
-        {list.isError ? (
-          <ErrorState error={list.error} onRetry={() => list.refetch()} />
-        ) : list.data && list.data.items.length === 0 ? (
-          params.get('q') || chip ? (
-            <EmptyState
-              icon={Search}
-              title={t('products.noResults', { q: params.get('q') ?? chip?.label ?? '' })}
-              help={t('products.noResultsHelp')}
-              actions={
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setQ('');
-                    setParams(new URLSearchParams());
-                  }}
-                >
-                  {t('common.clearFilters')}
-                </Button>
-              }
-            />
-          ) : (
-            <EmptyState icon={BookOpen} title={t('products.empty')} help={t('products.emptyHelp')} />
-          )
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-sm">
-              <thead className="sticky top-0 bg-paper-200 text-[13px] font-semibold text-ink-700">
-                <tr className="h-11">
-                  <th scope="col" className="w-16 px-4 text-left">{t('products.col.image')}</th>
-                  <th scope="col" className="px-4 text-left">{t('products.col.name')}</th>
-                  <th scope="col" className="px-4 text-left">{t('products.col.sku')}</th>
-                  <th scope="col" className="px-4 text-right">{t('products.col.available')}</th>
-                  <th scope="col" className="px-4 text-right">{t('products.col.price')}</th>
-                  <th scope="col" className="px-4 text-left">{t('products.col.status')}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-paper-300">
-                {list.data
-                  ? list.data.items.map((r) => (
-                      <tr key={r.variantId} className="h-[52px] cursor-pointer hover:bg-navy-50" onClick={() => navigate(`/products/${r.itemId}`)}>
-                        <td className="px-4 py-2">
-                          <Thumb row={r} />
-                        </td>
-                        <td className="px-4 py-2">
-                          <a href={`/products/${r.itemId}`} onClick={(e) => e.preventDefault()} className="font-medium text-ink-900">
-                            {r.titleVi || r.title}
-                          </a>
-                          {r.authors.length > 0 && <div className="text-[13px] text-ink-500">{r.authors.join(', ')}</div>}
-                        </td>
-                        <td className="px-4 py-2 code">{r.sku}</td>
-                        <td className={clsx('px-4 py-2 text-right num', r.available <= 0 && 'text-danger-700')}>{formatNumber(r.available)}</td>
-                        <td className="px-4 py-2 text-right num">{formatVnd(r.priceVnd)}</td>
-                        <td className="px-4 py-2">
-                          <StockStatus row={r} />
-                        </td>
-                      </tr>
-                    ))
-                  : Array.from({ length: 8 }, (_, i) => (
-                      <tr key={i} className="h-[52px]">
-                        <td colSpan={6} className="px-4">
-                          <Skeleton className="h-6" />
-                        </td>
-                      </tr>
-                    ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-      {total > 0 && (
-        <nav className="mt-4 flex items-center justify-end gap-2 text-sm" aria-label="Phân trang">
-          <span className="text-ink-700 num">{t('common.pageOf', { from: formatNumber(from), to: formatNumber(to), total: formatNumber(total) })}</span>
-          <Button size="sm" variant="ghost" disabled={page <= 1} onClick={() => goPage(page - 1)} aria-label={t('common.prev')}>
-            ‹
-          </Button>
-          <Button size="sm" variant="ghost" disabled={to >= total} onClick={() => goPage(page + 1)} aria-label={t('common.next')}>
-            ›
-          </Button>
-        </nav>
+      )}
+      <DataTable
+        columns={columns}
+        rows={list.data?.items}
+        rowKey={(r) => r.variantId}
+        onRow={(r) => navigate(`/products/${r.itemId}`)}
+        error={list.error}
+        onRetry={() => list.refetch()}
+        minWidth={showCost ? 920 : 820}
+        {...(can(me, 'catalog.view') && { selection })}
+        empty={filtered ? { icon: Search, title: q ? t('products.noResults', { q }) : 'Không có sản phẩm phù hợp', help: t('products.noResultsHelp') } : { icon: BookOpen, title: t('products.empty'), help: t('products.emptyHelp') }}
+      />
+      <Pager page={Number(page)} hasMore={Number(page) * 40 < (list.data?.total ?? 0)} total={list.data?.total ?? 0} onPage={(p) => setPage(String(p))} />
+      {dialog === 'create' && <CreateProductDialog categories={categories.data?.items ?? []} onClose={() => setDialog(null)} onCreated={(id) => navigate(`/products/${id}`)} />}
+      {dialog === 'labels' && <BulkLabelDialog rows={[...selected.values()]} onClose={() => setDialog(null)} />}
+      {/* Excel import without leaving the Products page (Design §12.10). */}
+      {dialog === 'import' && (
+        <Dialog title="Nhập sản phẩm từ Excel" size="lg" onClose={() => setDialog(null)}>
+          <ImportWizard kind="products" onImported={() => void list.refetch()} />
+        </Dialog>
       )}
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Create a product on the Products page, with zero stock (FR-CAT-01..04, Design §12.1)
+
+function CreateProductDialog({ categories, onClose, onCreated }: { categories: Category[]; onClose: () => void; onCreated: (itemId: string) => void }) {
+  const publishers = useQuery({ queryKey: ['publishers'], queryFn: () => get<{ items: Named[] }>('/api/v1/catalog/publishers') });
+  const [f, setF] = useState({ kind: 'book' as 'book' | 'stationery' | 'other', categoryId: '', title: '', titleVi: '', description: '', sku: '', isbn: '', barcode: '', authors: '', publisherId: '', weightG: '', price: '', vatBp: 0, minStock: '' });
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const digits = (v: string) => Number(v.replace(/\D/g, ''));
+  const book = f.kind === 'book';
+  const ready = f.categoryId && f.title.trim() && f.description.trim() && f.sku.trim() && digits(f.weightG) > 0 && f.price.trim();
+  return (
+    <ConfirmDialog
+      title={t('products.add')}
+      confirm="Tạo sản phẩm"
+      size="md"
+      onClose={onClose}
+      onConfirm={async () => {
+        if (!ready) throw new Error('Hãy điền đủ các ô bắt buộc (*).');
+        const r = await post<{ itemId: string }>('/api/v1/catalog/items', {
+          kind: f.kind,
+          i18n: { en: { title: f.title.trim(), description: f.description.trim() }, ...(f.titleVi.trim() && { vi: { title: f.titleVi.trim() } }) },
+          authors: book ? f.authors.split(',').map((a) => a.trim()).filter(Boolean) : [],
+          ...(book && f.publisherId && { publisherId: f.publisherId }),
+          categoryIds: [f.categoryId],
+          variants: [
+            {
+              sku: f.sku.trim(),
+              ...(book && f.isbn.trim() && { isbn: f.isbn.trim() }),
+              barcodes: !book && f.barcode.trim() ? [f.barcode.trim()] : [],
+              weightG: digits(f.weightG),
+              priceVnd: digits(f.price),
+              vatBp: f.vatBp,
+              minStock: f.minStock ? digits(f.minStock) : null,
+            },
+          ],
+        });
+        onCreated(r.itemId);
+      }}
+    >
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <SelectField label="Loại" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as typeof f.kind, vatBp: e.target.value === 'book' ? 0 : 1000 })}>
+          <option value="book">Sách</option>
+          <option value="stationery">Văn phòng phẩm</option>
+          <option value="other">Sản phẩm khác</option>
+        </SelectField>
+        <SelectField label="Danh mục" required value={f.categoryId} onChange={set('categoryId')}>
+          <option value="">— Chọn —</option>
+          {categoryOptions(categories, []).map((c) => (
+            <option key={c.key} value={c.key}>
+              {c.label}
+            </option>
+          ))}
+        </SelectField>
+        <Field label="Tên sản phẩm (tiếng Anh)" required value={f.title} onChange={set('title')} autoFocus />
+        <Field label="Tên tiếng Việt" value={f.titleVi} onChange={set('titleVi')} />
+        <div className="sm:col-span-2">
+          <TextArea label="Mô tả (tiếng Anh)" required value={f.description} onChange={set('description')} />
+        </div>
+        <Field label="SKU" required className="code" value={f.sku} onChange={(e) => setF({ ...f, sku: e.target.value.toUpperCase() })} />
+        {book ? <Field label="ISBN" inputMode="numeric" value={f.isbn} onChange={set('isbn')} /> : <Field label="Mã vạch" value={f.barcode} onChange={set('barcode')} helper="Để trống để in mã nội bộ." />}
+        {book && (
+          <>
+            <Field label="Tác giả (cách nhau dấu phẩy)" value={f.authors} onChange={set('authors')} />
+            <SelectField label="Nhà xuất bản" value={f.publisherId} onChange={set('publisherId')}>
+              <option value="">—</option>
+              {(publishers.data?.items ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {nameOf(p)}
+                </option>
+              ))}
+            </SelectField>
+          </>
+        )}
+        <Field label="Giá bán" required suffix="₫" inputMode="numeric" value={f.price ? formatNumber(digits(f.price)) : ''} onChange={(e) => setF({ ...f, price: e.target.value.replace(/\D/g, '') })} />
+        <Field label="Khối lượng" required suffix="g" inputMode="numeric" value={f.weightG} onChange={(e) => setF({ ...f, weightG: e.target.value.replace(/\D/g, '') })} />
+        <SelectField label="Thuế VAT" value={String(f.vatBp)} onChange={(e) => setF({ ...f, vatBp: Number(e.target.value) })}>
+          {VAT_RATES_BP.map((v) => (
+            <option key={v} value={v}>
+              {v / 100}%
+            </option>
+          ))}
+        </SelectField>
+        <Field label="Tồn tối thiểu" inputMode="numeric" value={f.minStock} onChange={(e) => setF({ ...f, minStock: e.target.value.replace(/\D/g, '') })} />
+      </div>
+      <p className="mt-3 text-[13px] text-ink-500">Sản phẩm được tạo với tồn kho 0. Thêm ảnh ở trang sản phẩm; hàng về nhập qua Nhập hàng.</p>
+    </ConfirmDialog>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bulk barcode labels for the selected products (FR-CAT-13)
+
+function BulkLabelDialog({ rows, onClose }: { rows: ProductRow[]; onClose: () => void }) {
+  const [template, setTemplate] = useState<'barcode' | 'shelf' | 'sale_price'>('barcode');
+  const [sheet, setSheet] = useState<'a4' | 'roll'>('a4');
+  const [start, setStart] = useState('1');
+  const [copies, setCopies] = useState<Record<string, number>>(() => Object.fromEntries(rows.map((r) => [r.variantId, 1])));
+  const total = Object.values(copies).reduce((a, n) => a + n, 0);
+  return (
+    <Dialog
+      title="In mã vạch"
+      size="md"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Hủy
+          </Button>
+          <Button
+            variant="primary"
+            icon={Printer}
+            disabled={total === 0}
+            onClick={async () => {
+              const res = await fetch('/api/v1/catalog/labels', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'content-type': 'application/json', 'x-bms-request': '1' },
+                body: JSON.stringify({ template, sheet, startPosition: Number(start) || 1, items: rows.filter((r) => (copies[r.variantId] ?? 0) > 0).map((r) => ({ variantId: r.variantId, copies: copies[r.variantId] })) }),
+              });
+              if (!res.ok) {
+                const e = (await res.json().catch(() => null)) as { error?: { message: string } } | null;
+                toast.error(e?.error?.message ?? 'Không tạo được nhãn.');
+                return;
+              }
+              printHtml(await res.text());
+              onClose();
+            }}
+          >
+            In {formatNumber(total)} nhãn
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <SelectField label="Mẫu nhãn" value={template} onChange={(e) => setTemplate(e.target.value as typeof template)}>
+            <option value="barcode">Nhãn mã vạch</option>
+            <option value="shelf">Nhãn kệ</option>
+            <option value="sale_price">Nhãn giá khuyến mãi</option>
+          </SelectField>
+          <SelectField label="Khổ giấy" value={sheet} onChange={(e) => setSheet(e.target.value as typeof sheet)}>
+            <option value="a4">Giấy A4 (tờ nhãn)</option>
+            <option value="roll">Cuộn nhãn</option>
+          </SelectField>
+          {sheet === 'a4' && <Field label="Bắt đầu từ ô số" inputMode="numeric" value={start} onChange={(e) => setStart(e.target.value.replace(/\D/g, ''))} />}
+        </div>
+        <ul className="max-h-80 divide-y divide-paper-300 overflow-y-auto rounded-lg border border-paper-300">
+          {rows.map((r) => (
+            <li key={r.variantId} className="flex items-center gap-3 px-3 py-2">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{r.titleVi || r.title}</span>
+                <span className="code text-[13px] text-ink-500">{r.sku}</span>
+              </span>
+              <input
+                className="h-9 w-16 rounded-md border border-paper-500 text-center text-sm num"
+                inputMode="numeric"
+                aria-label={`Số nhãn ${r.sku}`}
+                value={String(copies[r.variantId] ?? 0)}
+                onChange={(e) => setCopies({ ...copies, [r.variantId]: Math.min(500, Number(e.target.value.replace(/\D/g, '')) || 0) })}
+              />
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Dialog>
   );
 }

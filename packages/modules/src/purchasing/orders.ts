@@ -1,6 +1,6 @@
 import { schema } from '@bookstore/db';
 import { canTransition, SUPPLIER_ORDER } from '@bookstore/domain';
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
 import * as settings from '../settings/index.js';
@@ -73,7 +73,7 @@ export async function listOrders(ctx: Ctx, status?: string) {
     })
     .from(o)
     .innerJoin(schema.supplier, eq(schema.supplier.id, o.supplierId))
-    .where(status ? eq(o.status, status) : undefined)
+    .where(status ? inArray(o.status, status.split(',').map((x) => x.trim()).filter(Boolean) as (typeof o.status.enumValues)[number][]) : undefined)
     .orderBy(desc(o.createdAt), desc(o.id));
 }
 

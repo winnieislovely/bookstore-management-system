@@ -92,18 +92,17 @@ describe('customer merge (FR-CRM-02, TDD §4.9)', () => {
     for (const fk of fks) expect(registered.has(fk.ref), `${fk.ref} must be in CUSTOMER_REFS`).toBe(true);
   });
 
-  it('moves history, points and credit to the kept profile and anonymises the duplicate', async () => {
+  it('moves history and points to the kept profile and anonymises the duplicate', async () => {
     const a = (await h.call('POST', '/api/v1/customers', { cookie: cashier, body: { name: 'Trần Thị B', phone: '0912345678' } })).body.id;
     const b = (await h.call('POST', '/api/v1/customers', { cookie: cashier, body: { name: 'Tran Thi B', phone: '0987654321', email: 'b@example.com' } })).body.id;
     await sell(a);
     const saleB = await sell(b, 2);
-    await h.call('POST', `/api/v1/customers/${b}/store-credit-adjust`, { cookie: manager, body: { deltaVnd: 5000, reason: 'Bù' } });
     expect((await h.call('POST', `/api/v1/customers/${a}/merge`, { cookie: cashier, body: { sourceId: a } })).body.error.code).toBe('same_customer');
     const r = await h.call('POST', `/api/v1/customers/${a}/merge`, { cookie: cashier, body: { sourceId: b } });
-    expect(r.body).toMatchObject({ pointsMoved: 19, creditMovedVnd: 5000 });
+    expect(r.body).toMatchObject({ pointsMoved: 19 });
 
     const kept = (await h.call('GET', `/api/v1/customers/${a}`, { cookie: cashier })).body;
-    expect(kept).toMatchObject({ pointsBalance: 9 + 19, storeCreditVnd: 5000, email: 'b@example.com' });
+    expect(kept).toMatchObject({ pointsBalance: 9 + 19, email: 'b@example.com' });
     const [s] = await h.t.sql`select customer_id from sales.sale where id = ${saleB.id}`;
     expect(s!.customer_id).toBe(a);
     const [gone] = await h.t.sql`select phone_e164, merged_into, anonymised_at from crm.customer where id = ${b}`;
@@ -121,10 +120,9 @@ describe('customer merge (FR-CRM-02, TDD §4.9)', () => {
     const a = (await h.call('GET', '/api/v1/customers?phone=0912345678', { cookie: cashier })).body.items[0].id;
     expect((await h.call('GET', `/api/v1/customers/${a}/export`, { cookie: cashier })).status).toBe(403);
     const res = await h.app.request(`/api/v1/customers/${a}/export`, { headers: { cookie: manager } });
-    const data = (await res.json()) as { profile: { phone: string }; pointsLedger: unknown[]; storeCreditLedger: unknown[]; purchases: { totals: { orders: number } } };
+    const data = (await res.json()) as { profile: { phone: string }; pointsLedger: unknown[]; purchases: { totals: { orders: number } } };
     expect(data.profile.phone).toBe('+84912345678');
     expect(data.pointsLedger.length).toBeGreaterThan(0);
-    expect(data.storeCreditLedger.length).toBe(1);
     expect(data.purchases.totals.orders).toBe(2);
     const audit = (await h.call('GET', `/api/v1/admin/audit?action=customer.export`, { cookie: manager })).body.items;
     expect(audit[0]).toMatchObject({ entityId: a });

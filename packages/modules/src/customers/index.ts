@@ -1,6 +1,6 @@
 import { schema } from '@bookstore/db';
 import { defaultTiers, foldText, normalizePhone, pointsExpiry } from '@bookstore/domain';
-import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
 import * as settings from '../settings/index.js';
@@ -108,30 +108,85 @@ export async function findByPhone(ctx: Ctx, phone: string) {
   return c ? { ...c.c, tierCode: c.tierCode, tierName: c.tierName } : null;
 }
 
-/** Diacritic-insensitive search on name, phone and email (FR-CRM-02). */
-export async function search(ctx: Ctx, q: string, limit = 40) {
+/** `a,b` (or an already-split list) → list; empty → undefined. */
+const csv = (v: string | string[] | undefined) => (Array.isArray(v) ? v : v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined);
+const csvField = z.union([z.string(), z.array(z.string())]).optional().transform(csv);
+/** A count range: `0`, `2-5`, `11+`. */
+const RANGE = /^(\d+)(?:-(\d+)|(\+))?$/;
+const csvRanges = csvField.pipe(z.array(z.string().regex(RANGE, 'Khoảng không hợp lệ (vd. 0, 2-5, 11+)')).optional());
+
+export const CustomerListQuery = z.object({
+  q: z.string().optional(),
+  tier: csvField,
+  lastPurchase: z.enum(['30d', '90d', '180d', 'over180d', 'never']).optional(),
+  orders: csvRanges,
+  points: csvRanges,
+});
+
+/** `col` within any of the ranges (OR). */
+function inRanges(col: SQL, ranges: string[]): SQL {
+  const parts = ranges.map((r) => {
+    const [, lo, hi, plus] = RANGE.exec(r)!;
+    if (plus) return sql`${col} >= ${Number(lo)}`;
+    if (hi) return sql`${col} between ${Number(lo)} and ${Number(hi)}`;
+    return sql`${col} = ${Number(lo)}`;
+  });
+  return sql`(${sql.join(parts, sql` or `)})`;
+}
+
+/**
+ * Customer list (FR-CRM-02): diacritic-insensitive search on name, phone and email, purchase stats
+ * from completed counter sales (online orders join in R2) and filters by tier, last purchase, order count and points.
+ */
+export async function search(ctx: Ctx, input: z.input<typeof CustomerListQuery> = {}, limit = 40) {
   requirePermission(ctx, 'customer.view');
+  const f = CustomerListQuery.parse(input);
+  const q = f.q ?? '';
   const term = foldText(q).replace(/\s+/g, ' ');
   const digits = q.replace(/\D/g, '');
-  return ctx.db
-    .select({
-      id: schema.customer.id,
-      name: schema.customer.name,
-      phoneE164: schema.customer.phoneE164,
-      email: schema.customer.email,
-      pointsBalance: schema.customer.pointsBalance,
-      tierName: schema.tier.name,
-    })
-    .from(schema.customer)
-    .leftJoin(schema.tier, eq(schema.tier.id, schema.customer.tierId))
-    .where(
-      and(
-        sql`${schema.customer.anonymisedAt} is null`,
-        digits.length >= 4 ? sql`(${schema.customer.searchText} like ${`%${term}%`} or ${schema.customer.phoneE164} like ${`%${digits.slice(-9)}%`})` : sql`${schema.customer.searchText} like ${`%${term}%`}`,
-      ),
-    )
-    .orderBy(asc(schema.customer.name))
-    .limit(limit);
+  const where: SQL[] = [sql`c.anonymised_at is null`];
+  if (term) where.push(digits.length >= 4 ? sql`(c.search_text like ${`%${term}%`} or c.phone_e164 like ${`%${digits.slice(-9)}%`})` : sql`c.search_text like ${`%${term}%`}`);
+  if (f.tier) where.push(sql`t.code in (${sql.join(f.tier.map((x) => sql`${x}`), sql`, `)})`);
+  if (f.orders) where.push(inRanges(sql`coalesce(st.orders, 0)`, f.orders));
+  if (f.points) where.push(inRanges(sql`c.points_balance`, f.points));
+  if (f.lastPurchase === 'never') where.push(sql`st.last_at is null`);
+  else if (f.lastPurchase === 'over180d') where.push(sql`st.last_at < now() - interval '180 days'`);
+  else if (f.lastPurchase) where.push(sql`st.last_at >= now() - ${`${parseInt(f.lastPurchase)} days`}::interval`);
+  const rows = await ctx.db.execute<{
+    id: string;
+    name: string;
+    phone_e164: string | null;
+    email: string | null;
+    points_balance: number;
+    tier_code: string | null;
+    tier_name: string | null;
+    orders: number | null;
+    orders_vnd: string | null;
+    last_at: Date | string | null;
+  }>(sql`
+    select c.id, c.name, c.phone_e164, c.email, c.points_balance, t.code as tier_code, t.name as tier_name,
+           st.orders, st.orders_vnd, st.last_at
+    from crm.customer c
+    left join crm.tier t on t.id = c.tier_id
+    left join lateral (
+      select count(*)::int as orders, sum(s.total_vnd) as orders_vnd, max(s.sold_at) as last_at
+      from sales.sale s where s.customer_id = c.id and s.status = 'completed'
+    ) st on true
+    where ${and(...where)}
+    order by c.name asc
+    limit ${limit}`);
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    phoneE164: r.phone_e164,
+    email: r.email,
+    pointsBalance: r.points_balance,
+    tierCode: r.tier_code,
+    tierName: r.tier_name,
+    orders: r.orders ?? 0,
+    ordersVnd: Number(r.orders_vnd ?? 0),
+    lastPurchaseAt: r.last_at ? new Date(r.last_at).toISOString() : null,
+  }));
 }
 
 export async function getCustomer(ctx: Ctx, id: string) {
@@ -143,8 +198,9 @@ export async function getCustomer(ctx: Ctx, id: string) {
     .where(eq(schema.customer.id, id));
   if (!c) throw errors.notFound('Khách hàng');
   const ledger = await ctx.db.select().from(schema.pointsLedger).where(eq(schema.pointsLedger.customerId, id)).orderBy(desc(schema.pointsLedger.at)).limit(50);
-  const credit = await ctx.db.select().from(schema.storeCreditLedger).where(eq(schema.storeCreditLedger.customerId, id)).orderBy(desc(schema.storeCreditLedger.at)).limit(50);
-  return { ...c.c, tierCode: c.tierCode, tierName: c.tierName, tierBenefits: c.benefits, pointsLedger: ledger, storeCreditLedger: credit };
+  // Store credit was withdrawn (FR-CRM-10); its legacy column is not exposed.
+  const { storeCreditVnd: _unused, ...profile } = c.c;
+  return { ...profile, tierCode: c.tierCode, tierName: c.tierName, tierBenefits: c.benefits, pointsLedger: ledger };
 }
 
 /** Tier and points snapshot for the pricing engine. */
@@ -233,66 +289,6 @@ export async function listTiers(ctx: Ctx) {
   return ctx.db.select().from(schema.tier).orderBy(asc(schema.tier.sort));
 }
 
-// ---------------------------------------------------------------------------------------------
-// Store credit (FR-CRM-10, TDD §4.9)
-
-export interface CreditEntry {
-  customerId: string;
-  deltaVnd: number;
-  reason: 'refund' | 'spend' | 'spend_reversal' | 'adjust';
-  refType?: string;
-  refId?: string;
-  note?: string;
-}
-
-/**
- * Append a store-credit ledger row and move `store_credit_vnd` with it. Debits are one atomic
- * conditional update, so the balance never goes below zero. Returns the new balance.
- */
-export async function postCredit(tx: Tx, ctx: Ctx, e: CreditEntry): Promise<number> {
-  if (!Number.isSafeInteger(e.deltaVnd) || e.deltaVnd === 0) throw new RangeError('deltaVnd must be a non-zero integer');
-  const c = schema.customer;
-  const [row] = await tx
-    .update(c)
-    .set({ storeCreditVnd: sql`${c.storeCreditVnd} + ${e.deltaVnd}` })
-    .where(and(eq(c.id, e.customerId), sql`${c.storeCreditVnd} + ${e.deltaVnd} >= 0`))
-    .returning({ balance: c.storeCreditVnd });
-  if (!row) {
-    const [cur] = await tx.select({ b: c.storeCreditVnd }).from(c).where(eq(c.id, e.customerId));
-    if (!cur) throw errors.notFound('Khách hàng');
-    throw new AppError(409, 'store_credit_insufficient', `Khách chỉ còn ${cur.b} ₫ tiền ghi có.`, { balanceVnd: cur.b });
-  }
-  await tx.insert(schema.storeCreditLedger).values({
-    customerId: e.customerId,
-    deltaVnd: e.deltaVnd,
-    reason: e.reason,
-    refType: e.refType ?? null,
-    refId: e.refId ?? null,
-    note: e.note ?? null,
-    actorId: ctx.actor?.userId ?? null,
-    at: ctx.clock.now(),
-  });
-  return row.balance;
-}
-
-export const CreditAdjustSchema = z.object({
-  deltaVnd: z
-    .number()
-    .int()
-    .refine((n) => n !== 0, 'Số tiền điều chỉnh phải khác 0.'),
-  reason: z.string().trim().min(1, 'Cần nhập lý do điều chỉnh.').max(300),
-});
-
-/** Manual adjustment with permission and a reason, audited (FR-CRM-10). */
-export async function adjustCredit(ctx: Ctx, customerId: string, input: z.input<typeof CreditAdjustSchema>) {
-  requirePermission(ctx, 'customer.adjust_points');
-  const data = CreditAdjustSchema.parse(input);
-  return ctx.db.transaction(async (tx) => {
-    const balance = await postCredit(tx, ctx, { customerId, deltaVnd: data.deltaVnd, reason: 'adjust', note: data.reason });
-    await audit.record(tx, ctx, { action: 'store_credit.adjust', entity: 'customer', entityId: customerId, after: { deltaVnd: data.deltaVnd, reason: data.reason, balanceVnd: balance } });
-    return { balanceVnd: balance };
-  });
-}
 
 export * from './privacy.js';
 

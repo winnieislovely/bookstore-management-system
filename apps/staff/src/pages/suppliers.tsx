@@ -126,7 +126,7 @@ function SupplierForm({ supplier, onClose, onSaved }: { supplier: Supplier | nul
         </>
       }
     >
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Tên" required value={f.name} onChange={set('name')} className="sm:col-span-2" autoFocus />
         <SelectField label="Loại" value={f.kind} onChange={set('kind')}>
           {Object.entries(KIND).map(([k, v]) => (
@@ -148,7 +148,7 @@ function SupplierForm({ supplier, onClose, onSaved }: { supplier: Supplier | nul
           <input type="checkbox" className="size-5" checked={f.tracksPayables} onChange={(e) => setF({ ...f, tracksPayables: e.target.checked })} />
           Theo dõi công nợ
         </label>
-        <fieldset className="grid gap-4 sm:col-span-2 sm:grid-cols-3">
+        <fieldset className="grid grid-cols-1 gap-4 sm:col-span-2 sm:grid-cols-3">
           <legend className="mb-1 text-[13px] font-medium text-ink-700">Tài khoản ngân hàng {s?.hasBank && '(đã lưu – nhập lại để thay)'}</legend>
           <Field label="Ngân hàng" value={bank.bankName} onChange={(e) => setBank({ ...bank, bankName: e.target.value })} />
           <Field label="Số tài khoản" inputMode="numeric" value={bank.accountNo} onChange={(e) => setBank({ ...bank, accountNo: e.target.value })} />

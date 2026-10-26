@@ -71,7 +71,7 @@ export function Keypad({ onKey }: { onKey: (k: string) => void }) {
   return (
     <div className="grid grid-cols-3 gap-2">
       {keys.map((k) => (
-        <button key={k} type="button" className="h-16 rounded-xl border border-paper-300 bg-white text-xl font-semibold num hover:bg-navy-50" onClick={() => onKey(k)} aria-label={k === 'del' ? 'Xóa' : k}>
+        <button key={k} type="button" className="h-13 rounded-xl border border-paper-300 bg-white text-lg font-semibold num hover:bg-navy-50" onClick={() => onKey(k)} aria-label={k === 'del' ? 'Xóa' : k}>
           {k === 'del' ? <Delete className="mx-auto" aria-hidden /> : k}
         </button>
       ))}

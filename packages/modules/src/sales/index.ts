@@ -1,5 +1,6 @@
 import { schema } from '@bookstore/db';
 import {
+  foldText,
   checkShiftClose,
   countDenominations,
   divRoundHalfUp,
@@ -13,7 +14,7 @@ import {
   type CartLineInput,
   type PriceCartResult,
 } from '@bookstore/domain';
-import { and, asc, desc, eq, gte, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
@@ -196,12 +197,19 @@ export async function closeShift(ctx: Ctx, input: z.input<typeof CloseShiftSchem
 }
 
 /** Shift history with variances, reasons and cashiers (FR-POS-22). */
-export async function listShifts(ctx: Ctx, q: { from?: Date | undefined; to?: Date | undefined; limit?: number | undefined }) {
+/** Shift history (FR-POS-22): search by shift number or cashier name, filter by register and opening day (Design §12.1). */
+export async function listShifts(ctx: Ctx, q: { from?: Date | undefined; to?: Date | undefined; limit?: number | undefined; q?: string | undefined; registerIds?: string[] | undefined }) {
   requirePermission(ctx, 'shift.view_all');
   const s = schema.shift;
   const where: SQL[] = [];
   if (q.from) where.push(gte(s.openedAt, q.from));
   if (q.to) where.push(lte(s.openedAt, q.to));
+  if (q.registerIds?.length) where.push(inArray(s.registerId, q.registerIds));
+  const term = foldText(q.q ?? '').trim();
+  if (term) {
+    const no = /^#?(\d+)$/.exec(term);
+    where.push(no ? eq(s.shiftNo, Number(no[1])) : sql`lower(public.f_unaccent(${schema.appUser.displayName})) like ${`%${term}%`}`);
+  }
   return ctx.db
     .select({
       id: s.id,
@@ -400,8 +408,6 @@ export const PaymentInputSchema = z.discriminatedUnion('method', [
       .refine((r) => r.length === PAYMENT_REF_LENGTH && [...r].every((ch) => PAYMENT_REF_ALPHABET.includes(ch)), 'Mã tham chiếu chuyển khoản không hợp lệ.'),
   }),
   z.object({ method: z.literal('card'), amountVnd: z.number().int().positive(), ref: z.string().trim().min(1, 'Cần nhập mã chuẩn chi của máy POS thẻ.').max(40) }),
-  /** Store credit of the attached customer (FR-CRM-10). */
-  z.object({ method: z.literal('store_credit'), amountVnd: z.number().int().positive() }),
 ]);
 
 export const BuyerSchema = z.object({
@@ -535,9 +541,6 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
       if (p.method === 'cash' && p.tenderedVnd !== undefined && p.tenderedVnd < p.amountVnd) {
         throw new AppError(422, 'cash_short', 'Tiền khách đưa ít hơn số tiền mặt cần trả.');
       }
-      if (p.method === 'store_credit' && !data.customerId) {
-        throw new AppError(422, 'store_credit_needs_customer', 'Thanh toán bằng tiền ghi có cần chọn khách hàng.');
-      }
     }
 
     const now = ctx.clock.now();
@@ -608,12 +611,6 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
       });
     }
 
-    // Store credit spent as a payment (FR-CRM-10); fails the sale if the balance is too low.
-    const creditPaid = data.payments.reduce((a, p) => a + (p.method === 'store_credit' ? p.amountVnd : 0), 0);
-    if (creditPaid > 0) {
-      await customers.postCredit(tx, ctx, { customerId: data.customerId!, deltaVnd: -creditPaid, reason: 'spend', refType: 'sale', refId: saleId });
-    }
-
     // Loyalty: redeemed points are a discount; points are credited on payment completion (BR-19).
     if (data.customerId) {
       if (priced.redeemPoints > 0) await customers.post(tx, ctx, { customerId: data.customerId, delta: -priced.redeemPoints, reason: 'redeem', refType: 'sale', refId: saleId });
@@ -670,13 +667,22 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
 // =============================================================================================
 // Sales list and record (FR-POS-21)
 
+/** `a,b` (or an already-split array) → ["a", "b"], each checked against the allowed values; empty → undefined. */
+const csvEnum = <T extends string>(values: readonly [T, ...T[]]) =>
+  z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .transform((v) => (Array.isArray(v) ? v : v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined))
+    .pipe(z.array(z.enum(values)).min(1).optional());
+
 export const SalesQuery = z.object({
   q: z.string().trim().max(100).optional(),
   from: z.iso.datetime().optional(),
   to: z.iso.datetime().optional(),
   cashier: z.uuid().optional(),
-  status: z.enum(['completed', 'voided']).optional(),
-  method: z.enum(['cash', 'transfer', 'card']).optional(),
+  // Comma-separated lists: OR within a filter, AND across filters (TDD §6.2).
+  status: csvEnum(['completed', 'voided']),
+  method: csvEnum(['cash', 'transfer', 'card']),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(40),
 });
@@ -689,10 +695,10 @@ export async function listSales(ctx: Ctx, input: z.input<typeof SalesQuery>) {
   const where: SQL[] = [];
   if (!can(actor, 'sale.view_all')) where.push(eq(s.cashierId, actor.userId));
   else if (q.cashier) where.push(eq(s.cashierId, q.cashier));
-  if (q.status) where.push(eq(s.status, q.status));
+  if (q.status) where.push(inArray(s.status, q.status));
   if (q.from) where.push(gte(s.soldAt, new Date(q.from)));
   if (q.to) where.push(lte(s.soldAt, new Date(q.to)));
-  if (q.method) where.push(sql`exists (select 1 from sales.sale_payment p where p.sale_id = ${s.id} and p.method = ${q.method})`);
+  if (q.method) where.push(sql`exists (select 1 from sales.sale_payment p where p.sale_id = ${s.id} and p.method in (${sql.join(q.method.map((m) => sql`${m}`), sql`, `)}))`);
   if (q.q) {
     const term = q.q;
     const digits = term.replace(/\D/g, '');
@@ -753,7 +759,7 @@ export async function getSale(ctx: Ctx, id: string) {
     }),
     payments,
     returns,
-    einvoice: einvoice ? { status: einvoice.status, invoiceNo: einvoice.invoiceNo, emailRequested: einvoice.emailRequested, emailStatus: einvoice.emailStatus, error: einvoice.error } : null,
+    einvoice: einvoice ? { status: einvoice.status, invoiceNo: einvoice.invoiceNo, emailRequested: einvoice.emailRequested, emailStatus: einvoice.emailStatus, error: einvoice.error, buyerName: (einvoice.buyer as { name?: string } | null)?.name ?? null } : null,
   };
 }
 
@@ -856,11 +862,6 @@ export async function voidSale(ctx: Ctx, saleId: string, input: z.input<typeof V
     if (s.customerId) {
       if (s.pointsEarned > 0) await customers.post(tx, ctx, { customerId: s.customerId, delta: -s.pointsEarned, reason: 'return_reversal', refType: 'sale_void', refId: saleId }, { floorAtZero: true });
       if (s.pointsRedeemed > 0) await customers.post(tx, ctx, { customerId: s.customerId, delta: s.pointsRedeemed, reason: 'redeem_refund', refType: 'sale_void', refId: saleId });
-      // Store credit spent on the sale is given back (FR-CRM-10).
-      const [credit] = await tx.execute<{ total: string }>(sql`select coalesce(sum(amount_vnd), 0) as total from sales.sale_payment where sale_id = ${saleId}::uuid and method = 'store_credit'`);
-      if (Number(credit!.total) > 0) {
-        await customers.postCredit(tx, ctx, { customerId: s.customerId, deltaVnd: Number(credit!.total), reason: 'spend_reversal', refType: 'sale_void', refId: saleId });
-      }
     }
     // A sale voided in a later shift pays its cash back from the current drawer.
     if (s.shiftId !== current.id) {
@@ -889,7 +890,7 @@ export const ReturnSchema = z.object({
   lines: z
     .array(z.object({ saleLineId: z.uuid(), qty: z.number().int().positive(), restock: z.boolean() }))
     .min(1),
-  refundMethod: z.enum(['cash', 'transfer', 'card', 'store_credit']),
+  refundMethod: z.enum(['cash', 'transfer', 'card']),
   reason: z.string().trim().max(500).optional(),
   approvalToken: z.string().optional(),
 });
@@ -922,16 +923,10 @@ export async function returnSaleTx(tx: Tx, ctx: Ctx, saleId: string, data: z.inf
       ? opts.offline.approverId
       : await requireOrApprove(tx, ctx, 'return.approve', 'return_exception', data.approvalToken, saleId, `Đơn đã quá hạn đổi trả ${cfg['sale.return_window_days']} ngày, cần quản lý duyệt.`);
   }
-  // Refund to the original payment method or as store credit to the sale's customer (FR-POS-13, FR-CRM-10).
-  if (data.refundMethod === 'store_credit') {
-    if (!s.customerId) {
-      throw new AppError(422, 'store_credit_needs_customer', 'Đơn không có khách hàng nên không thể ghi có. Hãy hoàn tiền theo phương thức đã thanh toán.');
-    }
-  } else {
-    const methods = (await tx.select({ m: schema.salePayment.method }).from(schema.salePayment).where(eq(schema.salePayment.saleId, saleId))).map((p) => p.m);
-    if (!methods.includes(data.refundMethod)) {
-      throw new AppError(422, 'refund_method_mismatch', 'Chỉ hoàn tiền theo phương thức khách đã thanh toán, hoặc ghi có cho khách.', { paidWith: methods });
-    }
+  // Refund to the original payment method (FR-POS-13).
+  const methods = (await tx.select({ m: schema.salePayment.method }).from(schema.salePayment).where(eq(schema.salePayment.saleId, saleId))).map((p) => p.m);
+  if (!methods.includes(data.refundMethod)) {
+    throw new AppError(422, 'refund_method_mismatch', 'Chỉ hoàn tiền theo phương thức khách đã thanh toán.', { paidWith: methods });
   }
 
   const saleLines = await tx.select().from(schema.saleLine).where(eq(schema.saleLine.saleId, saleId));
@@ -985,17 +980,6 @@ export async function returnSaleTx(tx: Tx, ctx: Ctx, saleId: string, data: z.inf
     // Damaged returns do not restock (BR-04); they stay off the shelf.
     if (p.restock && p.line.variantId) await restock(tx, ctx, 'sale_return', ret!.id, p.line.variantId, p.qty, p.line.qty ? divRoundHalfUp(p.line.costVnd, p.line.qty) : 0);
     await reverseConsignment(tx, p.line.id, p.qty);
-  }
-  if (data.refundMethod === 'store_credit' && refund > 0) {
-    // A return of a sale paid by store credit is refunded as credit too (spend reversal).
-    const [paidByCredit] = await tx.execute<{ n: number }>(sql`select count(*)::int as n from sales.sale_payment where sale_id = ${saleId}::uuid and method = 'store_credit'`);
-    await customers.postCredit(tx, ctx, {
-      customerId: s.customerId!,
-      deltaVnd: refund,
-      reason: paidByCredit!.n > 0 ? 'spend_reversal' : 'refund',
-      refType: 'sale_return',
-      refId: ret!.id,
-    });
   }
   if (s.customerId) {
     if (reverse > 0) await customers.post(tx, ctx, { customerId: s.customerId, delta: -reverse, reason: 'return_reversal', refType: 'sale_return', refId: ret!.id }, { floorAtZero: true });

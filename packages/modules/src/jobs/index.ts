@@ -221,10 +221,7 @@ export async function integrityCheck(ctx: Ctx): Promise<Drift[]> {
     where s.on_hand <> coalesce((select sum(qty_delta) from inventory.stock_movement m where m.variant_id = s.variant_id and m.location = s.location), 0)
     union all
     select 'points_balance', c.id::text, coalesce((select sum(delta) from crm.points_ledger l where l.customer_id = c.id), 0), c.points_balance
-    from crm.customer c where c.points_balance <> coalesce((select sum(delta) from crm.points_ledger l where l.customer_id = c.id), 0)
-    union all
-    select 'store_credit', c.id::text, coalesce((select sum(delta_vnd) from crm.store_credit_ledger l where l.customer_id = c.id), 0), c.store_credit_vnd
-    from crm.customer c where c.store_credit_vnd <> coalesce((select sum(delta_vnd) from crm.store_credit_ledger l where l.customer_id = c.id), 0)`);
+    from crm.customer c where c.points_balance <> coalesce((select sum(delta) from crm.points_ledger l where l.customer_id = c.id), 0)`);
   return rows.map((r) => ({ check: r.check, ref: r.ref, expected: Number(r.expected), actual: Number(r.actual) }));
 }
 

@@ -41,7 +41,7 @@ export function CountsPage() {
   const list = useQuery({ queryKey: ['counts'], queryFn: () => get<{ items: CountRow[] }>('/api/v1/inventory/counts') });
   const columns: Column<CountRow>[] = [
     { header: 'Số phiếu', cell: (r) => <span className="code">{r.docNo}</span> },
-    { header: 'Ngày', cell: (r) => formatDateTime(r.createdAt) },
+    { header: 'Ngày', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.createdAt) },
     { header: 'Phạm vi', cell: (r) => `${SCOPE[r.scope.kind] ?? r.scope.kind} · ${r.location === 'back' ? 'Kho sau' : 'Quầy'}${r.blind ? ' · đếm mù' : ''}` },
     { header: 'Người tạo', cell: (r) => r.createdBy ?? '—' },
     { header: 'Đã đếm', align: 'right', cell: (r) => `${formatNumber(r.counted)}/${formatNumber(r.lines)}` },
@@ -197,7 +197,7 @@ export function CountDetailPage() {
             {last && (
               <div className="flex items-center justify-between rounded-lg bg-sand-50 px-4 py-3" role="status">
                 <span className="font-medium">{last.title}</span>
-                <span className="text-[36px] leading-[44px] font-bold num">{formatNumber(last.counted)}</span>
+                <span className="text-[28px] leading-9 font-bold num whitespace-nowrap">{formatNumber(last.counted)}</span>
               </div>
             )}
           </div>
@@ -277,11 +277,11 @@ function SetQtyDialog({ line, onSave, onClose }: { line: CountLine; onSave: (q: 
       }
     >
       <div className="flex items-center justify-center gap-4">
-        <button type="button" className="size-16 rounded-full border border-paper-500 text-2xl" aria-label="Giảm" onClick={() => setV(Math.max(0, v - 1))}>
+        <button type="button" className="size-12 rounded-full border border-paper-500 text-xl" aria-label="Giảm" onClick={() => setV(Math.max(0, v - 1))}>
           –
         </button>
-        <input className="h-16 w-28 rounded-md border border-paper-500 text-center text-[32px] font-bold num" inputMode="numeric" value={v} onChange={(e) => setV(Number(e.target.value.replace(/\D/g, '')) || 0)} aria-label="Số đếm được" />
-        <button type="button" className="size-16 rounded-full border border-paper-500 text-2xl" aria-label="Tăng" onClick={() => setV(v + 1)}>
+        <input className="h-14 w-28 rounded-md border border-paper-500 text-center text-[28px] font-bold num" inputMode="numeric" value={v} onChange={(e) => setV(Number(e.target.value.replace(/\D/g, '')) || 0)} aria-label="Số đếm được" />
+        <button type="button" className="size-12 rounded-full border border-paper-500 text-xl" aria-label="Tăng" onClick={() => setV(v + 1)}>
           +
         </button>
       </div>

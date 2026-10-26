@@ -208,7 +208,7 @@ describe('returns (FR-POS-12, FR-POS-13, BR-04)', () => {
     cashier = await h.login('thu', 'mat-khau-moi-456');
     const sale = (await h.call('GET', `/api/v1/pos/sales/${firstSale.id}`, { cookie: cashier })).body;
     const penLine = sale.lines.find((l: { sku: string }) => l.sku === 'VPP-0012');
-    const body = { shiftId, lines: [{ saleLineId: penLine.id, qty: 1, restock: false }], refundMethod: 'store_credit' };
+    const body = { shiftId, lines: [{ saleLineId: penLine.id, qty: 1, restock: false }], refundMethod: 'cash' };
     const denied = await h.call('POST', `/api/v1/pos/sales/${firstSale.id}/returns`, { cookie: cashier, body });
     expect(denied.body.error.code).toBe('approval_required');
     manager = await h.login('quanly', 'mat-khau-moi-456');
@@ -245,72 +245,23 @@ describe('void (FR-POS-14)', () => {
   });
 });
 
-describe('store credit (FR-CRM-10)', () => {
-  const balance = async () => (await h.call('GET', `/api/v1/customers/${customerId}`, { cookie: cashier })).body.storeCreditVnd as number;
-
-  it('holds the refund given as store credit', async () => {
-    // The out-of-window return above refunded 4.000 ₫ as store credit.
-    expect(await balance()).toBe(4000);
-    const ledger = (await h.call('GET', `/api/v1/customers/${customerId}`, { cookie: cashier })).body.storeCreditLedger;
-    expect(ledger[0]).toMatchObject({ deltaVnd: 4000, reason: 'refund', refType: 'sale_return' });
-  });
-
-  it('adjusts only with permission and a reason', async () => {
-    expect((await h.call('POST', `/api/v1/customers/${customerId}/store-credit-adjust`, { cookie: cashier, body: { deltaVnd: 50000, reason: 'Bù' } })).status).toBe(403);
-    expect((await h.call('POST', `/api/v1/customers/${customerId}/store-credit-adjust`, { cookie: manager, body: { deltaVnd: 50000, reason: '' } })).status).toBe(400);
-    const r = await h.call('POST', `/api/v1/customers/${customerId}/store-credit-adjust`, { cookie: manager, body: { deltaVnd: 50000, reason: 'Bù tiền giao thiếu hàng' } });
-    expect(r.body.balanceVnd).toBe(54000);
-    expect((await h.call('POST', `/api/v1/customers/${customerId}/store-credit-adjust`, { cookie: manager, body: { deltaVnd: -100000, reason: 'x' } })).body.error.code).toBe('store_credit_insufficient');
-  });
-
-  it('is spent as a payment, needs a customer and cannot overdraw', async () => {
-    const base = { ...cart([{ variantId: book, qty: 1 }]), shiftId };
-    const noCustomer = await h.call('POST', '/api/v1/pos/sales', { cookie: cashier, body: { ...base, payments: [{ method: 'store_credit', amountVnd: 98000 }] } });
-    expect(noCustomer.body.error.code).toBe('store_credit_needs_customer');
-    const over = await h.call('POST', '/api/v1/pos/sales', {
-      cookie: cashier,
-      body: { ...base, customerId, payments: [{ method: 'store_credit', amountVnd: 98000 }] },
-    });
-    expect(over.body.error.code).toBe('store_credit_insufficient');
-    const split = await h.call('POST', '/api/v1/pos/sales', {
-      cookie: cashier,
-      body: { ...base, customerId, payments: [{ method: 'store_credit', amountVnd: 54000 }, { method: 'cash', amountVnd: 44000 }] },
-    });
-    expect(split.status, JSON.stringify(split.body)).toBe(201);
-    expect(await balance()).toBe(0);
-
-    // Returning it gives the credit back as credit (spend reversal).
-    const sale = (await h.call('GET', `/api/v1/pos/sales/${split.body.id}`, { cookie: cashier })).body;
-    const ret = await h.call('POST', `/api/v1/pos/sales/${split.body.id}/returns`, {
-      cookie: cashier,
-      body: { shiftId, lines: [{ saleLineId: sale.lines[0].id, qty: 1, restock: true }], refundMethod: 'store_credit' },
-    });
-    expect(ret.status, JSON.stringify(ret.body)).toBe(201);
-    expect(await balance()).toBe(98000);
-  });
-
-  it('a void gives back the credit spent', async () => {
-    const paid = await h.call('POST', '/api/v1/pos/sales', {
+describe('no store credit (FR-CRM-10 withdrawn)', () => {
+  it('rejects store credit as a payment or a refund and has no adjustment endpoint', async () => {
+    const pay = await h.call('POST', '/api/v1/pos/sales', {
       cookie: cashier,
       body: { ...cart([{ variantId: pen, qty: 1 }], { customerId }), shiftId, payments: [{ method: 'store_credit', amountVnd: 6000 }] },
     });
-    expect(await balance()).toBe(92000);
-    await h.call('POST', `/api/v1/pos/sales/${paid.body.id}/void`, { cookie: manager, body: { reason: 'Nhầm', shiftId } });
-    expect(await balance()).toBe(98000);
-  });
-
-  it('a sale without a customer cannot be refunded as credit', async () => {
-    const anon = await h.call('POST', '/api/v1/pos/sales', { cookie: cashier, body: { ...cart([{ variantId: pen, qty: 1 }]), shiftId, payments: [{ method: 'cash', amountVnd: 6000 }] } });
-    const line = (await h.call('GET', `/api/v1/pos/sales/${anon.body.id}`, { cookie: cashier })).body.lines[0];
-    const r = await h.call('POST', `/api/v1/pos/sales/${anon.body.id}/returns`, {
+    expect(pay.status).toBe(400);
+    const line = (await h.call('GET', `/api/v1/pos/sales/${firstSale.id}`, { cookie: cashier })).body.lines[0];
+    const ret = await h.call('POST', `/api/v1/pos/sales/${firstSale.id}/returns`, {
       cookie: cashier,
       body: { shiftId, lines: [{ saleLineId: line.id, qty: 1, restock: true }], refundMethod: 'store_credit' },
     });
-    expect(r.body.error.code).toBe('store_credit_needs_customer');
-  });
-
-  it('the ledger is append-only', async () => {
-    await expect(h.t.sql`update crm.store_credit_ledger set delta_vnd = 1`).rejects.toThrow(/append-only/);
+    expect(ret.status).toBe(400);
+    expect((await h.call('POST', `/api/v1/customers/${customerId}/store-credit-adjust`, { cookie: manager, body: { deltaVnd: 1000, reason: 'x' } })).status).toBe(404);
+    const profile = (await h.call('GET', `/api/v1/customers/${customerId}`, { cookie: cashier })).body;
+    expect(Object.keys(profile)).not.toContain('storeCreditLedger');
+    expect(Object.keys(profile)).not.toContain('storeCreditVnd');
   });
 });
 
@@ -344,6 +295,23 @@ describe('held carts (FR-POS-03) and sales list (FR-POS-21)', () => {
     expect(byPhone.body.items.length).toBeGreaterThanOrEqual(3);
     const bySku = await h.call('GET', '/api/v1/pos/sales?q=VPP-0012', { cookie: manager });
     expect(bySku.body.items.map((s: { docNo: string }) => s.docNo)).toContain(firstSale.docNo);
+    // Customer list: purchase stats and filters (FR-CRM-02).
+    const [cust] = (await h.call('GET', '/api/v1/customers?q=0912345678', { cookie: manager })).body.items;
+    expect(cust.orders).toBeGreaterThanOrEqual(3);
+    expect(cust.ordersVnd).toBeGreaterThan(0);
+    expect(cust.lastPurchaseAt).toBeTruthy();
+    const ids = async (qs: string) => (await h.call('GET', `/api/v1/customers?${qs}`, { cookie: manager })).body.items.map((c: { id: string }) => c.id);
+    expect(await ids('orders=3%2B&lastPurchase=30d')).toContain(cust.id);
+    expect(await ids('orders=0')).not.toContain(cust.id);
+    expect(await ids('lastPurchase=never')).not.toContain(cust.id);
+    expect(await ids(`tier=${cust.tierCode}&points=0,1%2B`)).toContain(cust.id);
+    expect((await h.call('GET', '/api/v1/customers?orders=abc', { cookie: manager })).status).toBe(400);
+    // Several values in one filter combine with OR (TDD §6.2).
+    const all = (await h.call('GET', '/api/v1/pos/sales', { cookie: manager })).body.items.length;
+    expect((await h.call('GET', '/api/v1/pos/sales?status=completed,voided', { cookie: manager })).body.items).toHaveLength(all);
+    const cashOrCard = (await h.call('GET', '/api/v1/pos/sales?method=cash,card', { cookie: manager })).body.items as { methods: string[] }[];
+    expect(cashOrCard.every((s) => s.methods.some((m) => m === 'cash' || m === 'card'))).toBe(true);
+    expect((await h.call('GET', '/api/v1/pos/sales?method=cash,bitcoin', { cookie: manager })).status).toBe(400);
     const managerSale = await h.call('POST', '/api/v1/pos/sales', { cookie: manager, body: { ...cart([{ variantId: pen, qty: 1 }]), shiftId, payments: [{ method: 'cash', amountVnd: 6000 }] } });
     const mine = (await h.call('GET', '/api/v1/pos/sales', { cookie: cashier })).body.items.map((s: { id: string }) => s.id);
     expect(mine).not.toContain(managerSale.body.id);
@@ -351,12 +319,25 @@ describe('held carts (FR-POS-03) and sales list (FR-POS-21)', () => {
   });
 });
 
+describe('shift history filters (FR-POS-22)', () => {
+  it('searches by shift number or cashier and filters by register and day', async () => {
+    const ids = async (qs: string) => (await h.call('GET', `/api/v1/pos/shifts?${qs}`, { cookie: manager })).body.items.map((s: { id: string }) => s.id);
+    const [mine] = (await h.call('GET', '/api/v1/pos/shifts', { cookie: manager })).body.items.filter((s: { id: string }) => s.id === shiftId);
+    expect(await ids(`q=%23${mine.shiftNo}`)).toEqual([shiftId]);
+    expect(await ids(`q=${encodeURIComponent(mine.openedBy.toLowerCase())}`)).toContain(shiftId);
+    expect(await ids(`register=${registerId}`)).toContain(shiftId);
+    expect(await ids('register=00000000-0000-7000-8000-000000000000')).toEqual([]);
+    const opened = new Date(mine.openedAt);
+    expect(await ids(`from=${new Date(opened.getTime() + 86_400_000).toISOString()}`)).not.toContain(shiftId);
+  });
+});
+
 describe('shift close (FR-POS-19, BR-06, UC-03)', () => {
   it('needs a reason for a variance, never blocks, and alerts managers above the threshold', async () => {
     const report = (await h.call('GET', `/api/v1/pos/shifts/${shiftId}`, { cookie: cashier })).body;
     const expected = report.cash.expectedVnd;
-    // Float 1.000.000 + cash sales − cash refunds (98.000); the voided sale is excluded.
-    expect(report.cash.cashRefundsVnd).toBe(98000);
+    // Float 1.000.000 + cash sales − cash refunds (98.000 + the 4.000 out-of-window return); the voided sale is excluded.
+    expect(report.cash.cashRefundsVnd).toBe(102000);
     const noReason = await h.call('POST', '/api/v1/pos/shifts/close', { cookie: cashier, body: { shiftId, countedVnd: expected - 80000 } });
     expect(noReason.body.error).toMatchObject({ code: 'variance_reason_required', details: { varianceVnd: -80000 } });
     const closed = await h.call('POST', '/api/v1/pos/shifts/close', { cookie: cashier, body: { shiftId, countedVnd: expected - 80000, varianceReason: 'Thối nhầm cho khách' } });
@@ -380,8 +361,7 @@ describe('ledgers stay consistent (TDD §5.4 nightly invariants)', () => {
       where s.on_hand <> (select coalesce(sum(qty_delta), 0) from inventory.stock_movement m where m.variant_id = s.variant_id and m.location = s.location)`;
     expect(stock).toHaveLength(0);
     const points = await h.t.sql`
-      select c.id from crm.customer c where c.points_balance <> (select coalesce(sum(delta), 0) from crm.points_ledger l where l.customer_id = c.id)
-         or c.store_credit_vnd <> (select coalesce(sum(delta_vnd), 0) from crm.store_credit_ledger l where l.customer_id = c.id)`;
+      select c.id from crm.customer c where c.points_balance <> (select coalesce(sum(delta), 0) from crm.points_ledger l where l.customer_id = c.id)`;
     expect(points).toHaveLength(0);
   });
 });

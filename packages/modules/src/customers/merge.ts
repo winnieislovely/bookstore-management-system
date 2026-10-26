@@ -2,7 +2,7 @@ import { schema } from '@bookstore/db';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import * as audit from '../audit/index.js';
 import { AppError, errors, requirePermission, type Ctx, type Tx } from '../platform/index.js';
-import { post, postCredit } from './index.js';
+import { post } from './index.js';
 
 /**
  * Every column that references a customer (TDD §4.9 `customer_ref_registry`). A test compares this
@@ -44,10 +44,6 @@ export async function merge(ctx: Ctx, targetId: string, sourceId: string) {
       await post(tx, ctx, { customerId: sourceId, delta: -source.pointsBalance, reason: 'adjust', refType: 'customer_merge', refId: targetId, note });
       await post(tx, ctx, { customerId: targetId, delta: source.pointsBalance, reason: 'adjust', refType: 'customer_merge', refId: sourceId, note });
     }
-    if (source.storeCreditVnd > 0) {
-      await postCredit(tx, ctx, { customerId: sourceId, deltaVnd: -source.storeCreditVnd, reason: 'adjust', refType: 'customer_merge', refId: targetId, note });
-      await postCredit(tx, ctx, { customerId: targetId, deltaVnd: source.storeCreditVnd, reason: 'adjust', refType: 'customer_merge', refId: sourceId, note });
-    }
     // Keep the source phone reachable on the target.
     if (source.phoneE164 && source.phoneE164 !== target.phoneE164) {
       await tx.insert(schema.customerContact).values({ customerId: targetId, kind: 'phone', value: source.phoneE164 });
@@ -73,10 +69,10 @@ export async function merge(ctx: Ctx, targetId: string, sourceId: string) {
       action: 'customer.merge',
       entity: 'customer',
       entityId: targetId,
-      before: { source: { id: source.id, name: source.name, phone: source.phoneE164, points: source.pointsBalance, credit: source.storeCreditVnd } },
+      before: { source: { id: source.id, name: source.name, phone: source.phoneE164, points: source.pointsBalance } },
       after: { target: targetId },
     });
-    return { id: targetId, mergedFrom: sourceId, pointsMoved: source.pointsBalance, creditMovedVnd: source.storeCreditVnd };
+    return { id: targetId, mergedFrom: sourceId, pointsMoved: source.pointsBalance };
   });
 }
 

@@ -392,12 +392,21 @@ export async function setPrice(ctx: Ctx, variantId: string, input: z.input<typeo
 // ---------------------------------------------------------------------------------------------
 // Reads
 
+/** `a,b` (or an already-split list) → list; OR within a filter (TDD §6.2). */
+const csvField = z
+  .union([z.string(), z.array(z.string())])
+  .optional()
+  .transform((v) => (Array.isArray(v) ? v : v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined));
+const csvEnum = <T extends string>(values: readonly [T, ...T[]]) => csvField.pipe(z.array(z.enum(values)).min(1).optional());
+
 export const ListQuery = z.object({
   q: z.string().trim().max(200).optional(),
-  category: z.uuid().optional(),
-  status: z.enum(['active', 'hidden', 'discontinued']).optional(),
-  /** Stock-status chips of the product list (Design §12.1). */
-  stock: z.enum(['in_stock', 'low', 'out']).optional(),
+  kind: csvEnum(['book', 'stationery', 'other', 'bundle']),
+  /** Categories include their descendants. */
+  category: csvField.pipe(z.array(z.uuid()).min(1).optional()),
+  status: csvEnum(['active', 'hidden', 'discontinued']),
+  /** Stock states of the product list filter (Design §12.1). */
+  stock: csvEnum(['in_stock', 'low', 'out']),
   /** “Thiếu ảnh”: products without a photo, typically imported (FR-CAT-11). */
   image: z.enum(['missing']).optional(),
   page: z.coerce.number().int().min(1).default(1),
@@ -412,18 +421,21 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
   const v = schema.itemVariant;
   const where: SQL[] = [];
   if (q.q) where.push(sql`${i.searchText} like ${`%${foldText(q.q)}%`}`);
-  if (q.status) where.push(eq(i.status, q.status));
+  if (q.status) where.push(inArray(i.status, q.status));
+  if (q.kind) where.push(inArray(i.kind, q.kind));
   if (q.category) {
+    const roots = sql.join(q.category.map((c) => sql`${c}::uuid`), sql`, `);
     where.push(sql`exists (
-      with recursive tree as (select id from catalog.category where id = ${q.category}::uuid
+      with recursive tree as (select id from catalog.category where id in (${roots})
         union all select c.id from catalog.category c join tree on c.parent_id = tree.id)
       select 1 from catalog.item_category ic where ic.item_id = ${v.itemId} and ic.category_id in (select id from tree))`);
   }
   // Bundles show what their components allow (TDD §4.1).
   const avail = sql<number>`${availableSql(sql`${v.id}`)}`;
-  if (q.stock === 'out') where.push(sql`${avail} <= 0`);
-  if (q.stock === 'low') where.push(sql`${avail} > 0 and ${v.minStock} is not null and ${avail} <= ${v.minStock}`);
-  if (q.stock === 'in_stock') where.push(sql`${avail} > 0`);
+  if (q.stock) {
+    const states = { out: sql`${avail} <= 0`, low: sql`(${avail} > 0 and ${v.minStock} is not null and ${avail} <= ${v.minStock})`, in_stock: sql`${avail} > 0` };
+    where.push(sql`(${sql.join(q.stock.map((x) => states[x]), sql` or `)})`);
+  }
   if (q.image === 'missing') where.push(sql`not exists (select 1 from catalog.item_image im where im.item_id = ${i.id})`);
   const filter = where.length ? and(...where) : undefined;
 
@@ -438,6 +450,10 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
       sku: v.sku,
       priceVnd: v.priceVnd,
       available: avail,
+      /** On hand (bundles: what their components allow, they hold no stock of their own). */
+      onHand: sql<number>`(case when ${i.kind} = 'bundle' then ${avail} else coalesce((select sum(s.on_hand) from inventory.stock_level s where s.variant_id = ${v.id}), 0)::int end)`,
+      avgCostVnd: sql<number | null>`(select coalesce(max(s.avg_cost_vnd) filter (where s.location = 'floor'), max(s.avg_cost_vnd)) from inventory.stock_level s where s.variant_id = ${v.id})`,
+      updatedAt: sql<string>`greatest(${i.updatedAt}, ${v.updatedAt})`,
       minStock: v.minStock,
       status: i.status,
       releaseDate: i.releaseDate,
@@ -451,7 +467,14 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
     .limit(q.limit)
     .offset((q.page - 1) * q.limit);
   const [total] = await ctx.db.select({ n: count() }).from(v).innerJoin(i, eq(i.id, v.itemId)).where(filter);
-  return { items: rows, total: total?.n ?? 0, page: q.page, limit: q.limit };
+  // Cost is shown only with permission (FR-CAT-07, TDD §10.3).
+  const showCost = can(ctx.actor, 'catalog.view_cost');
+  const items = rows.map(({ avgCostVnd, updatedAt, ...r }) => ({
+    ...r,
+    updatedAt: new Date(updatedAt).toISOString(),
+    ...(showCost && { avgCostVnd: avgCostVnd == null ? null : Number(avgCostVnd) }),
+  }));
+  return { items, total: total?.n ?? 0, page: q.page, limit: q.limit };
 }
 
 /** Exact lookup by barcode, SKU or ISBN for scanning (FR-POS-01, NFR-PERF-01). */
@@ -545,9 +568,26 @@ export async function createCategory(ctx: Ctx, input: z.input<typeof CategorySch
   });
 }
 
+/** Active categories; `kinds` = item kinds filed directly under each, for the product list filter (Design §12.1). */
 export async function listCategories(ctx: Ctx) {
   requirePermission(ctx, 'catalog.view');
-  return ctx.db.select().from(schema.category).where(eq(schema.category.status, 'active')).orderBy(asc(schema.category.sort), asc(schema.category.slug));
+  const c = schema.category;
+  return ctx.db
+    .select({
+      id: c.id,
+      parentId: c.parentId,
+      i18n: c.i18n,
+      slug: c.slug,
+      sort: c.sort,
+      status: c.status,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+      version: c.version,
+      kinds: sql<string[]>`coalesce((select array_agg(distinct i.kind) from catalog.item_category ic join catalog.item i on i.id = ic.item_id where ic.category_id = "category"."id"), '{}')`,
+    })
+    .from(c)
+    .where(eq(c.status, 'active'))
+    .orderBy(asc(c.sort), asc(c.slug));
 }
 
 export const NamedSchema = z.object({ i18n: I18nText(z.object({ name: z.string().trim().min(1) })) });

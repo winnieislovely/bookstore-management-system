@@ -1,12 +1,12 @@
 import { DENOMINATIONS_VND, normalizePaymentRef, paymentRefFromBytes, type PriceCartResult } from '@bookstore/domain';
 import { clsx } from 'clsx';
-import { Banknote, Check, CheckCircle2, CreditCard, Mail, Printer, QrCode, ShieldCheck, Trash2, User, WalletCards } from 'lucide-react';
+import { Banknote, Check, CheckCircle2, CreditCard, Mail, Printer, QrCode, ShieldCheck, Trash2, User } from 'lucide-react';
 import { useState } from 'react';
 import { Button, Field, InlineAlert } from '../components/ui';
 import { ApiError, post } from '../lib/api';
 import { formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { printSlip } from '../lib/print';
-import { approveOffline, approveOnline, findCustomerByPhone, type CartApproval, type CartCustomer, type CartLine } from './cart';
+import { approveOffline, approveOnline, findCustomerByPhone, searchCustomersByName, type CartApproval, type CartCustomer, type CartLine } from './cart';
 import type { Payment, SaleOutcome } from './actions';
 import { Dialog, Keypad, MoneyInput, PinPad } from './widgets';
 
@@ -69,7 +69,6 @@ const TILES: { method: Method; label: string; icon: typeof Banknote }[] = [
   { method: 'cash', label: 'Tiền mặt', icon: Banknote },
   { method: 'transfer', label: 'Chuyển khoản', icon: QrCode },
   { method: 'card', label: 'Thẻ', icon: CreditCard },
-  { method: 'store_credit', label: 'Tiền ghi có', icon: WalletCards },
 ];
 
 function newRef(): string {
@@ -101,14 +100,13 @@ export function PaymentSheet({
   const [transferOk, setTransferOk] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const credit = customer?.storeCreditVnd ?? 0;
-  const tiles = TILES.filter((tl) => tl.method !== 'store_credit' || credit > 0);
+  const tiles = TILES;
   const tenderedVnd = Number(tendered || 0);
 
   const pick = (m: Method) => {
     setMethod(m);
     setError(null);
-    setAmount(m === 'store_credit' ? Math.min(credit, remaining) : remaining);
+    setAmount(remaining);
   };
 
   /** Build the current tender; returns null when it is not complete yet. */
@@ -117,8 +115,7 @@ export function PaymentSheet({
     if (amt <= 0 || amt > remaining) return null;
     if (method === 'cash') return tenderedVnd && tenderedVnd < amt ? null : { method, amountVnd: amt, tenderedVnd: tenderedVnd || amt };
     if (method === 'card') return cardRef.trim() ? { method, amountVnd: amt, ref: cardRef.trim() } : null;
-    if (method === 'transfer') return transferOk ? { method, amountVnd: amt, ref: normalizePaymentRef(transferRef) } : null;
-    return amt <= credit ? { method, amountVnd: amt } : null;
+    return transferOk ? { method, amountVnd: amt, ref: normalizePaymentRef(transferRef) } : null;
   };
 
   const finish = async (list: Payment[]) => {
@@ -154,7 +151,7 @@ export function PaymentSheet({
       <div className="flex flex-col gap-4">
         <div className="text-center">
           <p className="text-[13px] text-ink-500">{payments.length ? 'Còn phải trả' : 'Số tiền phải trả'}</p>
-          <p className="text-[36px] leading-[44px] font-bold num">{formatVnd(remaining)}</p>
+          <p className="text-[28px] leading-9 font-bold whitespace-nowrap num">{formatVnd(remaining)}</p>
           {payments.length > 0 && (
             <ul className="mt-2 text-sm text-ink-700">
               {payments.map((p, i) => (
@@ -165,7 +162,8 @@ export function PaymentSheet({
             </ul>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" role="radiogroup" aria-label="Phương thức thanh toán">
+        {/* Method tiles always on one row (Design §13.4). */}
+        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }} role="radiogroup" aria-label="Phương thức thanh toán">
           {tiles.map((tl) => (
             <button
               key={tl.method}
@@ -173,17 +171,16 @@ export function PaymentSheet({
               role="radio"
               aria-checked={method === tl.method}
               onClick={() => pick(tl.method)}
-              className={clsx('flex h-24 flex-col items-center justify-center gap-2 rounded-xl border-2 text-sm font-medium', method === tl.method ? 'border-navy-700 bg-navy-50' : 'border-paper-300 bg-white')}
+              className={clsx('flex min-h-18 flex-col items-center justify-center gap-1 rounded-xl border-2 px-1 py-2 text-center text-xs leading-tight font-medium sm:text-[13px]', method === tl.method ? 'border-navy-700 bg-navy-50' : 'border-paper-300 bg-white')}
             >
-              <tl.icon size={32} aria-hidden />
+              <tl.icon size={24} aria-hidden />
               {tl.label}
-              {tl.method === 'store_credit' && <span className="text-xs text-ink-500 num">Còn {formatVnd(credit)}</span>}
             </button>
           ))}
         </div>
         <MoneyInput label="Số tiền theo phương thức này" value={amount} onChange={setAmount} />
         {method === 'cash' && (
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
               <p className="text-[13px] font-medium text-ink-700">Khách đưa</p>
               <p className="h-12 rounded-md border border-paper-500 px-3 text-right text-lg leading-[46px] num">{tendered ? formatNumber(Number(tendered)) : '—'} ₫</p>
@@ -195,7 +192,7 @@ export function PaymentSheet({
                 ))}
               </div>
               <p className="mt-2 text-[13px] text-ink-500">Tiền thừa</p>
-              <p className="text-[36px] leading-[44px] font-bold text-success-700 num">{formatVnd(change)}</p>
+              <p className="text-[28px] leading-9 font-bold whitespace-nowrap text-success-700 num">{formatVnd(change)}</p>
             </div>
             <Keypad onKey={(k) => setTendered((v) => (k === 'del' ? v.slice(0, -1) : (v + k).replace(/^0+/, '').slice(0, 10)))} />
           </div>
@@ -204,7 +201,7 @@ export function PaymentSheet({
           <div className="flex flex-col items-center gap-2 rounded-lg border border-paper-300 bg-paper-50 p-4 text-center">
             <p className="text-sm text-ink-700">Khách quét mã QR in sẵn tại quầy và ghi mã tham chiếu vào nội dung chuyển khoản</p>
             <p className="text-[13px] text-ink-500">Mã tham chiếu</p>
-            <p className="text-[28px] leading-9 font-semibold tracking-[0.04em] num">{transferRef.replace(/(.{4})/g, '$1 ').trim()}</p>
+            <p className="text-2xl leading-8 font-semibold tracking-[0.04em] num">{transferRef.replace(/(.{4})/g, '$1 ').trim()}</p>
             {!online && <InlineAlert tone="warning">Ngoại tuyến: khoản chuyển khoản sẽ ở trạng thái “Chưa xác minh” cho đến khi quản lý xác nhận.</InlineAlert>}
             <label className="mt-2 flex items-center gap-2 text-sm">
               <input type="checkbox" className="size-5" checked={transferOk} onChange={(e) => setTransferOk(e.target.checked)} />
@@ -247,13 +244,13 @@ export function SaleDone({ outcome, online, onNew }: { outcome: SaleOutcome; onl
           <CheckCircle2 size={36} aria-hidden />
         </span>
         <p className="text-[13px] text-ink-500">Số đơn</p>
-        <p className="text-[28px] leading-9 font-semibold num" aria-live="polite">
+        <p className="text-2xl leading-8 font-semibold num" aria-live="polite">
           {outcome.docNo}
         </p>
         {outcome.changeVnd > 0 && (
           <>
             <p className="text-[13px] text-ink-500">Tiền thừa</p>
-            <p className="text-[36px] leading-[44px] font-bold text-success-700 num">{formatVnd(outcome.changeVnd)}</p>
+            <p className="text-[28px] leading-9 font-bold whitespace-nowrap text-success-700 num">{formatVnd(outcome.changeVnd)}</p>
           </>
         )}
         {outcome.offline && <InlineAlert tone="warning">Đã lưu ngoại tuyến. Đơn sẽ được đồng bộ và xuất hóa đơn điện tử khi có mạng.</InlineAlert>}
@@ -392,14 +389,25 @@ export function CloseShiftDialog({ expectedVnd, source, onClose, onSubmit }: { e
 // Customer attach (FR-POS-04)
 
 export function CustomerDialog({ online, canCreate, onPick, onClose }: { online: boolean; canCreate: boolean; onPick: (c: CartCustomer) => void; onClose: () => void }) {
-  const [phone, setPhone] = useState('');
+  const [query, setQuery] = useState('');
   const [name, setName] = useState('');
-  const [result, setResult] = useState<CartCustomer | null | undefined>(undefined);
+  // undefined = not searched yet; [] = no match
+  const [results, setResults] = useState<CartCustomer[] | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  const digits = query.replace(/\D/g, '');
+  const byPhone = /^[\d\s+().-]+$/.test(query.trim());
+  const phone = byPhone ? query : '';
+  const canSearch = byPhone ? digits.length >= 9 : query.trim().length >= 2;
   const lookup = async () => {
+    if (!canSearch) return;
     setError(null);
     try {
-      setResult(await findCustomerByPhone(phone, online));
+      if (byPhone) {
+        const c = await findCustomerByPhone(query, online);
+        setResults(c ? [c] : []);
+      } else {
+        setResults(await searchCustomersByName(query, online));
+      }
     } catch (e) {
       setError(errText(e));
     }
@@ -407,7 +415,7 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
   const create = async () => {
     try {
       const r = await post<{ id: string }>('/api/v1/customers', { name, phone });
-      onPick({ id: r.id, name, phoneE164: null, tierCode: 'standard', pointsBalance: 0, storeCreditVnd: 0 });
+      onPick({ id: r.id, name, phoneE164: null, tierCode: 'standard', pointsBalance: 0 });
     } catch (e) {
       setError(errText(e));
     }
@@ -415,22 +423,40 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
   return (
     <Dialog title="Khách hàng" size="sm" onClose={onClose}>
       <div className="flex flex-col gap-4">
-        <Field label="Số điện thoại" inputMode="tel" autoFocus value={phone} onChange={(e) => setPhone(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void lookup()} />
-        <Button variant="primary" full disabled={phone.replace(/\D/g, '').length < 9} onClick={lookup}>
+        <Field
+          label="Số điện thoại hoặc tên"
+          autoFocus
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setResults(undefined);
+          }}
+          onKeyDown={(e) => e.key === 'Enter' && void lookup()}
+        />
+        <Button variant="primary" full disabled={!canSearch} onClick={lookup}>
           Tìm
         </Button>
-        {result && (
-          <button type="button" className="flex items-center gap-3 rounded-lg border border-paper-300 p-4 text-left hover:bg-navy-50" onClick={() => onPick(result)}>
-            <User aria-hidden />
-            <span className="flex-1">
-              <span className="block font-semibold">Đã có khách hàng: {result.name}</span>
-              <span className="text-sm text-ink-500 num">
-                {result.phoneE164 ? formatPhone(result.phoneE164) : ''} · {formatNumber(result.pointsBalance)} điểm
-              </span>
-            </span>
-          </button>
+        {!!results?.length && (
+          <ul className="flex max-h-72 flex-col divide-y divide-paper-300 overflow-y-auto rounded-lg border border-paper-300">
+            {results.map((c) => (
+              <li key={c.id}>
+                <button type="button" className="flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left hover:bg-navy-50" onClick={() => onPick(c)}>
+                  <User size={20} className="shrink-0 text-ink-500" aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold">{c.name}</span>
+                    <span className="text-[13px] text-ink-500 num">
+                      {c.phoneE164 ? `${formatPhone(c.phoneE164)} · ` : ''}
+                      {formatNumber(c.pointsBalance)} điểm
+                    </span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
-        {result === null &&
+        {results?.length === 0 && !byPhone && <InlineAlert tone="warning">Không tìm thấy khách hàng tên “{query.trim()}”{online ? '' : ' trong dữ liệu trên máy'}.</InlineAlert>}
+        {results?.length === 0 &&
+          byPhone &&
           (canCreate && online ? (
             <div className="flex flex-col gap-3">
               <InlineAlert tone="info">Chưa có khách hàng với số này. Tạo khách hàng mới:</InlineAlert>

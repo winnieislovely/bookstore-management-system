@@ -6,7 +6,7 @@
 | --- | --- |
 | **Document version** | 1.1 – Draft for review |
 | **Date** | 24 October 2026 |
-| **Changes in 1.1** | Lists: on phones status chips fold into the filter button beside search; product list shows SKU only (no ISBN, no channel column); order source shown as text without colour dot; gold tier badge is yellow. Codes set in Be Vietnam Pro (IBM Plex Mono dropped); all buttons are pills, text links for actions became tonal pill buttons; website descriptions required in English; waiting states show no time; order inbox is a table; dashboard alert tiles removed; POS: no lock or offline-test buttons, search reads “Nhập SKUs/tên sản phẩm” with the scan button at the end, confirm button reads “Xác nhận”, no keyboard shortcuts. **25 Oct 2026:** bank transfer at the POS shows the amount and payment reference only; the customer uses the store’s printed QR code, and no QR is generated (13.4); store credit tile on the payment screen (13.4); “Thiếu ảnh” chip and filter for imported products without a photo (12.1, 12.4). |
+| **Changes in 1.1** | Lists: on phones status chips fold into the filter button beside search; product list shows SKU only (no ISBN, no channel column); order source shown as text without colour dot; gold tier badge is yellow. Codes set in Be Vietnam Pro (IBM Plex Mono dropped); all buttons are pills, text links for actions became tonal pill buttons; website descriptions required in English; waiting states show no time; order inbox is a table; dashboard alert tiles removed; POS: no lock or offline-test buttons, search reads “Nhập SKUs/tên sản phẩm” with the scan button at the end, confirm button reads “Xác nhận”, no keyboard shortcuts. **25 Oct 2026:** bank transfer at the POS shows the amount and payment reference only; the customer uses the store’s printed QR code, and no QR is generated (13.4); store credit tile on the payment screen (13.4); “Thiếu ảnh” chip and filter for imported products without a photo (12.1, 12.4). **27 Oct 2026:** no global search in the top bar; sign out moved to the bottom of the sidebar (“Đăng xuất”); page titles and the dashboard greeting use Be Vietnam Pro; dashboard KPI tiles are today’s revenue, order count and average order value; revenue trend (bars + order-count line) and sales-by-channel cards have a range filter button (`ListFilter` icon) that opens a range popover; dashboard lists have column headers; “Xem chi tiết” pill under Sắp hết hàng (5.2, 6.3, 12.5). POS cart line: compact stepper (28 px circles) under the unit price; neither the POS header nor the shell top bar shows a “Trực tuyến” pill while online (6.3, 13.1, 13.2); payment method tiles always on one row, 72 px (13.4). Lists: no filter chips above tables on any screen size – all filters sit in the Bộ lọc button beside the search box, which opens a filter popover; pinned first table column is opaque so scrolled cells no longer overlap it; codes, dates and amounts do not wrap (10.6, 10.9, 12.1). Product list: Excel import wizard opens in a dialog on the Products page (12.10); create-product dialog on the page, fixed search icon, Bộ lọc (Tồn kho, Loại, Phân loại, Trạng thái, Ảnh), columns SKU, Ảnh, Tên, Tồn, Giá bán, Giá nhập, Trạng thái, Cập nhật, and bulk barcode printing (12.1). Shift list: search and Bộ lọc (Quầy, Thời gian) (12.1). Promotion list: search, Bộ lọc (Thời gian, Trạng thái), separate Mã and Chương trình columns, pause/resume moved into the editor (12.1). Store credit removed everywhere (no payment tile, refund choice, customer tab or field) (13.4, 12.3). Customer record: icon-only Sửa beside ⋯, purchases and points on one page without tabs (12.3). Customer list: Số đơn, Tổng mua, Mua gần nhất columns and a Bộ lọc with Hạng, Mua gần nhất, Số đơn, Điểm (12.1). Page-header buttons fit their label on phones instead of stretching full width (6.3, 10.1, 12.1, 12.3). Sale record: Print and Return moved into the ⋯ menu on every screen size (12.3). Detail pages: overflow ⋯ on the title row and actions side by side on phones; single-column stacking never wider than the screen; line tables become stacked lists on phones; sale record e-invoice card with “Xuất hóa đơn” (12.3). Filter popover: each field is a dropdown with checkboxes for multi-select; sales list filters by time (10.9, 12.1). POS sales list (“Đơn bán”) shows no e-invoice chip in the status column; the e-invoice state is on the sale record (12.1). POS customer lookup by phone or name (FR-POS-04); smaller type and buttons: page titles 28/22 px, `pos-total` 28 px without wrapping, button heights 32/36/44/52 px, POS touch targets 44 px (5.2, 6.5, 10.1, 13). POS header shows cashier and register only; scan button sits beside the search field; empty-cart state “Chưa có sản phẩm nào được chọn”; on tablet portrait / phone the whole cart (customer, lines, totals, Xác nhận) is on the selling screen with no bottom sheet (13.1, 13.3). |
 | **Based on** | SRS v1.1 Final and TDD v1.1 Final (both revised 24 Oct 2026) |
 | **Applies to** | `apps/staff` (React PWA: back office + POS), `packages/ui` (tokens and components), browser print templates, system emails |
 | **Not covered** | The public website interface (built by a separate front-end team, SRS §1.2, FR-WEB-23). This guide does not style the website. |
@@ -276,8 +276,8 @@ Base size **14 px** for data-dense back-office screens; **16 px** for forms on p
 | Token | Family | Size / line height | Weight | Use |
 | --- | --- | --- | --- | --- |
 | `display-lg` | Cormorant Garamond | 40 / 48 | 600 | Login and first-run wizard heading, empty-state hero |
-| `display-md` | Cormorant Garamond | 32 / 40 | 600 | Page title (H1) on desktop |
-| `display-sm` | Cormorant Garamond | 26 / 32 | 600 | Page title (H1) on phones, dialog hero titles |
+| `display-md` | Be Vietnam Pro | 28 / 36 | 600 | Page title (H1) on desktop, dashboard greeting |
+| `display-sm` | Be Vietnam Pro | 22 / 30 | 600 | Page title (H1) on phones, dialog hero titles |
 | `heading-lg` | Be Vietnam Pro | 20 / 28 | 600 | Section heading (H2), card title on detail pages |
 | `heading-md` | Be Vietnam Pro | 16 / 24 | 600 | Sub-section (H3), dialog title, card title |
 | `heading-sm` | Be Vietnam Pro | 14 / 20 | 600 | Group label, table section title |
@@ -286,14 +286,14 @@ Base size **14 px** for data-dense back-office screens; **16 px** for forms on p
 | `body-sm` | Be Vietnam Pro | 13 / 20 | 400 | Dense tables, secondary info, helper text |
 | `caption` | Be Vietnam Pro | 12 / 16 | 500 | Badges, timestamps, chart axes |
 | `overline` | Be Vietnam Pro | 12 / 16 | 600, letter-spacing 0.08em, uppercase | Sidebar group labels (“CỬA HÀNG”) |
-| `kpi` | Be Vietnam Pro | 28 / 36 | 600, tabular numbers | Dashboard KPI values |
-| `pos-total` | Be Vietnam Pro | 36 / 44 | 700, tabular numbers | POS cart total, change due |
+| `kpi` | Be Vietnam Pro | 24 / 32 | 600, tabular numbers | Dashboard KPI values |
+| `pos-total` | Be Vietnam Pro | 28 / 36 | 700, tabular numbers, never wraps (`white-space: nowrap`) | POS cart total, amount due, change due – fits “99.999.999 ₫” on a 360 px phone |
 | `code-md` | Be Vietnam Pro | 14 / 20 | 500, tabular numbers | SKU, ISBN, order code in tables |
-| `code-xl` | Be Vietnam Pro | 28 / 36 | 600, tabular numbers, letter-spacing 0.04em | GHN tracking number (FR-ORD-10), pickup code, registration number |
+| `code-xl` | Be Vietnam Pro | 24 / 32 | 600, tabular numbers, letter-spacing 0.04em | GHN tracking number (FR-ORD-10), pickup code, registration number |
 
 **Rules**
 
-- Cormorant Garamond is **never below 24 px**, never for body text, buttons, tables or form labels. It is thin at small sizes and slows reading.
+- Cormorant Garamond is used only for `display-lg` (login, first-run wizard, empty-state hero). Page titles and the dashboard greeting use Be Vietnam Pro (27 Oct 2026). Cormorant is **never below 24 px**, never for body text, buttons, tables or form labels. It is thin at small sizes and slows reading.
 - Uppercase is used only for `overline`. Vietnamese in all-caps loses readability of diacritics – avoid uppercase buttons and headings.
 - Maximum line length for paragraphs: 72 characters (`max-w-prose`).
 - Do not use weights below 400.
@@ -340,7 +340,7 @@ These are Tailwind’s default spacing steps; use `p-4`, `gap-6`, etc.
 
 ```
 ┌──────────────┬───────────────────────────────────────────────────────┐
-│              │ Top bar 56px: [≡] Search…   [● Online] [🔔3] [Avatar]      │
+│              │ Top bar 56px: [≡]                      [🔔3] [Avatar]      │
 │  SIDEBAR     ├───────────────────────────────────────────────────────┤
 │  navy-700    │ Page header: Title (display-md)        [Primary action] │
 │  264 px      │ Breadcrumb / tabs                                       │
@@ -357,9 +357,9 @@ These are Tailwind’s default spacing steps; use `p-4`, `gap-6`, etc.
 
 | Element | Spec |
 | --- | --- |
-| **Sidebar** | `navy-700`; 264 px expanded, 72 px rail, drawer (full height, 288 px, with scrim `ink-900` at 40 %) below `md`. Group labels `overline` in white 56 %. Items 40 px tall (44 px on touch devices), icon 20 px + `body-md` 500 label, white 80 %; hover `navy-800`; active `navy-900` + 3 px `sand-300` left bar + white 100 %. Count badges right-aligned (e.g. orders waiting). The group list follows SRS Appendix C (see Appendix A of this guide). |
-| **Top bar** | 56 px, white, bottom border `paper-300`. Left: menu toggle, global search (“Tìm sản phẩm, đơn hàng, khách hàng…”, `⌘K` / `Ctrl K`). Right, in order: **connection/sync status**, **notification bell**, **user menu** (name, role, own roster/payslips, sign out). **No red count badges in the top bar**: overdue to-notify tasks and other red counts appear only on their sidebar menu items (10.5). |
-| **Page header** | Title `display-md` (Cormorant) left; primary action top-right on desktop, under the title full-width on phones (SRS §5.1). Optional breadcrumb above the title (`body-sm`, `ink-500`). |
+| **Sidebar** | `navy-700`; 264 px expanded, 72 px rail, drawer (full height, 288 px, with scrim `ink-900` at 40 %) below `md`. Group labels `overline` in white 56 %. Items 40 px tall (44 px on touch devices), icon 20 px + `body-md` 500 label, white 80 %; hover `navy-800`; active `navy-900` + 3 px `sand-300` left bar + white 100 %. Count badges right-aligned (e.g. orders waiting). The group list follows SRS Appendix C (see Appendix A of this guide). **Sign out** is pinned to the bottom of the sidebar and drawer, below a 1 px `sidebar-border` divider: `LogOut` icon + “Đăng xuất”, same item style; on the 72 px rail the icon only, with a tooltip. |
+| **Top bar** | 56 px, white, bottom border `paper-300`. Left: menu toggle (drawer breakpoints only). No global search in the top bar: each list page has its own search field. Right, in order: **connection status** (only when offline – a `warning` pill “Ngoại tuyến”; nothing while online, 13.2), **notification bell**, **user menu** (name, role, own roster/payslips). Sign out is not in the top bar; it sits at the bottom of the sidebar. **No red count badges in the top bar**: overdue to-notify tasks and other red counts appear only on their sidebar menu items (10.5). |
+| **Page header** | Title `display-md` (Be Vietnam Pro) left; primary action top-right on desktop, under the title on phones (SRS §5.1), left-aligned and **as wide as its label** – header buttons never stretch across the screen. Optional breadcrumb above the title (`body-sm`, `ink-500`). |
 | **Content** | Background `paper-100`; content in white cards with 1 px `paper-300` border, radius `lg`. |
 | **POS mode** | The selling screen hides the sidebar and uses its own full-screen layout (section 13). A “Thoát POS” (Exit POS) control returns to the shell. |
 
@@ -371,17 +371,17 @@ These are Tailwind’s default spacing steps; use `p-4`, `gap-6`, etc.
 | Detail | `xl+`: 2 columns – main 2/3 (tabs, lines, history) and side 1/3 (status, summary, actions, customer). Below `xl`: single column, summary first |
 | Form (create/edit) | Single column max 720 px; long forms split into cards with `heading-lg` titles; sticky action bar at the bottom |
 | Settings | Left sub-nav (240 px) + form column max 720 px; sub-nav becomes a select on phones |
-| Dashboard | 12-column grid, 24 px gap; KPI tiles 3 columns each on `xl`, 6 on `md`, 12 on phones |
+| Dashboard | 12-column grid, 24 px gap; KPI tiles 4 columns each on `xl`, 6 on `md`, 12 on phones |
 
 ### 6.5 Density
 
 | Mode | Row height | Where |
 | --- | --- | --- |
 | Comfortable (default) | 52 px table rows, 40 px inputs | Back office on desktop |
-| Touch | 56 px rows, 48 px inputs and buttons | POS, check-in, stock count, any device with coarse pointer (`@media (pointer: coarse)`) |
+| Touch | 52 px rows, 44 px inputs and buttons | POS, check-in, stock count, any device with coarse pointer (`@media (pointer: coarse)`) |
 | Compact (optional user setting) | 40 px rows, 36 px inputs | Reports and long lists for experienced staff, desktop only |
 
-Touch targets are never smaller than **44 × 44 px** on touch devices (NFR-USE-02); on POS use **48 px minimum**, 56 px for primary actions.
+Touch targets are never smaller than **44 × 44 px** on touch devices (NFR-USE-02), POS included; primary POS actions are 52 px. Buttons smaller than 44 px (`sm`, `md`) grow to 44 px under `pointer: coarse`. Keep sizes modest so phone screens do not feel cramped (27 Oct 2026).
 
 ---
 
@@ -628,13 +628,13 @@ Build on shadcn/ui primitives; restyle with the tokens. Each component lists siz
 | Size | Height | Padding x | Font | Icon |
 | --- | --- | --- | --- | --- |
 | `sm` | 32 px | 12 px | `body-sm` 500 | 16 |
-| `md` (default) | 40 px | 18 px | `body-md` 500 | 20 |
-| `lg` | 48 px | 20 px | `body-lg` 600 | 20 |
-| `xl` (POS) | 64 px | 28 px | 20 px 600 | 24 |
+| `md` (default) | 36 px | 16 px | `body-md` 500 | 18 |
+| `lg` | 44 px | 20 px | `body-md` 600 | 20 |
+| `xl` (POS) | 52 px | 24 px | 18 px 600 | 20 |
 
 **States:** hover (one step darker), pressed (two steps darker), focus (ring), disabled (`paper-200` background, `ink-300` text, no shadow, `cursor: not-allowed`), loading (spinner replaces icon, label stays, button keeps its width, prevents double submit).
 
-**Rules:** label is a verb (“Lưu sản phẩm”, not “OK”); sentence case; on phones the primary action is full width; button order in dialogs and action bars: secondary left, primary right.
+**Rules:** label is a verb (“Lưu sản phẩm”, not “OK”); sentence case; page-header buttons fit their label on every screen size (never stretched to the screen width); full-width buttons are kept only for form action bars, dialog footers on phones and the POS; button order in dialogs and action bars: secondary left, primary right.
 
 ### 10.2 Text inputs
 
@@ -694,7 +694,8 @@ Validate on blur and on submit, not on every keystroke. On submit failure, scrol
 | Property | Spec |
 | --- | --- |
 | Container | White card, border `paper-300`, radius `lg`, overflow hidden |
-| Header row | `paper-200` background, `body-sm` 600 `ink-700`, 44 px tall, sticky on scroll with `shadow-sm` |
+| Header row | `paper-200` background, `body-sm` 600 `ink-700`, 44 px tall, sticky on scroll with `shadow-sm`; header labels never wrap |
+| Horizontal scroll | When the table is wider than the screen it scrolls sideways inside the card. The first column (the record code) stays pinned on the left with an **opaque** background (white, `navy-50` on row hover, `paper-200` in the header) and a 1 px `paper-300` right edge, so scrolled cells pass underneath it and never show through. Codes, dates and amounts do not wrap. |
 | Body rows | 52 px (comfortable) / 56 (touch) / 40 (compact); divider 1 px `paper-300`; hover `navy-50`; whole row clickable to the detail page (SRS §5.1) with the cursor `pointer` |
 | Selected row | `sand-100` + 2 px `navy-700` left edge |
 | Unread row | `sand-50` background + 8 px `navy-700` dot before the first cell + text 600 |
@@ -724,7 +725,7 @@ Underline tabs: 44 px tall, `body-md` 500 `ink-500`; active `ink-900` + 2 px `na
 | **Dialog** | Width 480 (sm), 640 (md), 880 (lg); radius `lg`; `shadow-lg`; padding 24; title `heading-md`; close `X` top-right; footer actions right-aligned (secondary, primary). Full-screen on phones. `Esc` closes unless there are unsaved changes. |
 | **Confirmation (destructive)** | Title states the action as a question (“Hủy đơn #DH-10234?”); body states the consequence (“Tồn kho đã giữ sẽ được trả lại. Không thể hoàn tác.”); buttons “Không” (secondary) and “Hủy đơn” (`destructive`, never just “OK”). For posting/irreversible money actions, require a reason field when the SRS asks for one (voids FR-POS-14, waivers FR-LIB-10). |
 | **Approval / supervisor PIN** (FR-ADM-09) | 400 px dialog with `ShieldCheck` icon in a `navy-100` circle; title “Cần quản lý duyệt”; the reason in plain words (“Giảm giá 15 % vượt hạn mức 10 % của bạn”); approver selector + 6-digit PIN pad (13.5) or “Đăng nhập bằng mật khẩu” link; shows lockout after 5 attempts. The approved state shows approver name for 1.5 s, then continues the action. |
-| **Filter dialog** (SRS §5.1) | Opened by the “Bộ lọc” button; a side drawer (400 px) on desktop, full-screen sheet on phones; groups of filters; footer “Xóa bộ lọc” (ghost) + “Áp dụng (124 kết quả)” (primary with live count). |
+| **Filter popover** (SRS §5.1) | Opened by the “Bộ lọc” button; anchored under it, 300 px (max screen width − 32 px), `shadow-md`, radius `lg`. **Each filter field is a dropdown** (accordion row, 44 px): field name left (“Thời gian”, “Trạng thái”, “Thanh toán”), the current choice summary in `ink-500` (“Tiền mặt, Thẻ” or “2 đã chọn”), `ChevronDown` that turns when open. Opening a field shows its options: **multi-select fields have a checkbox in front of each option** (18 px, `navy-700` when checked) so several values can be combined (e.g. Tiền mặt + Thẻ); the time field is single-choice (radio) with presets “Hôm nay”, “7 ngày qua”, “30 ngày qua”, “Tháng này”, “Tháng trước”, “Tùy chọn” (Từ ngày / Đến ngày, store timezone). Changes apply immediately; fields combine with AND, values inside a field with OR. Footer “Xóa bộ lọc” (ghost). Escape or a click outside closes it. |
 | **Drawer** | Right side, 480 / 640 px, for quick views (customer preview, order preview from the inbox) without leaving the list. |
 | **Bottom sheet** | Phones and tablet POS: radius `xl` top corners, drag handle 32 × 4 px `paper-300`, max height 90 %. |
 
@@ -849,20 +850,22 @@ Every status is a **chip** (10.5) with a fixed tone and, where marked ⚠, an at
 
 ```
 Sản phẩm                                              [+ Thêm sản phẩm]
-[🔍 Tìm theo tên, tác giả, SKU, ISBN…          ] [Bộ lọc ③] [⇅ Sắp xếp] [⋯]
-[Đang bán (1.204)] [Sắp hết (58)] [Hết hàng (37)] [Ẩn (12)]   chips: × Danh mục: Thiếu nhi
-┌──────────────────────────────────────────────────────────────────────┐
-│ ☐ │ Ảnh │ Tên sản phẩm         │ SKU            │ Tồn │ Giá bán   │ Trạng thái │
-│ ☐ │ ▯   │ Cho tôi xin một vé…  │ SACH-NNA-0012  │  14 │ 98.000 ₫  │ ● Còn hàng │
+[🔍 Tìm theo tên, tác giả, SKU, ISBN…                       ] [≡ Lọc ③]
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│ ☐ │ SKU           │ Ảnh │ Tên sản phẩm        │ Tồn │ Giá bán  │ Giá nhập │ Trạng thái │ Cập nhật │
+│ ☐ │ SACH-NNA-0012 │ ▯   │ Cho tôi xin một vé… │  14 │ 98.000 ₫ │ 61.000 ₫ │ ● Còn hàng │ 27/10/2026 │
 └──────────────────────────────────────────────────────────────────────┘
                                          1–40 trên 1.253   ‹  1  2  3 … ›
 ```
 
-- One search box; one **Bộ lọc** button with a badge showing the number of active filters; active filters shown as removable chips with “Xóa tất cả”.
-- Multi-select status filters with counts (FR-ORD-05) as chips above the table on tablet and desktop.
-- **Phones (< 640 px):** the status chips are **not** shown above the table. They fold into the **Bộ lọc** button, which sits directly beside the search box as a 40 px icon-only pill with the active-filter count badge. Tapping it opens the filter sheet (10.9) with the status chips at the top. Secondary actions (Sắp xếp, the primary “Thêm …” / “Tạo đơn”) move to a second row, primary full width. Applies to every list, including the product list (stock-status chips) and the order inbox (order-status chips).
+- One search box and, directly beside it on the same row, one **Bộ lọc** button – on every screen size. **No filter chips are shown above the table** on any screen size (27 Oct 2026): every filter (status, payment method, …) lives inside the Bộ lọc button. The button is a secondary pill with the `ListFilter` icon and the label “Lọc” (icon only below 640 px), plus a count badge of active filters. It opens a filter popover (10.9) listing each filter group with its options (counts where the SRS asks, FR-ORD-05); choosing an option applies it at once; footer “Xóa bộ lọc”. Lists without a search box show the Bộ lọc button alone at the top left of the table. Secondary actions (Sắp xếp, the primary “Thêm …” / “Tạo đơn”) move to a second row under the title, each as wide as its label. Applies to every list, including the product list (stock-status chips) and the order inbox (order-status chips).
 - **Missing image:** imported products without a photo show the `paper-200` placeholder (8.2) and a “Thiếu ảnh” chip (neutral, `ImageOff`); the product list has a “Thiếu ảnh” status chip/filter so staff can work through them (FR-CAT-11).
-- **Product list columns:** Ảnh, Tên sản phẩm (with author/brand), **SKU**, Có thể bán, Giá bán, Trạng thái. Show the store’s own **SKU only**. SKU and ISBN are different fields: SKU is the code the store assigns to each sellable variant (e.g. `SACH-NNA-0012`, `VPP-0012`); ISBN is the publisher’s book identifier and appears on the product detail page and in search, never in the SKU column. There is **no channel (POS/website) column** in the list; publication channels are shown on the product detail page.
+- **Product list (27 Oct 2026):** header actions “Nhập từ Excel” (opens the import wizard in a dialog on this page, 12.10; the template is downloaded from inside the wizard, so there is no separate “Tải file mẫu” button), “Thêm sản phẩm” – **“Thêm sản phẩm” opens a create-product dialog on the Products page** (no detour through stock-in; FR-CAT-01): Loại, Danh mục, Tên (tiếng Anh, required) and Tên tiếng Việt, Mô tả (tiếng Anh, required), SKU, ISBN (books) or Mã vạch (empty = internal barcode), Tác giả and Nhà xuất bản (books), Khối lượng, Giá bán, Thuế VAT, Tồn tối thiểu; it creates the product with zero stock and opens its detail page (photos are added there; stock arrives through stock-in). The search box is the standard one (icon vertically centred, no hint line under it). **Bộ lọc** groups: Tồn kho (multi: Còn hàng, Sắp hết, Hết hàng), Loại (multi: Sách, Văn phòng phẩm, Sản phẩm khác, Combo), Phân loại (multi: the category tree, children indented under their parent; when Loại is set only categories holding items of those types are offered), Trạng thái (multi: Đang bán, Ẩn, Ngừng bán), Ảnh (Thiếu ảnh). **Columns:** checkbox, **SKU** (first, code style), Ảnh, Tên sản phẩm (with author/brand), Tồn (on hand; bundles show what their components allow), Giá bán, Giá nhập (average cost – only with `catalog.view_cost`, otherwise the column is omitted), Trạng thái, Cập nhật (date of the last change to the product or its variant). **Bulk barcode printing (FR-CAT-13):** ticking rows (or the header checkbox for the page) replaces the toolbar with a `navy-50` bar “Đã chọn 5 sản phẩm · [In mã vạch] [Bỏ chọn]”; “In mã vạch” opens the label dialog (Mẫu nhãn, Khổ giấy, Bắt đầu từ ô số, Số nhãn mỗi sản phẩm – default 1, editable per row) and prints one sheet for all selected products. Show the store’s own **SKU only**. SKU and ISBN are different fields: SKU is the code the store assigns to each sellable variant (e.g. `SACH-NNA-0012`, `VPP-0012`); ISBN is the publisher’s book identifier and appears on the product detail page and in search, never in the SKU column. There is **no channel (POS/website) column** in the list; publication channels are shown on the product detail page.
+- **Customer list columns:** Khách hàng, Số điện thoại, Hạng, Điểm, Số đơn, Tổng mua, Mua gần nhất (date) – short titles; Số đơn, Tổng mua and Điểm right-aligned. **Filters** (Bộ lọc beside the search box, FR-CRM-02): Hạng (multi: Thường, Bạc, Vàng), Mua gần nhất (single: 30 ngày qua, 90 ngày qua, 6 tháng qua, Hơn 6 tháng chưa mua, Chưa mua lần nào), Số đơn (multi: 0, 1, 2–5, 6–10, Trên 10), Điểm (multi: 0, 1–99, 100–499, 500–999, Từ 1.000).
+- **Shift list (“Ca làm”):** search box (shift number or cashier name, accent-insensitive) + Bộ lọc beside it: Quầy (multi, one option per register, e.g. Quầy Q1, Quầy Q2) and Thời gian (single choice: Hôm nay, 7 ngày qua, 30 ngày qua, Tháng này, Tháng trước, Tùy chọn – by the day the shift opened, store timezone).
+- **Promotion list (“Khuyến mãi”):** search box (name or code, accent-insensitive) + Bộ lọc beside it: Thời gian (single choice: Hôm nay, 7 ngày qua, 30 ngày qua, Tháng này, Tháng trước, Tùy chọn – shows programs whose run period overlaps the range) and Trạng thái (multi: Đã lên lịch, Đang chạy, Tạm dừng, Hết hạn). Columns: Mã (code style, “—” when the program has no code), Chương trình (name), Ưu đãi, Áp dụng, Thời gian, Trạng thái. **No row actions:** the whole row opens the editor; “Tạm dừng” / “Chạy lại” live in the editor dialog, in a status row at the top (status chip + secondary pill), hidden for expired programs (FR-PRM-04).
+- **POS sales list (“Đơn bán”) filters:** Thời gian (single choice, presets + custom range), Trạng thái (Hoàn tất, Đã hủy – multi), Thanh toán (Tiền mặt, Chuyển khoản, Thẻ – multi) (FR-POS-07).
+- **POS sales list (“Đơn bán”) columns:** Mã đơn, Thời gian, Khách hàng, Thu ngân, Thanh toán, Tổng tiền, Trạng thái. Trạng thái shows the sale status only (Hoàn tất / Đã hủy); the e-invoice chip (“Chờ xuất”, “Đã xuất”, …) is **not** shown in the list – it appears on the sale record. Failed e-invoices still reach staff through the notification centre and the menu badge (FR-ADM-08).
 - Rows needing action sort first where the SRS asks (order inbox).
 - Filters, sort and page persist in the URL so a link or back button restores the view.
 
@@ -884,7 +887,12 @@ Card 16 px padding, 12 px gap, whole card tappable; primary line name + status c
 ### 12.3 Detail page
 
 - Header: back link, document code (code style) + status chip, key facts row (customer, total, date, channel), actions right (primary + `MoreHorizontal`). Destructive actions live in the overflow menu or as `destructive-outline`.
+- **Phones (< 640 px):** the `MoreHorizontal` overflow button sits on the title row, at the right edge, level with the document code. The other header actions sit **side by side** in one row under the title, left-aligned, each as wide as its label (wrapping to a second row only if they do not fit), primary last. On `sm+` all actions sit at the right of the title with `⋯` last.
+- **Sale record:** no action buttons in the header on any screen size – “In lại phiếu”, “Đổi / trả hàng” and “Hủy đơn” are all items of the `⋯` menu on the title row (each shown only with its permission and when allowed; “Hủy đơn” last, `destructive-outline`). The `⋯` button is hidden when no item applies.
 - Main column: tabs (Chi tiết / Lịch sử / Thanh toán / Hóa đơn …). Side column: summary card, customer card, status timeline.
+- **Responsive:** below `lg` the two columns stack into one column that is never wider than the screen; no card may push the page into horizontal scroll. Line tables inside cards (sale lines, stock-in lines, …) become a stacked list on phones: name and SKU, then “SL × đơn giá” left and the line total right, discount and notes below.
+- **Customer record:** header = name with an icon-only “Sửa” button (`Pencil`, ghost, `aria-label` “Sửa”) placed directly beside the `⋯` button on the title row, on every screen size. **No tabs**: the main column is one card “Mua hàng” (purchases with totals, FR-CRM-03) followed by one card “Điểm” (points ledger, latest 50, with “Điều chỉnh điểm”); the side column is the “Hồ sơ” card (phone, email, birth date, tier, points). There is no store credit anywhere on the page.
+- **Sale record – Hóa đơn điện tử card** (FR-POS-15..17): always shown on a completed sale. Facts: Trạng thái (chip, or “Chưa xuất” when there is no invoice yet), Số hóa đơn, Người mua, Gửi email. Actions: “Xuất hóa đơn” (primary pill, `FileText`) when there is no invoice yet or it is still pending – it opens a dialog for the buyer’s details (Tên người mua / đơn vị – required; Mã số thuế, Địa chỉ, Email – optional; with email the invoice is emailed, FR-POS-16) and queues the invoice; “Gửi lại cho khách” (secondary) on an issued invoice to add buyer details or email it; “Thử lại” on a failed one (with `einvoice.manage`). Hidden on voided sales and on cancelled/adjusted invoices.
 - Sensitive values (cost, margin, payroll) are omitted entirely without permission – no “hidden” placeholders (TDD §10.3).
 
 ### 12.4 Forms
@@ -898,7 +906,13 @@ Card 16 px padding, 12 px gap, whole card tappable; primary line name + status c
 
 ### 12.5 Dashboard (FR-RPT-01)
 
-Order top to bottom: greeting `display-md` (“Chào buổi sáng, Lan”) + date; KPI tiles (Hôm nay / Tuần / Tháng revenue, orders, average basket); charts (revenue trend, sales by channel); lists (bestsellers, low stock, upcoming events, overdue loans). Tiles the user has no permission for are not rendered – the grid reflows.
+Order top to bottom: greeting `display-md` (“Chào buổi sáng, Lan”, Be Vietnam Pro) + date; KPI tiles; charts (revenue trend, sales by channel); lists (bestsellers, low stock, upcoming events, overdue loans). Tiles the user has no permission for are not rendered – the grid reflows.
+
+- **KPI tiles (today only):** three tiles – “Doanh thu hôm nay”, “Số đơn hôm nay”, “Giá trị đơn trung bình” (today’s revenue ÷ today’s orders). No week or month tiles; longer periods are read from the charts and reports.
+- **Range filter:** each chart card has a secondary pill button in its header (right side) with the `ListFilter` icon and the current range as its label (e.g. “7 ngày”). Clicking it opens a popover (`shadow-md`, radius `lg`, 280 px) listing the presets “7 ngày”, “30 ngày”, “Tháng này”, “Tháng trước”, “90 ngày”, “Năm nay” (selected one checked) and a “Tùy chọn” section with Từ ngày / Đến ngày pickers and an “Áp dụng” primary pill (store timezone, max 366 days, TDD §4.11). Picking a preset applies it and closes the popover; Escape or a click outside closes it without change. The custom range shows on the button as “dd/mm – dd/mm/yyyy”. The choice is per card and kept for the session.
+- **Doanh thu (trend):** default 30 ngày. Bars = revenue (left axis, `navy-700`); line = number of orders (right axis, `sea-500`, 2 px, dot markers), with a legend “Doanh thu · Số đơn”. Ranges up to 92 days group by day, longer ranges by month. First and last period labels on the x-axis; the latest revenue labelled directly.
+- **Doanh thu theo kênh:** default Tháng này; one bar per channel with amount and share.
+- **Lists** have a column header row (`caption`, `ink-500`): Bán chạy tháng này – “#”, “Sản phẩm”, “SKU”, “Đã bán”; Sắp hết hàng – “Sản phẩm”, “SKU”, “Còn / Tối thiểu”. Below the Sắp hết hàng table, right-aligned, a tonal pill button “Xem chi tiết” opens the product list filtered to low stock.
 
 ### 12.6 Reports
 
@@ -929,7 +943,7 @@ Card list sorted by deadline; filter chips by reason (Pre-order về, Đơn đ�
 
 ### 12.10 Import wizard (FR-CAT-11, FR-ADM-07)
 
-Stepper: Tải tệp → Kiểm tra → Xem trước → Nhập. Download template link on step 1. Validation table shows row number, column, value and message; filter “Chỉ hiện dòng lỗi”; “Tải báo cáo lỗi” button. Commit step shows a progress bar and a summary (imported / skipped / errors); rollback action where allowed.
+Stepper: Tải tệp → Kiểm tra → Xem trước → Nhập. Download template link on step 1. **On the Products page the wizard opens in a large dialog** (“Nhập sản phẩm từ Excel”, full-screen on phones) with the data type fixed to products – staff never leave the Products page; closing the dialog after a successful import refreshes the list. The standalone “Nhập dữ liệu” page remains for stock-in files and customers. Validation table shows row number, column, value and message; filter “Chỉ hiện dòng lỗi”; “Tải báo cáo lỗi” button. Commit step shows a progress bar and a summary (imported / skipped / errors); rollback action where allowed.
 
 ---
 
@@ -943,9 +957,9 @@ The POS is the most-used screen. It runs full-screen without the sidebar, on a c
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ [≡] Ca #128 · Lan · Quầy Q1                  [● Trực tuyến]  [Giỏ chờ 2]  │  56px navy-700
+│ [≡] Lan · Quầy Q1                                           [Giỏ chờ 2]  │  56px navy-700
 ├──────────────────────────────────────────┬───────────────────────────────┤
-│ [Nhập SKUs/tên sản phẩm            (▥)] │ Khách: [+ Thêm khách (SĐT)]   │
+│ [Nhập SKUs/tên sản phẩm        ] (▥)    │ Khách: [+ Thêm khách]         │
 │                                          │ ─────────────────────────────  │
 │  Search results / quick tiles            │ Cho tôi xin một vé…            │
 │  ┌────┐ ┌────┐ ┌────┐ ┌────┐             │ 98.000 ₫     [–] 1 [+]   ⋯     │
@@ -961,24 +975,27 @@ The POS is the most-used screen. It runs full-screen without the sidebar, on a c
        left: flexible                            right: cart 400–440 px
 ```
 
-**Tablet portrait / phone:** search and results full screen; the cart is a sticky bottom bar (“3 sản phẩm · 106.000 ₫ · [Xác nhận]”) that expands to a bottom sheet.
+**Tablet portrait / phone:** one screen, no bottom sheet. Under the search field the whole cart sits in one white card that fills the remaining height: customer row at the top, cart lines in the middle (scrolls), and totals, “Giữ giỏ / Mã giảm giá / Điểm” and the “Xác nhận” button pinned at the bottom of the card – the cashier never opens a second panel. While a search is active the card is replaced by the results; picking a result brings the cart back.
+
+**Area under the search field:** while a search is active it shows the results (or “Không có sản phẩm phù hợp.”). Otherwise it shows the cart card on tablet portrait / phone and nothing on desktop (the cart is already on the right). An empty cart, in either place, shows an empty state in the lines area – `ShoppingCart` icon 48 px `ink-300` and “Chưa có sản phẩm nào được chọn” (`body-md`, `ink-500`), centred.
 
 | Element | Spec |
 | --- | --- |
-| POS header | `navy-700`, 56 px, white text: shift number, cashier, register; connection pill; held carts count. **No lock button and no “test offline” button**; the POS still auto-locks after `pos.lock_minutes` (13.5), and the offline state appears only when the connection is actually lost (13.2). |
-| Search field | 56 px tall, `body-lg`, placeholder **“Nhập SKUs/tên sản phẩm”**, **no leading icon**. A round 44 px `ScanBarcode` icon button at the right end opens the camera scanner (13.3). The field stays **focused** after every action so a keyboard-wedge scanner works without clicking (TDD §8.7). Results appear below as a list of 72 px rows (cover 40 × 60, title, author, SKU in code style, price, available stock). |
+| POS header | `navy-700`, 56 px, white text: cashier and register only (“Lan · Quầy Q1”; the shift number is not shown – it is in the shift menu and on the shift report); connection pill only when syncing, offline or in error (13.2; no “Trực tuyến” pill while online); held carts count. **No lock button and no “test offline” button**; the POS still auto-locks after `pos.lock_minutes` (13.5), and the offline state appears only when the connection is actually lost (13.2). |
+| Search field | 48 px tall, `body-lg`, placeholder **“Nhập SKUs/tên sản phẩm”**, **no leading icon**. A separate round 48 px `ScanBarcode` icon button (`navy-50` / `navy-700`) sits **beside** the field on its right, 8 px gap, not inside it, and opens the camera scanner (13.3). The field stays **focused** after every action so a keyboard-wedge scanner works without clicking (TDD §8.7). Results appear below as a list of 72 px rows (cover 40 × 60, title, author, SKU in code style, price, available stock). |
 | Quick tiles | 120 × 120 px, radius `xl`, for service items only (event tickets, library deposit, library fine, lost-book charge – FR-POS-08). No merchandise tiles (e.g. tote bags); goods are added by search or scan. |
-| Cart line | 64 px min; title `body-md` 600 (2 lines max), unit price, stepper (48 px buttons), line total right-aligned tabular; promotion saving below in `success-700` (“Giảm 10.000 ₫ – Mua 2 tặng 1”, FR-POS-05); swipe-left or `⋯` for discount/price override/note/remove. |
-| Totals | Subtotal and discounts `body-lg`; total `pos-total`; points to earn shown under the customer when attached. |
+| Cart line | Three rows: title `body-md` 600 (2 lines max) with `⋯` at the right; unit price `body-sm` `ink-700` below it; then a compact stepper on the left – 28 px outlined circles (`paper-500`, `Minus` / `Plus` 14 px) around the quantity `body-md` 600, 32 px wide – and the line total right-aligned tabular on the same row. Each stepper circle keeps a 44 px touch area (NFR-USE-02) with the extra space invisible; promotion saving below in `success-700` (“Giảm 10.000 ₫ – Mua 2 tặng 1”, FR-POS-05); swipe-left or `⋯` for discount/price override/note/remove. |
+| Customer | “Thêm khách” opens a small dialog with one field “Số điện thoại hoặc tên” (FR-POS-04). Digits only (≥ 9) look up the exact phone; otherwise, from 2 characters, it searches names without accents and lists up to 8 matches (name, phone, points) as 56 px rows; tapping one attaches it. No match by phone offers “Tạo khách hàng” (with `customer.manage`, online). Offline, the search runs on the cached customer list (TDD §7.1). |
+| Totals | Subtotal and discounts `body-md`; label “TỔNG” `heading-md`; total `pos-total` on the same row, right-aligned, never wrapping; points to earn shown under the customer when attached. |
 | Confirm button | Label **“Xác nhận”** with `Check` icon; `accent` (olive) `xl` pill, full cart width, no shortcut label. Opens the payment screen (13.4). Disabled with reason when the cart is empty or shift is closed. |
 
 ### 13.2 Connection and sync indicator (FR-POS-23..26)
 
-Always visible in the POS header and the shell top bar.
+Shown in the shell top bar and the POS header only when not plainly online (syncing, offline, error); while online there is no indicator.
 
 | State | Pill | Extra |
 | --- | --- | --- |
-| Online, nothing queued | `success-50` / `success-700`, dot, “Trực tuyến” | — |
+| Online, nothing queued | **Nothing is shown** in the shell top bar or the POS header; a pill appears only when something needs attention (syncing, offline, sync error). | — |
 | Syncing | `info-50` / `info-700`, `RefreshCw` rotating, “Đang đồng bộ 3/12” | — |
 | Offline | `warning-50` / `warning-700`, `WifiOff`, “Ngoại tuyến · 3 đơn chờ” | Page banner: “Mất kết nối. Vẫn bán được bình thường; hóa đơn điện tử và xác nhận chuyển khoản sẽ thực hiện khi có mạng.” |
 | Sync error | `danger-50` / `danger-700`, `AlertOctagon`, “Lỗi đồng bộ” | Button “Đồng bộ ngay”; manager link to exceptions |
@@ -990,18 +1007,17 @@ Features unavailable offline (TDD §7.1) stay visible but disabled with an inlin
 ### 13.3 Scanning
 
 - **Hardware scanner:** successful add → line flashes `sand-50` 600 ms + short beep (setting, default on). Unknown barcode → field shakes 2 px (or border flash under reduced motion), `danger` inline message “Không tìm thấy mã 8934…”, with “Tìm theo tên” and (with permission) “Tạo sản phẩm”.
-- **Camera scanner:** opened by the `ScanBarcode` button at the end of the search field; full-screen overlay, dark scrim `rgba(20, 32, 51, 0.85)`, a 280 × 160 px rounded frame with `sand-300` corners, hint “Đưa mã vạch vào khung”, torch toggle, close button 48 px. Continuous mode for stock counts (shows running count), single mode for POS.
+- **Camera scanner:** opened by the `ScanBarcode` button beside the search field; full-screen overlay, dark scrim `rgba(20, 32, 51, 0.85)`, a 280 × 160 px rounded frame with `sand-300` corners, hint “Đưa mã vạch vào khung”, torch toggle, close button 48 px. Continuous mode for stock counts (shows running count), single mode for POS.
 
 ### 13.4 Payment screen
 
 Full-width sheet/dialog over the cart:
 
 - Amount due in `pos-total` at the top.
-- Method tiles (96 px tall, radius `xl`, icon 32 px): Tiền mặt (`Banknote`), Chuyển khoản (`QrCode`), Thẻ (`CreditCard`) and, only when the attached customer has a balance, Tiền ghi có (store credit, `WalletCards`) showing the balance (“Còn 120.000 ₫”). Selected tile: `navy-700` border 2 px + `navy-50` fill.
-- **Cash:** numeric keypad (64 px keys) + quick-amount chips (exact, 50.000, 100.000, 200.000, 500.000 ₫); “Tiền thừa” (change) in `pos-total` `success-700`.
+- Method tiles – **always on one row**, equal widths, 3 tiles even on a 360 px phone; 72 px tall, radius `xl`, icon 24 px, label `body-sm` 500 centred: Tiền mặt (`Banknote`), Chuyển khoản (`QrCode`), Thẻ (`CreditCard`). There is no store-credit tile (store credit removed 27 Oct 2026). Selected tile: `navy-700` border 2 px + `navy-50` fill.
+- **Cash:** numeric keypad (52 px keys) + quick-amount chips (exact, 50.000, 100.000, 200.000, 500.000 ₫); “Tiền thừa” (change) in `pos-total` `success-700`.
 - **Bank transfer:** the store uses its **printed QR code** at the counter; the screen shows **no QR**. It shows the amount and the payment reference in `code-xl` (copy-able code display, 10.13) with the hint “Khách quét mã QR in sẵn tại quầy và ghi mã tham chiếu vào nội dung chuyển khoản”; buttons “Đã nhận tiền” (primary, pressed after checking amount and reference) and “Hủy” (FR-POS-06). Offline: recorded as unverified with a warning chip.
 - **Card:** field for approval code (code style, required).
-- **Store credit (“Tiền ghi có”):** amount defaults to the lower of the balance and the amount due; the remaining balance after payment is shown below in `body-sm` (FR-CRM-10). Returns offer “Ghi có cho khách” as a refund choice when a customer is on the sale.
 - **Split payment:** list of tenders with remaining amount shown prominently until it reaches 0.
 - **Completion:** checkmark in a `success-50` circle, sale number `code-xl`, change due, and actions: “Đơn mới” (primary), “Gửi hóa đơn điện tử qua email” (opens buyer details form, FR-POS-16), “In” only if a slip is wanted. No receipt is printed by default (FR-POS-07).
 
@@ -1024,7 +1040,7 @@ Phone/tablet card list with a large search field (name or phone), live counter a
 
 - **Stock count:** scan-first screen; each scan increments the counted quantity with a large number update and beep; current item card with cover and counted qty stepper; blind mode hides expected quantities entirely (TDD §4.2).
 - **Library borrow:** step 1 scan member card → eligibility card (valid / limit 1 of 3 / overdue / unpaid fines / deposit) with green check or red block reasons (UC-17); step 2 scan copies → list with due date `dd/MM/yyyy` in `heading-md`; “Xác nhận cho mượn” primary.
-- **Library return:** scan copy → result card: on time (success) or overdue days + fine (danger), condition choice OK / Hỏng as two 64 px buttons.
+- **Library return:** scan copy → result card: on time (success) or overdue days + fine (danger), condition choice OK / Hỏng as two 52 px buttons.
 
 ### 13.9 No keyboard shortcuts
 
@@ -1277,10 +1293,10 @@ Before a screen is considered done:
 
 - [ ] Uses only tokens from section 9 (no raw hex, no Tailwind gray scale).
 - [ ] One primary button; at most one olive element visible.
-- [ ] Page title in Cormorant Garamond ≥ 26 px; everything else, codes included, in Be Vietnam Pro.
+- [ ] Page titles, greeting and everything else, codes included, in Be Vietnam Pro; Cormorant Garamond only for `display-lg` heroes.
 - [ ] Money as `1.234.567 ₫`, dates `dd/MM/yyyy`, numbers tabular and right-aligned.
 - [ ] Every status uses the mapping in section 11, with text and (if attention) an icon.
-- [ ] Works at 360 px wide; touch targets ≥ 44 px (48 px on POS).
+- [ ] Works at 360 px wide; touch targets ≥ 44 px (POS included); POS totals do not wrap.
 - [ ] Controls the user lacks permission for are hidden, not disabled; restricted fields omitted.
 - [ ] Empty, loading, error and offline states designed.
 - [ ] Error messages follow “what – why – what to do”.

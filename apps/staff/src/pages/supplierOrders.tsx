@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, FileInput, Lightbulb, PackageCheck, Plus, Send, Trash2, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ConfirmDialog, DataTable, Facts, FilterChips, SelectField, TextArea, toast, useParam, type Column } from '../components/data';
+import { ConfirmDialog, DataTable, Facts, FilterMenu, SelectField, TextArea, toast, useListParam, type Column } from '../components/data';
 import { hitTitle, ProductSearch } from '../components/product-search';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { get, post } from '../lib/api';
@@ -40,14 +40,14 @@ interface Draft {
 
 export function SupplierOrdersPage() {
   const navigate = useNavigate();
-  const [status, setStatus] = useParam('status');
+  const [status, setStatus] = useListParam('status');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [suggest, setSuggest] = useState(false);
-  const list = useQuery({ queryKey: ['supplier-orders', status], queryFn: () => get<{ items: OrderRow[] }>('/api/v1/purchasing/orders', { status: status || undefined }) });
+  const list = useQuery({ queryKey: ['supplier-orders', status], queryFn: () => get<{ items: OrderRow[] }>('/api/v1/purchasing/orders', { status: status.join(',') || undefined }) });
   const columns: Column<OrderRow>[] = [
     { header: 'Số đơn', cell: (r) => <span className="code">{r.docNo}</span> },
     { header: 'Nhà cung cấp', cell: (r) => r.supplierName },
-    { header: 'Ngày tạo', cell: (r) => formatDate(r.createdAt) },
+    { header: 'Ngày tạo', className: 'whitespace-nowrap', cell: (r) => formatDate(r.createdAt) },
     { header: 'Dự kiến về', cell: (r) => (r.expectedAt ? formatDate(r.expectedAt) : '—') },
     { header: 'Dòng', align: 'right', cell: (r) => formatNumber(r.lines) },
     { header: 'Còn chờ', align: 'right', cell: (r) => formatNumber(r.outstanding) },
@@ -69,7 +69,7 @@ export function SupplierOrdersPage() {
         }
       />
       <div className="mb-4">
-        <FilterChips options={Object.entries(STATUS).map(([key, v]) => ({ key, label: v.label }))} value={status} onChange={setStatus} />
+        <FilterMenu groups={[{ label: 'Trạng thái', options: Object.entries(STATUS).map(([key, v]) => ({ key, label: v.label })), values: status, onChange: setStatus }]} />
       </div>
       <DataTable
         columns={columns}
@@ -200,7 +200,7 @@ function OrderForm({ initial, onClose, onCreated }: { initial: Draft; onClose: (
       }
     >
       <div className="flex flex-col gap-4">
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <SelectField label="Nhà cung cấp" required value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
             <option value="">— Chọn —</option>
             {suppliers.data?.items.map((s) => (
@@ -298,7 +298,7 @@ export function SupplierOrderDetailPage() {
         <Chip status={x.status} />
         <span className="text-sm text-ink-500">{formatDateTime(x.createdAt)}</span>
       </div>
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <Card title="Sản phẩm">
           <table className="w-full text-sm">
             <thead className="text-[13px] text-ink-500">

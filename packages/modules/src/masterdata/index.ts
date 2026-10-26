@@ -13,7 +13,7 @@ export type MasterKind = (typeof MASTER_KINDS)[number];
 
 /** Kinds whose codes are fixed by the system: only the label, order and active flag can change. */
 const FIXED_CODES: Partial<Record<MasterKind, readonly string[]>> = {
-  payment_method: ['cash', 'transfer', 'card', 'store_credit'],
+  payment_method: ['cash', 'transfer', 'card'],
   location: ['floor', 'back'],
 };
 
@@ -38,7 +38,6 @@ const DEFAULTS: Record<MasterKind, [string, string][]> = {
     ['cash', 'Tiền mặt'],
     ['transfer', 'Chuyển khoản'],
     ['card', 'Thẻ'],
-    ['store_credit', 'Tiền ghi có'],
   ],
   order_source: [
     ['website', 'Website'],

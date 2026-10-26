@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, AlertTriangle, Bell, LogOut, Menu, Search, Wifi, WifiOff, X } from 'lucide-react';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
+import { AlertOctagon, AlertTriangle, Bell, LogOut, Menu, WifiOff, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router';
 import { get, post } from '../lib/api';
 import { formatRelative, formatVnd } from '../lib/format';
 import { t } from '../lib/i18n';
@@ -69,7 +69,27 @@ function Sidebar({ groups, badges, rail, onNavigate }: { groups: NavGroup[]; bad
           </div>
         ))}
       </div>
+      <SignOutItem rail={rail} />
     </nav>
+  );
+}
+
+/** Sign out, pinned to the bottom of the sidebar and drawer (Design §6.3). */
+function SignOutItem({ rail }: { rail: boolean }) {
+  const signOut = useSignOut();
+  return (
+    <div className="shrink-0 border-t border-sand-300/20 py-2">
+      <button
+        type="button"
+        onClick={signOut}
+        title={rail ? t('auth.signOut') : undefined}
+        aria-label={rail ? t('auth.signOut') : undefined}
+        className={clsx('flex h-10 w-full items-center gap-3 font-medium hover:bg-navy-800 hover:text-white pointer-coarse:h-11', rail ? 'justify-center' : 'px-6')}
+      >
+        <LogOut size={20} aria-hidden />
+        {!rail && <span>{t('auth.signOut')}</span>}
+      </button>
+    </div>
   );
 }
 
@@ -179,7 +199,6 @@ function NotificationBell() {
 }
 
 function UserMenu({ me }: { me: Me }) {
-  const signOut = useSignOut();
   const initials = me.displayName
     .split(/\s+/)
     .map((p) => p[0])
@@ -192,9 +211,6 @@ function UserMenu({ me }: { me: Me }) {
         {initials}
       </span>
       <span className="hidden text-sm font-medium md:inline">{me.displayName}</span>
-      <button type="button" className="inline-flex size-10 items-center justify-center rounded-full text-ink-700 hover:bg-navy-50" aria-label={t('auth.signOut')} title={t('auth.signOut')} onClick={signOut}>
-        <LogOut size={20} aria-hidden />
-      </button>
     </div>
   );
 }
@@ -202,18 +218,12 @@ function UserMenu({ me }: { me: Me }) {
 export function Shell() {
   const { data: me } = useMe();
   const online = useOnline();
-  const navigate = useNavigate();
   const location = useLocation();
   const [drawer, setDrawer] = useState(false);
   const has = (p: string) => can(me, p);
   const groups = visibleNav(has);
   const { data: badges } = useQuery({ queryKey: ['badges'], queryFn: () => get<Record<string, number>>('/api/v1/me/badges'), refetchInterval: 30_000, enabled: !!me });
   useEffect(() => setDrawer(false), [location.pathname]);
-  const [q, setQ] = useState('');
-  const search = (e: FormEvent) => {
-    e.preventDefault();
-    if (q.trim()) navigate(`/products?q=${encodeURIComponent(q.trim())}`);
-  };
   if (!me) return null;
 
   return (
@@ -242,27 +252,14 @@ export function Shell() {
           <button type="button" className="inline-flex size-10 items-center justify-center rounded-full hover:bg-navy-50 md:hidden" aria-label={t('shell.menu')} onClick={() => setDrawer(true)}>
             <Menu size={20} aria-hidden />
           </button>
-          {has('catalog.view') && (
-            <form onSubmit={search} className="relative max-w-md flex-1" role="search">
-              <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
-              <input
-                className="h-10 w-full rounded-full border border-paper-300 bg-paper-50 pr-3 pl-10 text-sm placeholder:text-ink-500 focus:border-navy-700 max-sm:text-base"
-                placeholder={t('shell.globalSearch')}
-                aria-label={t('shell.globalSearch')}
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-              />
-            </form>
-          )}
           <div className="ml-auto flex items-center gap-1 sm:gap-3">
-            <span
-              className={clsx('inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium', online ? 'bg-success-50 text-success-700' : 'bg-warning-50 text-warning-700')}
-              role="status"
-              aria-live="polite"
-            >
-              {online ? <Wifi size={14} aria-hidden /> : <WifiOff size={14} aria-hidden />}
-              <span className="max-sm:sr-only">{online ? t('shell.online') : t('shell.offline')}</span>
-            </span>
+            {/* Connection status only when offline; nothing while online (Design §13.2). */}
+            {!online && (
+              <span className="inline-flex h-8 items-center gap-1.5 rounded-full bg-warning-50 px-3 text-xs font-medium text-warning-700" role="status">
+                <WifiOff size={14} aria-hidden />
+                <span className="max-sm:sr-only">{t('shell.offline')}</span>
+              </span>
+            )}
             <NotificationBell />
             <UserMenu me={me} />
           </div>

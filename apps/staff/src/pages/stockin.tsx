@@ -92,7 +92,7 @@ export function StockInPage() {
   const list = useQuery({ queryKey: ['stock-in', page], queryFn: () => get<{ items: EntryRow[] }>('/api/v1/purchasing/stock-in', { page: Number(page), limit: 40 }) });
   const columns: Column<EntryRow>[] = [
     { header: 'Số phiếu', cell: (r) => <span className="code">{r.entryNo}</span> },
-    { header: 'Ngày', cell: (r) => formatDateTime(r.createdAt) },
+    { header: 'Ngày', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.createdAt) },
     { header: 'Nhà cung cấp', cell: (r) => r.supplierName ?? '—' },
     { header: 'Số HĐ NCC', cell: (r) => r.supplierInvoiceNo ?? '—' },
     { header: 'Dòng', align: 'right', cell: (r) => formatNumber(r.lines) },
@@ -302,7 +302,7 @@ function StockInForm({ orderId, onClose, onPosted }: { orderId: string | null; o
       }
     >
       <div className="flex flex-col gap-5">
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <SelectField label="Nhà cung cấp" required={hasNew} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
             <option value="">— Chọn —</option>
             {suppliers.data?.items.map((s) => (

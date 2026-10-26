@@ -142,7 +142,7 @@ function Config() {
     <div className="flex flex-col gap-6 pb-20">
       {GROUPS.map(([title, defs]) => (
         <Card key={title} title={title}>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {defs.map((d) => (
               <SettingInput key={d.key} def={d} value={values[d.key]} isSet={meta[d.key]?.isSet ?? false} masked={meta[d.key]?.secret ? String(meta[d.key]?.value ?? '') : ''} onChange={(v) => change(d.key, v)} />
             ))}
@@ -372,7 +372,7 @@ function Backup() {
           </Button>
         }
       >
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Health ok={!x.backup.stale} label="Sao lưu hằng ngày" detail={x.backup.lastSucceededAt ? `Lần gần nhất ${formatRelative(x.backup.lastSucceededAt)} (${x.backup.ageHours} giờ trước)` : 'Chưa có bản sao lưu thành công'} />
           <Health ok={!x.wal.lagging} label="Sao lưu liên tục (WAL)" detail={!x.wal.archiving ? 'Chưa bật trên máy chủ này' : x.wal.lastArchivedAt ? `Cập nhật ${formatRelative(x.wal.lastArchivedAt)}${x.wal.failedCount ? ` · ${x.wal.failedCount} lần lỗi` : ''}` : 'Chưa gửi được tệp WAL nào'} />
           <Health ok={x.database.ok} label="Cơ sở dữ liệu" detail={`Dung lượng ${size(x.database.sizeBytes)} · phiên bản ${x.version}`} />

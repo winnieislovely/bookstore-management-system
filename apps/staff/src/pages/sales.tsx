@@ -1,18 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
-import { AlertOctagon, ArrowLeft, Clock, FileCheck, MoreHorizontal, Printer, Receipt, RotateCcw, Send, XCircle } from 'lucide-react';
+import { AlertOctagon, ArrowLeft, Clock, FileCheck, FileText, MoreHorizontal, Printer, Receipt, RotateCcw, Send, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ApprovalPrompt, DataTable, Facts, FilterChips, Pager, SearchBox, SelectField, TextArea, toast, useParam, type Column } from '../components/data';
-import { Button, Card, ErrorState, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
+import { ApprovalPrompt, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
+import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
-import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
+import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { printSlip } from '../lib/print';
 import { can, useMe } from '../lib/session';
 import { Dialog } from '../pos/widgets';
 
 /** Sales list and record (FR-POS-12..17, Design §12.1, §12.3, §11.2 E-invoice). */
 
-export const METHOD_LABEL: Record<string, string> = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', card: 'Thẻ', store_credit: 'Tín dụng cửa hàng' };
+export const METHOD_LABEL: Record<string, string> = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', card: 'Thẻ' };
 
 const EINVOICE: Record<string, { tone: Tone; label: string; icon?: typeof Clock }> = {
   pending: { tone: 'neutral', label: 'Chờ xuất', icon: Clock },
@@ -53,31 +53,37 @@ interface SaleRow {
 export function SalesPage() {
   const navigate = useNavigate();
   const [q, setQ] = useParam('q');
-  const [status, setStatus] = useParam('status');
-  const [method, setMethod] = useParam('method');
+  const [status, setStatus] = useListParam('status');
+  const [method, setMethod] = useListParam('method');
+  const [time, setTime] = useParam('time');
   const [page, setPage] = useParam('page', '1');
-  const query = { q: q || undefined, status: status || undefined, method: method || undefined, page: Number(page), limit: 40 };
+  const range = timeRange(time);
+  const query = { q: q || undefined, status: status.join(',') || undefined, method: method.join(',') || undefined, ...range, page: Number(page), limit: 40 };
   const list = useQuery({ queryKey: ['sales', query], queryFn: () => get<{ items: SaleRow[] }>('/api/v1/pos/sales', query) });
 
   const columns: Column<SaleRow>[] = [
     { header: 'Mã đơn', cell: (r) => <span className="code">{r.docNo}</span> },
-    { header: 'Thời gian', cell: (r) => formatDateTime(r.soldAt) },
+    { header: 'Thời gian', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.soldAt) },
     { header: 'Khách hàng', cell: (r) => (r.customerName ? <span>{r.customerName}<span className="block text-[13px] text-ink-500">{r.customerPhone && formatPhone(r.customerPhone)}</span></span> : <span className="text-ink-500">Khách lẻ</span>) },
     { header: 'Thu ngân', cell: (r) => r.cashier },
     { header: 'Thanh toán', cell: (r) => (r.methods ?? []).map((m) => METHOD_LABEL[m] ?? m).join(', ') },
     { header: 'Tổng tiền', align: 'right', cell: (r) => formatVnd(r.totalVnd) },
-    { header: 'Trạng thái', cell: (r) => <div className="flex flex-wrap gap-1"><SaleStatus status={r.status} /><EinvoiceChip status={r.einvoiceStatus} /></div> },
+    // Sale status only; the e-invoice state is on the sale record (Design §12.1).
+    { header: 'Trạng thái', cell: (r) => <SaleStatus status={r.status} /> },
   ];
 
   return (
     <>
       <PageHeader title="Đơn bán" />
-      <div className="mb-4 flex flex-col gap-3">
+      <div className="mb-4 flex items-center gap-2">
         <SearchBox value={q} onChange={setQ} placeholder="Tìm mã đơn, khách hàng, SĐT, SKU…" />
-        <div className="flex flex-wrap gap-4">
-          <FilterChips options={[{ key: 'completed', label: 'Hoàn tất' }, { key: 'voided', label: 'Đã hủy' }]} value={status as 'completed' | 'voided' | ''} onChange={setStatus} />
-          <FilterChips options={[{ key: 'cash', label: 'Tiền mặt' }, { key: 'transfer', label: 'Chuyển khoản' }, { key: 'card', label: 'Thẻ' }]} value={method as 'cash' | ''} onChange={setMethod} />
-        </div>
+        <FilterMenu
+          groups={[
+            { kind: 'custom', label: 'Thời gian', summary: timeLabel(time), active: !!time, onClear: () => setTime(''), content: <TimeFilter value={time} onChange={setTime} /> },
+            { label: 'Trạng thái', options: [{ key: 'completed', label: 'Hoàn tất' }, { key: 'voided', label: 'Đã hủy' }], values: status, onChange: setStatus },
+            { label: 'Thanh toán', options: [{ key: 'cash', label: 'Tiền mặt' }, { key: 'transfer', label: 'Chuyển khoản' }, { key: 'card', label: 'Thẻ' }], values: method, onChange: setMethod },
+          ]}
+        />
       </div>
       <DataTable
         columns={columns}
@@ -86,7 +92,7 @@ export function SalesPage() {
         onRow={(r) => navigate(`/sales/${r.id}`)}
         error={list.error}
         onRetry={() => list.refetch()}
-        empty={{ icon: Receipt, title: q || status || method ? 'Không có đơn phù hợp' : 'Chưa có đơn bán nào', help: 'Đơn bán tại quầy sẽ hiện ở đây.' }}
+        empty={{ icon: Receipt, title: q || status.length || method.length || time ? 'Không có đơn phù hợp' : 'Chưa có đơn bán nào', help: 'Đơn bán tại quầy sẽ hiện ở đây.' }}
       />
       <Pager page={Number(page)} hasMore={(list.data?.items.length ?? 0) === 40} onPage={(p) => setPage(String(p))} />
     </>
@@ -129,7 +135,7 @@ interface Sale {
   lines: SaleLine[];
   payments: { id: string; method: string; amountVnd: number; tenderedVnd: number | null; ref: string | null; verified: boolean }[];
   returns: { id: string; docNo: string; refundMethod: string; refundVnd: number; reason: string | null; createdAt: string }[];
-  einvoice: { status: string; invoiceNo: string | null; emailRequested: boolean; emailStatus: string | null; error: string | null } | null;
+  einvoice: { status: string; invoiceNo: string | null; emailRequested: boolean; emailStatus: string | null; error: string | null; buyerName: string | null } | null;
 }
 
 /** An open shift of the current user, needed to pay out a refund (FR-POS-13/14). */
@@ -152,13 +158,16 @@ export function SaleDetailPage() {
   const { data: me } = useMe();
   const sale = useQuery({ queryKey: ['sale', id], queryFn: () => get<Sale>(`/api/v1/pos/sales/${id}`) });
   const shift = useOpenShift();
-  const [dialog, setDialog] = useState<null | 'void' | 'return' | 'menu'>(null);
+  const [dialog, setDialog] = useState<null | 'void' | 'return' | 'menu' | 'einvoice'>(null);
   const [retrying, setRetrying] = useState(false);
 
   if (sale.isError) return <ErrorState error={sale.error} onRetry={() => sale.refetch()} />;
   if (!sale.data) return <Skeleton className="h-64" />;
   const s = sale.data;
   const returnable = s.status === 'completed' && s.lines.some((l) => l.qty > l.returnedQty);
+  const canPrint = can(me, 'sale.reprint');
+  const canReturn = returnable && can(me, 'return.create');
+  const canVoid = s.status === 'completed';
   const change = s.payments.reduce((a, p) => a + (p.method === 'cash' && p.tenderedVnd ? p.tenderedVnd - p.amountVnd : 0), 0);
 
   return (
@@ -170,23 +179,8 @@ export function SaleDetailPage() {
           </Link>
         }
         title={s.docNo}
-        actions={
-          <>
-            {can(me, 'sale.reprint') && (
-              <Button variant="secondary" icon={Printer} onClick={() => printSlip(s.id).catch((e) => toast.error(e.message))}>
-                In lại phiếu
-              </Button>
-            )}
-            {returnable && can(me, 'return.create') && (
-              <Button variant="primary" icon={RotateCcw} onClick={() => setDialog('return')}>
-                Đổi / trả hàng
-              </Button>
-            )}
-            {s.status === 'completed' && (
-              <Button variant="ghost" icon={MoreHorizontal} aria-label="Thao tác khác" onClick={() => setDialog('menu')} />
-            )}
-          </>
-        }
+        // All sale actions live in the ⋯ menu on every screen size (Design §12.3).
+        menu={(canPrint || canReturn || canVoid) && <Button variant="ghost" icon={MoreHorizontal} aria-label="Thao tác khác" onClick={() => setDialog('menu')} />}
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <SaleStatus status={s.status} />
@@ -195,10 +189,30 @@ export function SaleDetailPage() {
         {s.payments.some((p) => !p.verified) && <StatusChip tone="warning" icon={AlertOctagon}>Chưa xác minh chuyển khoản</StatusChip>}
         <span className="text-sm text-ink-500">{formatDateTime(s.soldAt)}</span>
       </div>
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex flex-col gap-6">
           <Card title="Sản phẩm">
-            <div className="overflow-x-auto">
+            {/* Phones: stacked lines instead of the table (Design §12.3). */}
+            <ul className="divide-y divide-paper-300 text-sm sm:hidden">
+              {s.lines.map((l) => (
+                <li key={l.id} className="py-2">
+                  <p className="font-medium">{l.description}</p>
+                  <p className="text-[13px] text-ink-500">
+                    {l.sku && <span className="code">{l.sku}</span>}
+                    {l.returnedQty > 0 && <span className="ml-2 text-warning-700">Đã trả {l.returnedQty}</span>}
+                    {l.priceOverridden && <span className="ml-2">Đã sửa giá</span>}
+                  </p>
+                  <div className="mt-1 flex items-baseline justify-between gap-3">
+                    <span className="text-ink-700 num">
+                      {l.qty} × {formatVnd(l.unitPriceVnd)}
+                      {l.discountVnd > 0 && <span className="ml-2 text-success-700">−{formatNumber(l.discountVnd)}</span>}
+                    </span>
+                    <span className="font-medium whitespace-nowrap num">{formatVnd(l.totalVnd)}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="overflow-x-auto max-sm:hidden">
               <table className="w-full min-w-[560px] text-sm">
                 <thead className="text-[13px] text-ink-500">
                   <tr className="h-9 border-b border-paper-300">
@@ -287,11 +301,29 @@ export function SaleDetailPage() {
               <p className="text-sm text-ink-700">Đơn có gắn khách hàng.</p>
             </Card>
           )}
-          {s.einvoice && (
+          {(s.status === 'completed' || s.einvoice) && (
             <Card title="Hóa đơn điện tử">
               <div className="flex flex-col gap-3 text-sm">
-                <Facts items={[['Trạng thái', <EinvoiceChip status={s.einvoice.status} />], ['Số hóa đơn', s.einvoice.invoiceNo ? <span className="code">{s.einvoice.invoiceNo}</span> : '—'], ['Gửi email', s.einvoice.emailRequested ? (s.einvoice.emailStatus ?? 'Đang chờ') : 'Không']]} />
-                {s.einvoice.status === 'failed' && (
+                <Facts
+                  items={[
+                    ['Trạng thái', s.einvoice ? <EinvoiceChip status={s.einvoice.status} /> : <span className="text-ink-500">Chưa xuất</span>],
+                    ['Số hóa đơn', s.einvoice?.invoiceNo ? <span className="code">{s.einvoice.invoiceNo}</span> : '—'],
+                    ['Người mua', s.einvoice?.buyerName ?? 'Khách lẻ'],
+                    ['Gửi email', s.einvoice?.emailRequested ? (s.einvoice.emailStatus ?? 'Đang chờ') : 'Không'],
+                  ]}
+                />
+                {/* Issue on request / add buyer details (FR-POS-15, FR-POS-16, Design §12.3). */}
+                {s.status === 'completed' && can(me, 'sale.create') && (!s.einvoice || s.einvoice.status === 'pending') && (
+                  <Button variant="primary" icon={FileText} onClick={() => setDialog('einvoice')}>
+                    Xuất hóa đơn
+                  </Button>
+                )}
+                {s.status === 'completed' && can(me, 'sale.create') && s.einvoice?.status === 'issued' && (
+                  <Button variant="secondary" icon={Send} onClick={() => setDialog('einvoice')}>
+                    Gửi lại cho khách
+                  </Button>
+                )}
+                {s.einvoice?.status === 'failed' && (
                   <>
                     {s.einvoice.error && <InlineAlert tone="danger">{s.einvoice.error}</InlineAlert>}
                     {can(me, 'einvoice.manage') && (
@@ -324,13 +356,36 @@ export function SaleDetailPage() {
 
       {dialog === 'menu' && (
         <Dialog title="Thao tác" size="sm" onClose={() => setDialog(null)}>
-          <Button variant="destructive-outline" full icon={XCircle} onClick={() => setDialog('void')}>
-            Hủy đơn
-          </Button>
+          <div className="flex flex-col gap-2">
+            {canPrint && (
+              <Button
+                variant="secondary"
+                full
+                icon={Printer}
+                onClick={() => {
+                  setDialog(null);
+                  printSlip(s.id).catch((e) => toast.error(e.message));
+                }}
+              >
+                In lại phiếu
+              </Button>
+            )}
+            {canReturn && (
+              <Button variant="secondary" full icon={RotateCcw} onClick={() => setDialog('return')}>
+                Đổi / trả hàng
+              </Button>
+            )}
+            {canVoid && (
+              <Button variant="destructive-outline" full icon={XCircle} onClick={() => setDialog('void')}>
+                Hủy đơn
+              </Button>
+            )}
+          </div>
         </Dialog>
       )}
       {dialog === 'void' && <VoidDialog sale={s} shift={shift.data ?? null} canVoid={can(me, 'sale.void_paid')} onClose={() => setDialog(null)} onDone={() => sale.refetch()} />}
       {dialog === 'return' && <ReturnDialog sale={s} shift={shift.data ?? null} onClose={() => setDialog(null)} onDone={() => sale.refetch()} />}
+      {dialog === 'einvoice' && <EinvoiceRequestDialog saleId={s.id} reissue={s.einvoice?.status === 'issued'} onClose={() => setDialog(null)} onDone={() => sale.refetch()} />}
     </>
   );
 }
@@ -496,16 +551,62 @@ function ReturnDialog({ sale, shift, onClose, onDone }: { sale: Sale; shift: { i
             );
           })}
         </ul>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <SelectField label="Hoàn tiền bằng" value={method} onChange={(e) => setMethod(e.target.value)}>
             <option value="cash">Tiền mặt</option>
             <option value="transfer">Chuyển khoản</option>
             <option value="card">Thẻ</option>
-            {sale.customerId && <option value="store_credit">Tín dụng cửa hàng</option>}
           </SelectField>
           <TextArea label="Lý do" value={reason} onChange={(e) => setReason(e.target.value)} />
         </div>
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+      </div>
+    </Dialog>
+  );
+}
+
+// =============================================================================================
+// E-invoice on request: buyer details, optional email (FR-POS-15, FR-POS-16, Design §12.3)
+
+function EinvoiceRequestDialog({ saleId, reissue, onClose, onDone }: { saleId: string; reissue: boolean; onClose: () => void; onDone: () => void }) {
+  const [buyer, setBuyer] = useState({ name: '', taxCode: '', address: '', email: '' });
+  const [busy, setBusy] = useState(false);
+  const set = (k: keyof typeof buyer) => (e: React.ChangeEvent<HTMLInputElement>) => setBuyer({ ...buyer, [k]: e.target.value });
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const body = Object.fromEntries(Object.entries(buyer).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+      await post(`/api/v1/pos/sales/${saleId}/einvoice-request`, body);
+      toast.success(buyer.email.trim() ? 'Đã gửi yêu cầu xuất hóa đơn; hóa đơn sẽ được gửi tới email người mua.' : 'Đã gửi yêu cầu xuất hóa đơn.');
+      onDone();
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      title={reissue ? 'Gửi lại hóa đơn cho khách' : 'Xuất hóa đơn điện tử'}
+      size="sm"
+      onClose={busy ? undefined : onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Hủy
+          </Button>
+          <Button variant="primary" icon={FileText} loading={busy} disabled={!buyer.name.trim()} onClick={submit}>
+            {reissue ? 'Gửi lại' : 'Xuất hóa đơn'}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <Field label="Tên người mua / đơn vị" required value={buyer.name} onChange={set('name')} />
+        <Field label="Mã số thuế" value={buyer.taxCode} onChange={set('taxCode')} inputMode="numeric" />
+        <Field label="Địa chỉ" value={buyer.address} onChange={set('address')} />
+        <Field label="Email nhận hóa đơn" type="email" value={buyer.email} onChange={set('email')} helper="Để trống nếu khách không cần nhận qua email." />
       </div>
     </Dialog>
   );

@@ -29,7 +29,6 @@ export interface CachedCustomer {
   phoneE164: string | null;
   tierCode: string | null;
   pointsBalance: number;
-  storeCreditVnd: number;
 }
 
 export interface Approver {

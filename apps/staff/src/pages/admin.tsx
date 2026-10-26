@@ -276,7 +276,7 @@ function RoleForm({ role, onClose, onSaved }: { role: Role | null; onClose: () =
                 Chọn tất cả
               </button>
             </legend>
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {ps.map((p) => (
                 <label key={p} className="flex items-start gap-2 text-sm">
                   <input type="checkbox" className="mt-0.5 size-5 shrink-0" checked={perms.has(p)} onChange={(e) => toggle(p, e.target.checked)} />
@@ -325,7 +325,6 @@ const EXCEPTION_LABEL: Record<string, string> = {
   offline_approval: 'Duyệt ngoại tuyến',
   approval_revoked: 'Người duyệt đã bị thu quyền',
   clock_skew: 'Lệch giờ máy',
-  store_credit_overdrawn: 'Tín dụng vượt số dư',
   shift_conflict: 'Xung đột ca',
 };
 const dangerous = (code: string) => code.startsWith('rejected') || code === 'approval_revoked';
@@ -543,7 +542,7 @@ export function AuditPage() {
         <Dialog title={open.action} size="lg" onClose={() => setOpen(null)}>
           <div className="flex flex-col gap-4">
             <Facts items={[['Thời gian', formatDateTime(open.at)], ['Người thực hiện', open.actorName ?? 'Hệ thống'], ['Đối tượng', `${open.entity} ${open.entityId ?? ''}`], ['Mã yêu cầu', <span className="code">{open.requestId}</span>]]} />
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {(['before', 'after'] as const).map((k) => (
                 <div key={k}>
                   <p className="mb-1 text-[13px] font-semibold text-ink-700">{k === 'before' ? 'Trước' : 'Sau'}</p>

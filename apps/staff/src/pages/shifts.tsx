@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { AlertOctagon, ArrowLeft, Wallet } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { DataTable, Facts, type Column } from '../components/data';
+import { DataTable, Facts, FilterMenu, SearchBox, TimeFilter, timeLabel, timeRange, useListParam, useParam, type Column } from '../components/data';
 import { Card, ErrorState, PageHeader, Skeleton, StatusChip } from '../components/ui';
 import { get } from '../lib/api';
 import { formatDateTime, formatNumber, formatVnd } from '../lib/format';
@@ -38,13 +38,19 @@ export function ShiftStatus({ s }: { s: Pick<ShiftRow, 'closedAt' | 'varianceVnd
 
 export function ShiftsPage() {
   const navigate = useNavigate();
-  const list = useQuery({ queryKey: ['shifts'], queryFn: () => get<{ items: ShiftRow[] }>('/api/v1/pos/shifts', { limit: 200 }) });
+  const [q, setQ] = useParam('q');
+  const [registers, setRegisters] = useListParam('register');
+  const [time, setTime] = useParam('time');
+  const regs = useQuery({ queryKey: ['registers'], queryFn: () => get<{ items: { id: string; code: string; name?: string }[] }>('/api/v1/pos/registers') });
+  const query = { q: q || undefined, register: registers.join(',') || undefined, ...timeRange(time), limit: 200 };
+  const filtered = !!(q || registers.length || time);
+  const list = useQuery({ queryKey: ['shifts', query], queryFn: () => get<{ items: ShiftRow[] }>('/api/v1/pos/shifts', query) });
   const columns: Column<ShiftRow>[] = [
     { header: 'Ca', cell: (r) => <span className="code">#{r.shiftNo}</span> },
     { header: 'Quầy', cell: (r) => r.registerCode },
     { header: 'Thu ngân', cell: (r) => r.openedBy },
-    { header: 'Mở lúc', cell: (r) => formatDateTime(r.openedAt) },
-    { header: 'Đóng lúc', cell: (r) => formatDateTime(r.closedAt) || '—' },
+    { header: 'Mở lúc', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.openedAt) },
+    { header: 'Đóng lúc', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.closedAt) || '—' },
     { header: 'Dự kiến', align: 'right', cell: (r) => (r.expectedVnd == null ? '—' : formatVnd(r.expectedVnd)) },
     { header: 'Đếm được', align: 'right', cell: (r) => (r.countedVnd == null ? '—' : formatVnd(r.countedVnd)) },
     { header: 'Trạng thái', cell: (r) => <div><ShiftStatus s={r} />{r.varianceReason && <span className="mt-1 block text-[13px] text-ink-500">{r.varianceReason}</span>}</div> },
@@ -52,6 +58,16 @@ export function ShiftsPage() {
   return (
     <>
       <PageHeader title="Ca làm" />
+      {/* Search and filters (Design §12.1) */}
+      <div className="mb-4 flex items-center gap-2">
+        <SearchBox value={q} onChange={setQ} placeholder="Tìm số ca hoặc tên thu ngân…" />
+        <FilterMenu
+          groups={[
+            { label: 'Quầy', options: (regs.data?.items ?? []).map((r) => ({ key: r.id, label: `Quầy ${r.code}` })), values: registers, onChange: setRegisters },
+            { kind: 'custom', label: 'Thời gian', summary: timeLabel(time), active: !!time, onClear: () => setTime(''), content: <TimeFilter value={time} onChange={setTime} /> },
+          ]}
+        />
+      </div>
       <DataTable
         columns={columns}
         rows={list.data?.items}
@@ -59,7 +75,7 @@ export function ShiftsPage() {
         onRow={(r) => navigate(`/shifts/${r.id}`)}
         error={list.error}
         onRetry={() => list.refetch()}
-        empty={{ icon: Wallet, title: 'Chưa có ca làm nào', help: 'Ca được mở ở màn hình Bán hàng.' }}
+        empty={filtered ? { icon: Wallet, title: 'Không có ca phù hợp', help: 'Thử bỏ bớt bộ lọc hoặc đổi từ khóa.' } : { icon: Wallet, title: 'Chưa có ca làm nào', help: 'Ca được mở ở màn hình Bán hàng.' }}
       />
     </>
   );
@@ -95,7 +111,7 @@ export function ShiftDetailPage() {
           {s.closedAt && ` → ${formatDateTime(s.closedAt)}`}
         </span>
       </div>
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card title="Tiền mặt">
           <Facts
             items={[

@@ -127,7 +127,7 @@ function SetupForm() {
         >
           <Field label={t('setup.storeName')} required value={store.name} onChange={(e) => setStore({ ...store, name: e.target.value })} />
           <Field label={t('setup.address')} value={store.address} onChange={(e) => setStore({ ...store, address: e.target.value })} />
-          <div className="grid gap-5 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
             <Field label={t('setup.taxCode')} inputMode="numeric" value={store.taxCode} onChange={(e) => setStore({ ...store, taxCode: e.target.value })} />
             <Field label={t('setup.phone')} inputMode="tel" value={store.phone} onChange={(e) => setStore({ ...store, phone: e.target.value })} />
           </div>

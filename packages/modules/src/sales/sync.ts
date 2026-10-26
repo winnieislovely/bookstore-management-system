@@ -203,7 +203,7 @@ export async function bootstrap(ctx: Ctx, device: Device) {
   const promos = await promotions.activeSnapshot(ctx.db, now, 'counter', null);
   const tiers = await ctx.db.select({ code: schema.tier.code, name: schema.tier.name, benefits: schema.tier.benefits }).from(schema.tier);
   const customerRows = await ctx.db
-    .select({ id: schema.customer.id, name: schema.customer.name, phoneE164: schema.customer.phoneE164, tierCode: schema.tier.code, pointsBalance: schema.customer.pointsBalance, storeCreditVnd: schema.customer.storeCreditVnd })
+    .select({ id: schema.customer.id, name: schema.customer.name, phoneE164: schema.customer.phoneE164, tierCode: schema.tier.code, pointsBalance: schema.customer.pointsBalance })
     .from(schema.customer)
     .leftJoin(schema.tier, eq(schema.tier.id, schema.customer.tierId))
     .where(isNull(schema.customer.anonymisedAt));
@@ -307,7 +307,7 @@ const SaleCompleted = z.object({
       )
       .min(1),
     payments: z.array(
-      z.object({ method: z.enum(['cash', 'transfer', 'card', 'store_credit']), amountVnd: z.number().int().positive(), tenderedVnd: money.optional(), ref: z.string().max(40).optional() }),
+      z.object({ method: z.enum(['cash', 'transfer', 'card']), amountVnd: z.number().int().positive(), tenderedVnd: money.optional(), ref: z.string().max(40).optional() }),
     ),
     subtotalVnd: money,
     discountVnd: money,
@@ -332,7 +332,7 @@ const SaleReturned = z.object({
     clientShiftId: z.uuid().optional(),
     shiftId: z.uuid().optional(),
     lines: z.array(z.object({ lineNo: z.number().int().positive(), qty: z.number().int().positive(), restock: z.boolean() })).min(1),
-    refundMethod: z.enum(['cash', 'transfer', 'card', 'store_credit']),
+    refundMethod: z.enum(['cash', 'transfer', 'card']),
     reason: z.string().max(500).optional(),
     by: z.uuid(),
     at: z.iso.datetime(),
@@ -356,7 +356,6 @@ export type SyncException =
   | 'offline_approval'
   | 'approval_revoked'
   | 'clock_skew'
-  | 'store_credit_overdrawn'
   | 'shift_conflict';
 
 export type EventResult =
@@ -582,7 +581,7 @@ async function processEvent(tx: Tx, ctx: Ctx, device: Device, e: SyncEvent): Pro
       method: x.method,
       amountVnd: x.amountVnd,
       tenderedVnd: x.method === 'cash' ? (x.tenderedVnd ?? x.amountVnd) : null,
-      ref: x.method === 'cash' || x.method === 'store_credit' ? null : (x.ref ?? null),
+      ref: x.method === 'cash' ? null : (x.ref ?? null),
       // A transfer taken offline stays unverified until a manager confirms it (TDD §7.6).
       verified: x.method !== 'transfer',
     });
@@ -597,13 +596,6 @@ async function processEvent(tx: Tx, ctx: Ctx, device: Device, e: SyncEvent): Pro
     if (p.redeemPoints > 0) {
       const delta = await customers.post(tx, ctx, { customerId: p.customerId, delta: -p.redeemPoints, reason: 'redeem', refType: 'sale', refId: saleId }, { floorAtZero: true });
       if (-delta < p.redeemPoints) exceptions.push('points_overdrawn');
-    }
-    const credit = p.payments.filter((x) => x.method === 'store_credit').reduce((a, x) => a + x.amountVnd, 0);
-    if (credit > 0) {
-      const [bal] = await tx.select({ b: schema.customer.storeCreditVnd }).from(schema.customer).where(eq(schema.customer.id, p.customerId)).for('update');
-      const take = Math.min(credit, bal?.b ?? 0);
-      if (take > 0) await customers.postCredit(tx, ctx, { customerId: p.customerId, deltaVnd: -take, reason: 'spend', refType: 'sale', refId: saleId });
-      if (take < credit) exceptions.push('store_credit_overdrawn');
     }
     if (!p.isDeposit) {
       const profile = await customers.pricingProfile(tx, p.customerId);

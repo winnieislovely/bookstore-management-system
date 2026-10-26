@@ -2,14 +2,15 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Download, GitMerge, MoreHorizontal, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ConfirmDialog, DataTable, Facts, SearchBox, Tabs, TextArea, toast, useParam, type Column } from '../components/data';
+import { ConfirmDialog, DataTable, Facts, FilterMenu, SearchBox, TextArea, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip } from '../components/ui';
+import { defaultTiers } from '@bookstore/domain';
 import { ApiError, get, patch, post } from '../lib/api';
 import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { can, useMe } from '../lib/session';
 import { Dialog } from '../pos/widgets';
 
-/** Customers, loyalty points and store credit (FR-CRM-01..10, Design §12.1, §12.3). */
+/** Customers and loyalty points (FR-CRM-01..09, Design §12.1, §12.3). */
 
 interface CustomerRow {
   id: string;
@@ -18,20 +19,34 @@ interface CustomerRow {
   email: string | null;
   pointsBalance: number;
   tierName: string | null;
+  orders: number;
+  ordersVnd: number;
+  lastPurchaseAt: string | null;
 }
+
+/** Default tiers (TDD §4.9), as in the promotion scope picker. */
+const TIER_OPTIONS = defaultTiers(0, 0).map((t) => ({ key: t.code, label: t.name }));
 
 export function CustomersPage() {
   const { data: me } = useMe();
   const navigate = useNavigate();
   const [q, setQ] = useParam('q');
+  const [tier, setTier] = useListParam('tier');
+  const [lastPurchase, setLastPurchase] = useParam('lastPurchase');
+  const [orders, setOrders] = useListParam('orders');
+  const [points, setPoints] = useListParam('points');
   const [creating, setCreating] = useState(false);
-  const list = useQuery({ queryKey: ['customers', q], queryFn: () => get<{ items: CustomerRow[] }>('/api/v1/customers', { q }) });
+  const query = { q: q || undefined, tier: tier.join(',') || undefined, lastPurchase: lastPurchase || undefined, orders: orders.join(',') || undefined, points: points.join(',') || undefined };
+  const filtered = !!(tier.length || lastPurchase || orders.length || points.length);
+  const list = useQuery({ queryKey: ['customers', query], queryFn: () => get<{ items: CustomerRow[] }>('/api/v1/customers', query) });
   const columns: Column<CustomerRow>[] = [
     { header: 'Khách hàng', cell: (r) => <span className="font-medium">{r.name}</span> },
-    { header: 'Số điện thoại', cell: (r) => (r.phoneE164 ? <span className="num">{formatPhone(r.phoneE164)}</span> : '—') },
-    { header: 'Email', cell: (r) => r.email ?? '—' },
+    { header: 'Số điện thoại', className: 'whitespace-nowrap', cell: (r) => (r.phoneE164 ? <span className="num">{formatPhone(r.phoneE164)}</span> : '—') },
     { header: 'Hạng', cell: (r) => (r.tierName ? <StatusChip tone="brand">{r.tierName}</StatusChip> : '—') },
     { header: 'Điểm', align: 'right', cell: (r) => formatNumber(r.pointsBalance) },
+    { header: 'Số đơn', align: 'right', cell: (r) => formatNumber(r.orders) },
+    { header: 'Tổng mua', align: 'right', cell: (r) => formatVnd(r.ordersVnd) },
+    { header: 'Mua gần nhất', className: 'whitespace-nowrap', cell: (r) => (r.lastPurchaseAt ? formatDate(r.lastPurchaseAt) : <span className="text-ink-500">Chưa mua</span>) },
   ];
   return (
     <>
@@ -45,8 +60,51 @@ export function CustomersPage() {
           )
         }
       />
-      <div className="mb-4">
+      <div className="mb-4 flex items-center gap-2">
         <SearchBox value={q} onChange={setQ} placeholder="Tìm theo tên, số điện thoại, email…" />
+        {/* Filters (FR-CRM-02, Design §12.1) */}
+        <FilterMenu
+          groups={[
+            { label: 'Hạng', options: TIER_OPTIONS, values: tier, onChange: setTier },
+            {
+              kind: 'single',
+              label: 'Mua gần nhất',
+              options: [
+                { key: '30d', label: '30 ngày qua' },
+                { key: '90d', label: '90 ngày qua' },
+                { key: '180d', label: '6 tháng qua' },
+                { key: 'over180d', label: 'Hơn 6 tháng chưa mua' },
+                { key: 'never', label: 'Chưa mua lần nào' },
+              ],
+              value: lastPurchase,
+              onChange: setLastPurchase,
+            },
+            {
+              label: 'Số đơn',
+              options: [
+                { key: '0', label: 'Chưa có đơn' },
+                { key: '1', label: '1 đơn' },
+                { key: '2-5', label: '2–5 đơn' },
+                { key: '6-10', label: '6–10 đơn' },
+                { key: '11+', label: 'Trên 10 đơn' },
+              ],
+              values: orders,
+              onChange: setOrders,
+            },
+            {
+              label: 'Điểm',
+              options: [
+                { key: '0', label: '0 điểm' },
+                { key: '1-99', label: '1–99 điểm' },
+                { key: '100-499', label: '100–499 điểm' },
+                { key: '500-999', label: '500–999 điểm' },
+                { key: '1000+', label: 'Từ 1.000 điểm' },
+              ],
+              values: points,
+              onChange: setPoints,
+            },
+          ]}
+        />
       </div>
       <DataTable
         columns={columns}
@@ -55,8 +113,8 @@ export function CustomersPage() {
         onRow={(r) => navigate(`/customers/${r.id}`)}
         error={list.error}
         onRetry={() => list.refetch()}
-        minWidth={640}
-        empty={{ icon: Users, title: q ? `Không tìm thấy khách hàng “${q}”` : 'Chưa có khách hàng', help: 'Tìm không dấu cũng được, hoặc theo 4 số cuối điện thoại.' }}
+        minWidth={760}
+        empty={{ icon: Users, title: q ? `Không tìm thấy khách hàng “${q}”` : filtered ? 'Không có khách hàng phù hợp' : 'Chưa có khách hàng', help: 'Tìm không dấu cũng được, hoặc theo 4 số cuối điện thoại.' }}
       />
       {creating && <CustomerForm onClose={() => setCreating(false)} onSaved={(id) => navigate(`/customers/${id}`)} />}
     </>
@@ -69,13 +127,11 @@ interface Customer extends CustomerRow {
   tags: string[];
   source: string | null;
   tierCode: string | null;
-  storeCreditVnd: number;
   anonymisedAt: string | null;
   mergedInto: string | null;
   createdAt: string;
   version: number;
   pointsLedger: { id: string; delta: number; reason: string; note: string | null; at: string; expiresAt: string | null }[];
-  storeCreditLedger: { id: string; deltaVnd: number; reason: string; note: string | null; at: string }[];
 }
 
 const REASON: Record<string, string> = {
@@ -88,11 +144,8 @@ const REASON: Record<string, string> = {
   void: 'Hủy đơn',
   merge: 'Gộp hồ sơ',
   import: 'Nhập dữ liệu',
-  refund: 'Hoàn tiền',
-  spend: 'Thanh toán',
   redeem_refund: 'Hoàn điểm đã đổi',
   return_reversal: 'Thu hồi do trả hàng',
-  spend_reversal: 'Hoàn tín dụng',
 };
 
 function CustomerForm({ customer, onClose, onSaved }: { customer?: Customer; onClose: () => void; onSaved: (id: string) => void }) {
@@ -144,7 +197,7 @@ function CustomerForm({ customer, onClose, onSaved }: { customer?: Customer; onC
         </>
       }
     >
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Họ tên" required value={f.name} onChange={set('name')} className="sm:col-span-2" autoFocus />
         <Field label="Số điện thoại" required inputMode="tel" value={f.phone} onChange={set('phone')} />
         <Field label="Email" type="email" value={f.email} onChange={set('email')} />
@@ -178,8 +231,7 @@ export function CustomerDetailPage() {
   const navigate = useNavigate();
   const c = useQuery({ queryKey: ['customer', id], queryFn: () => get<Customer>(`/api/v1/customers/${id}`) });
   const purchases = useQuery({ queryKey: ['customer-purchases', id], queryFn: () => get<Purchases>(`/api/v1/customers/${id}/purchases`) });
-  const [tab, setTab] = useState<'purchases' | 'points' | 'credit'>('purchases');
-  const [dialog, setDialog] = useState<null | 'edit' | 'points' | 'credit' | 'merge' | 'erase' | 'menu'>(null);
+  const [dialog, setDialog] = useState<null | 'edit' | 'points' | 'merge' | 'erase' | 'menu'>(null);
 
   if (c.isError) return <ErrorState error={c.error} onRetry={() => c.refetch()} />;
   if (!c.data) return <Skeleton className="h-64" />;
@@ -199,16 +251,13 @@ export function CustomerDetailPage() {
           </Link>
         }
         title={x.name}
-        actions={
+        // Icon-only “Sửa” directly beside ⋯ on the title row (Design §12.3).
+        menu={
           !erased && (
-            <>
-              {can(me, 'customer.manage') && (
-                <Button variant="secondary" icon={Pencil} onClick={() => setDialog('edit')}>
-                  Sửa
-                </Button>
-              )}
+            <div className="flex items-center gap-1">
+              {can(me, 'customer.manage') && <Button variant="ghost" icon={Pencil} aria-label="Sửa" title="Sửa" onClick={() => setDialog('edit')} />}
               {(can(me, 'customer.manage') || can(me, 'customer.erase')) && <Button variant="ghost" icon={MoreHorizontal} aria-label="Thao tác khác" onClick={() => setDialog('menu')} />}
-            </>
+            </div>
           )
         }
       />
@@ -228,22 +277,17 @@ export function CustomerDetailPage() {
           </InlineAlert>
         </div>
       )}
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div>
-          <Tabs
-            tabs={[
-              { key: 'purchases', label: 'Mua hàng', ...(purchases.data && { count: purchases.data.items.length }) },
-              { key: 'points', label: 'Điểm' },
-              { key: 'credit', label: 'Tín dụng cửa hàng' },
-            ]}
-            value={tab}
-            onChange={setTab}
-          />
-          {tab === 'purchases' && (
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+        {/* One page, no tabs: purchases, then points (Design §12.3). */}
+        <div className="flex min-w-0 flex-col gap-6">
+          <section>
+            <h2 className="mb-3 text-base font-semibold text-ink-900">
+              Mua hàng{purchases.data && <span className="font-normal text-ink-500 num"> ({formatNumber(purchases.data.items.length)})</span>}
+            </h2>
             <DataTable
               columns={[
                 { header: 'Mã đơn', cell: (r) => <span className="code">{r.docNo}</span> },
-                { header: 'Thời gian', cell: (r) => formatDateTime(r.soldAt) },
+                { header: 'Thời gian', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.soldAt) },
                 { header: 'Trạng thái', cell: (r) => (r.status === 'voided' ? <StatusChip tone="neutral">Đã hủy</StatusChip> : <StatusChip tone="success">Hoàn tất</StatusChip>) },
                 { header: 'Tổng', align: 'right', cell: (r) => formatVnd(r.totalVnd) },
                 { header: 'Đã trả', align: 'right', cell: (r) => (r.returnsVnd ? formatVnd(r.returnsVnd) : '') },
@@ -256,19 +300,11 @@ export function CustomerDetailPage() {
               minWidth={560}
               empty={{ icon: Users, title: 'Chưa có đơn mua' }}
             />
-          )}
-          {tab === 'points' && (
-            <Ledger
-              rows={x.pointsLedger.map((l) => ({ id: l.id, at: l.at, reason: REASON[l.reason] ?? l.reason, note: l.note, amount: `${l.delta > 0 ? '+' : ''}${formatNumber(l.delta)}`, extra: l.expiresAt ? `Hết hạn ${formatDate(l.expiresAt)}` : null }))}
-              action={!erased && can(me, 'customer.adjust_points') && <Button variant="tonal" size="sm" onClick={() => setDialog('points')}>Điều chỉnh điểm</Button>}
-            />
-          )}
-          {tab === 'credit' && (
-            <Ledger
-              rows={x.storeCreditLedger.map((l) => ({ id: l.id, at: l.at, reason: REASON[l.reason] ?? l.reason, note: l.note, amount: `${l.deltaVnd > 0 ? '+' : ''}${formatVnd(l.deltaVnd)}`, extra: null }))}
-              action={!erased && can(me, 'customer.adjust_points') && <Button variant="tonal" size="sm" onClick={() => setDialog('credit')}>Điều chỉnh tín dụng</Button>}
-            />
-          )}
+          </section>
+          <Ledger
+            rows={x.pointsLedger.map((l) => ({ id: l.id, at: l.at, reason: REASON[l.reason] ?? l.reason, note: l.note, amount: `${l.delta > 0 ? '+' : ''}${formatNumber(l.delta)}`, extra: l.expiresAt ? `Hết hạn ${formatDate(l.expiresAt)}` : null }))}
+            action={!erased && can(me, 'customer.adjust_points') && <Button variant="tonal" size="sm" onClick={() => setDialog('points')}>Điều chỉnh điểm</Button>}
+          />
         </div>
         <div className="flex flex-col gap-6">
           <Card title="Hồ sơ">
@@ -279,7 +315,6 @@ export function CustomerDetailPage() {
                 ['Ngày sinh', x.birthDate ? formatDate(x.birthDate) : null],
                 ['Hạng', x.tierName ? <StatusChip tone="brand">{x.tierName}</StatusChip> : null],
                 ['Điểm', <span className="font-semibold num">{formatNumber(x.pointsBalance)}</span>],
-                ['Tín dụng cửa hàng', <span className="font-semibold num">{formatVnd(x.storeCreditVnd)}</span>],
                 ['Khách từ', formatDate(x.createdAt)],
               ]}
             />
@@ -322,7 +357,7 @@ export function CustomerDetailPage() {
           </div>
         </Dialog>
       )}
-      {(dialog === 'points' || dialog === 'credit') && <AdjustDialog customerId={x.id} kind={dialog} onClose={() => setDialog(null)} onDone={refresh} />}
+      {dialog === 'points' && <AdjustDialog customerId={x.id} onClose={() => setDialog(null)} onDone={refresh} />}
       {dialog === 'merge' && <MergeDialog target={x} onClose={() => setDialog(null)} onDone={refresh} />}
       {dialog === 'erase' && <EraseDialog customer={x} onClose={() => setDialog(null)} onDone={refresh} />}
     </>
@@ -331,7 +366,7 @@ export function CustomerDetailPage() {
 
 function Ledger({ rows, action }: { rows: { id: string; at: string; reason: string; note: string | null; amount: string; extra: string | null }[]; action: React.ReactNode }) {
   return (
-    <Card title="50 giao dịch gần nhất" action={action}>
+    <Card title="Điểm" action={action}>
       {rows.length === 0 ? (
         <p className="text-ink-500">Chưa có giao dịch.</p>
       ) : (
@@ -355,23 +390,22 @@ function Ledger({ rows, action }: { rows: { id: string; at: string; reason: stri
   );
 }
 
-function AdjustDialog({ customerId, kind, onClose, onDone }: { customerId: string; kind: 'points' | 'credit'; onClose: () => void; onDone: () => void }) {
+function AdjustDialog({ customerId, onClose, onDone }: { customerId: string; onClose: () => void; onDone: () => void }) {
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
   const value = Number(amount.replace(/[^\d-]/g, ''));
   return (
     <ConfirmDialog
-      title={kind === 'points' ? 'Điều chỉnh điểm' : 'Điều chỉnh tín dụng cửa hàng'}
+      title="Điều chỉnh điểm"
       confirm="Lưu điều chỉnh"
       onClose={onClose}
       onConfirm={async () => {
-        if (kind === 'points') await post(`/api/v1/customers/${customerId}/points-adjust`, { delta: value, reason });
-        else await post(`/api/v1/customers/${customerId}/store-credit-adjust`, { deltaVnd: value, reason });
+        await post(`/api/v1/customers/${customerId}/points-adjust`, { delta: value, reason });
         toast.success('Đã lưu điều chỉnh.');
         onDone();
       }}
     >
-      <Field label={kind === 'points' ? 'Số điểm (+ cộng, − trừ)' : 'Số tiền (+ cộng, − trừ)'} required inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} {...(kind === 'credit' && { suffix: '₫' })} autoFocus />
+      <Field label="Số điểm (+ cộng, − trừ)" required inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
       <TextArea label="Lý do" required value={reason} onChange={(e) => setReason(e.target.value)} />
     </ConfirmDialog>
   );
@@ -384,7 +418,7 @@ function MergeDialog({ target, onClose, onDone }: { target: Customer; onClose: (
   return (
     <ConfirmDialog
       title="Gộp hồ sơ trùng"
-      body={`Điểm, tín dụng và lịch sử mua của hồ sơ được chọn sẽ chuyển sang ${target.name}. Hồ sơ đó sẽ đóng lại. Không hoàn tác được.`}
+      body={`Điểm và lịch sử mua của hồ sơ được chọn sẽ chuyển sang ${target.name}. Hồ sơ đó sẽ đóng lại. Không hoàn tác được.`}
       confirm="Gộp hồ sơ"
       destructive
       onClose={onClose}

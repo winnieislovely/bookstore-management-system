@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeftRight, BookOpen, Check, ChevronUp, Info, LogOut, Menu, MoreHorizontal, RefreshCw, ScanBarcode, Ticket, User, Wallet, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, ArrowLeftRight, BookOpen, Check, Info, LogOut, Menu, Minus, MoreHorizontal, Plus, RefreshCw, ScanBarcode, ShoppingCart, Ticket, User, Wallet, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { Button, Field, InlineAlert, Skeleton } from '../components/ui';
@@ -207,12 +207,12 @@ function ConnectionPill() {
         <AlertOctagon size={14} aria-hidden /> Lỗi đồng bộ · Đồng bộ ngay
       </button>
     );
-  return (
-    <span className="inline-flex h-8 items-center gap-1.5 rounded-full bg-success-50 px-3 text-xs font-medium text-success-700" role="status">
-      <span className="size-2 rounded-full bg-success-700" aria-hidden /> Trực tuyến
-    </span>
-  );
+  // Plainly online: no pill in the POS header (Design §13.2).
+  return null;
 }
+
+const stepBtn = 'inline-flex size-11 items-center justify-center rounded-full disabled:opacity-40';
+const stepCircle = 'inline-flex size-7 items-center justify-center rounded-full border border-paper-500 bg-white text-ink-900 hover:bg-navy-50';
 
 interface Result extends CachedItem {
   available?: number;
@@ -228,7 +228,6 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const [priced, setPriced] = useState<PricedCart | null>(null);
   const [dialog, setDialog] = useState<null | { kind: 'customer' } | { kind: 'line'; lineId: string } | { kind: 'approval'; action: CartApproval['action']; reason: string } | { kind: 'pay' } | { kind: 'done'; outcome: SaleOutcome } | { kind: 'close'; expected: number; source: 'server' | 'device' } | { kind: 'cash' } | { kind: 'held' } | { kind: 'coupon' } | { kind: 'points' } | { kind: 'menu' }>(null);
   const [message, setMessage] = useState<{ tone: 'danger' | 'info' | 'success'; text: string } | null>(null);
-  const [sheet, setSheet] = useState(false);
   const [registerCode, setRegisterCode] = useState('');
   const [heldCount, setHeldCount] = useState(0);
   const search = useRef<HTMLInputElement>(null);
@@ -290,7 +289,6 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
 
   const lines = priced?.result.lines ?? [];
   const total = priced?.result.totalVnd ?? 0;
-  const itemCount = cart.lines.reduce((a, l) => a + l.qty, 0);
 
   /** Xác nhận: approvals first, then the payment sheet. */
   const confirm = () => {
@@ -323,7 +321,6 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     cart.clear();
     saleKey.current = crypto.randomUUID();
     setDialog(null);
-    setSheet(false);
   };
 
   const holdCart = async () => {
@@ -333,6 +330,50 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     newSale();
     setMessage({ tone: 'success', text: 'Đã giữ giỏ hàng.' });
   };
+
+  /** Cart lines: in the cart panel, and under the search field on tablet portrait / phone (Design §13.1). */
+  const cartLines = cart.lines.map((l) => {
+    const pl = lines.find((x) => x.lineId === l.lineId);
+    const item = priced?.items.get(l.variantId);
+    return (
+      <li key={l.lineId} className={clsx('px-4 py-3 transition-colors duration-[600ms]', cart.flashLineId === l.lineId && 'bg-sand-50')}>
+        <div className="flex gap-2">
+          <p className="line-clamp-2 flex-1 font-semibold">{item?.title ?? '…'}</p>
+          <button type="button" className="inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-50" aria-label="Tùy chọn dòng" onClick={() => setDialog({ kind: 'line', lineId: l.lineId })}>
+            <MoreHorizontal size={20} aria-hidden />
+          </button>
+        </div>
+        <p className="-mt-1 text-sm whitespace-nowrap text-ink-700 num">{formatVnd(pl?.unitPriceVnd ?? item?.priceVnd ?? 0)}</p>
+        <div className="mt-2 flex items-center gap-2">
+          {/* Compact stepper: 28 px circles, 44 px touch area each (Design §13.1, NFR-USE-02). */}
+          <span className="-mx-2 inline-flex items-center">
+            <button type="button" className={stepBtn} aria-label="Giảm số lượng" onClick={() => (l.qty === 1 ? cart.remove(l.lineId) : cart.setQty(l.lineId, l.qty - 1))}>
+              <span className={stepCircle}>
+                <Minus size={14} aria-hidden />
+              </span>
+            </button>
+            <span className="w-8 text-center font-semibold num" aria-label="Số lượng">
+              {l.qty}
+            </span>
+            <button type="button" className={stepBtn} aria-label="Tăng số lượng" onClick={() => cart.setQty(l.lineId, l.qty + 1)}>
+              <span className={stepCircle}>
+                <Plus size={14} aria-hidden />
+              </span>
+            </button>
+          </span>
+          <span className="ml-auto text-right font-semibold whitespace-nowrap num">{formatVnd(pl?.totalVnd ?? 0)}</span>
+        </div>
+        {pl?.savings.map((s) => (
+          <p key={s.promotionId} className="mt-1 text-[13px] text-success-700 num">
+            Giảm {formatVnd(s.amountVnd)} – {s.label}
+          </p>
+        ))}
+        {pl && pl.manualDiscountVnd > 0 && <p className="mt-1 text-[13px] text-success-700 num">Giảm tay {formatVnd(pl.manualDiscountVnd)}</p>}
+        {l.note && <p className="mt-1 text-[13px] text-ink-500">{l.note}</p>}
+      </li>
+    );
+  });
+  const searching = results.length > 0 || q.trim().length >= 2;
 
   const cartPanel = (
     <div className="flex h-full flex-col">
@@ -352,51 +393,21 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           </div>
         ) : (
           <Button variant="tonal" icon={User} onClick={() => setDialog({ kind: 'customer' })} disabled={readOnly}>
-            Thêm khách (SĐT)
+            Thêm khách
           </Button>
         )}
       </div>
       <ul className="flex-1 divide-y divide-paper-300 overflow-y-auto" aria-live="polite">
-        {cart.lines.length === 0 && <li className="p-6 text-center text-ink-500">Quét mã hoặc tìm sản phẩm để thêm vào giỏ.</li>}
-        {cart.lines.map((l) => {
-          const pl = lines.find((x) => x.lineId === l.lineId);
-          const item = priced?.items.get(l.variantId);
-          return (
-            <li key={l.lineId} className={clsx('px-4 py-3 transition-colors duration-[600ms]', cart.flashLineId === l.lineId && 'bg-sand-50')}>
-              <div className="flex gap-2">
-                <p className="line-clamp-2 flex-1 font-semibold">{item?.title ?? '…'}</p>
-                <button type="button" className="inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-50" aria-label="Tùy chọn dòng" onClick={() => setDialog({ kind: 'line', lineId: l.lineId })}>
-                  <MoreHorizontal size={20} aria-hidden />
-                </button>
-              </div>
-              <div className="mt-1 flex items-center gap-3">
-                <span className="text-sm text-ink-700 num">{formatVnd(pl?.unitPriceVnd ?? item?.priceVnd ?? 0)}</span>
-                <span className="ml-auto inline-flex items-center gap-1">
-                  <button type="button" className="size-12 rounded-full border border-paper-500 text-lg" aria-label="Giảm số lượng" onClick={() => (l.qty === 1 ? cart.remove(l.lineId) : cart.setQty(l.lineId, l.qty - 1))}>
-                    –
-                  </button>
-                  <span className="w-10 text-center font-semibold num" aria-label="Số lượng">
-                    {l.qty}
-                  </span>
-                  <button type="button" className="size-12 rounded-full border border-paper-500 text-lg" aria-label="Tăng số lượng" onClick={() => cart.setQty(l.lineId, l.qty + 1)}>
-                    +
-                  </button>
-                </span>
-                <span className="w-24 text-right font-semibold num">{formatVnd(pl?.totalVnd ?? 0)}</span>
-              </div>
-              {pl?.savings.map((s) => (
-                <p key={s.promotionId} className="mt-1 text-[13px] text-success-700 num">
-                  Giảm {formatVnd(s.amountVnd)} – {s.label}
-                </p>
-              ))}
-              {pl && pl.manualDiscountVnd > 0 && <p className="mt-1 text-[13px] text-success-700 num">Giảm tay {formatVnd(pl.manualDiscountVnd)}</p>}
-              {l.note && <p className="mt-1 text-[13px] text-ink-500">{l.note}</p>}
-            </li>
-          );
-        })}
+        {cart.lines.length === 0 && (
+          <li className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-ink-500">
+            <ShoppingCart size={48} className="text-ink-300" aria-hidden />
+            <p>Chưa có sản phẩm nào được chọn</p>
+          </li>
+        )}
+        {cartLines}
       </ul>
       <div className="border-t border-paper-300 p-4">
-        <dl className="grid grid-cols-2 gap-y-1 text-base num">
+        <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 text-sm num">
           <dt className="text-ink-700">Tạm tính</dt>
           <dd className="text-right">{formatVnd(priced?.result.subtotalVnd ?? 0)}</dd>
           {!!priced?.result.discountVnd && (
@@ -405,8 +416,8 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
               <dd className="text-right text-success-700">−{formatVnd(priced.result.discountVnd).replace('−', '')}</dd>
             </>
           )}
-          <dt className="mt-2 text-lg font-semibold">TỔNG</dt>
-          <dd className="mt-1 text-right text-[36px] leading-[44px] font-bold">{formatVnd(total)}</dd>
+          <dt className="mt-1 text-base font-semibold">TỔNG</dt>
+          <dd className="mt-1 text-right text-[28px] leading-9 font-bold whitespace-nowrap">{formatVnd(total)}</dd>
         </dl>
         <div className="mt-3 grid grid-cols-3 gap-2">
           <Button variant="secondary" size="sm" onClick={holdCart} disabled={!cart.lines.length || readOnly}>
@@ -435,7 +446,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           <Menu size={20} aria-hidden />
         </button>
         <span className="min-w-0 flex-1 truncate font-medium">
-          Ca {shift.shiftNo ? `#${shift.shiftNo}` : '(ngoại tuyến)'} · {me.displayName} · Quầy {registerCode}
+          {me.displayName} · Quầy {registerCode}
         </span>
         <ConnectionPill />
         <button type="button" className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm hover:bg-navy-800" onClick={() => setDialog({ kind: 'held' })}>
@@ -464,11 +475,11 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
       )}
       <div className="flex min-h-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col gap-3 p-4">
-          <form onSubmit={submitSearch} className="relative">
+          <form onSubmit={submitSearch} className="flex items-center gap-2">
             <input
               ref={search}
               autoFocus
-              className={clsx('h-14 w-full rounded-md border bg-white pr-16 pl-4 text-base code focus:border-navy-700', notFound ? 'border-danger-700' : 'border-paper-500')}
+              className={clsx('h-12 min-w-0 flex-1 rounded-md border bg-white px-4 text-base code focus:border-navy-700', notFound ? 'border-danger-700' : 'border-paper-500')}
               placeholder="Nhập SKUs/tên sản phẩm"
               aria-label="Nhập SKUs/tên sản phẩm"
               value={q}
@@ -478,8 +489,8 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
               }}
               disabled={readOnly}
             />
-            <button type="button" className="absolute top-1/2 right-2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-navy-50 text-navy-700" aria-label="Quét bằng camera" onClick={() => setCamera(true)}>
-              <ScanBarcode size={24} aria-hidden />
+            <button type="button" className="inline-flex size-12 shrink-0 items-center justify-center rounded-full bg-navy-50 text-navy-700 hover:bg-navy-100" aria-label="Quét bằng camera" onClick={() => setCamera(true)}>
+              <ScanBarcode size={22} aria-hidden />
             </button>
           </form>
           {notFound && <InlineAlert tone="danger">Không tìm thấy mã {notFound}. Thử tìm theo tên sản phẩm.</InlineAlert>}
@@ -488,61 +499,45 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
               <InlineAlert tone={message.tone}>{message.text}</InlineAlert>
             </div>
           )}
-          <ul className="flex-1 divide-y divide-paper-300 overflow-y-auto rounded-lg border border-paper-300 bg-white">
-            {results.map((r) => (
-              <li key={r.variantId}>
-                <button
-                  type="button"
-                  className="flex min-h-[72px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-navy-50"
-                  onClick={() => {
-                    cart.add(r.variantId);
-                    setQ('');
-                    setResults([]);
-                    refocus();
-                  }}
-                >
-                  <span className="flex h-[60px] w-10 shrink-0 items-center justify-center rounded-sm border border-paper-300 bg-paper-200">
-                    <BookOpen size={16} className="text-ink-300" aria-hidden />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="line-clamp-2 font-medium">{r.title}</span>
-                    <span className="block text-[13px] text-ink-500">
-                      {r.authors.join(', ')} {r.authors.length ? '· ' : ''}
-                      <span className="code">{r.sku}</span>
+          {searching ? (
+            <ul className="min-h-0 flex-1 divide-y divide-paper-300 overflow-y-auto rounded-lg border border-paper-300 bg-white">
+              {results.map((r) => (
+                <li key={r.variantId}>
+                  <button
+                    type="button"
+                    className="flex min-h-[72px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-navy-50"
+                    onClick={() => {
+                      cart.add(r.variantId);
+                      setQ('');
+                      setResults([]);
+                      refocus();
+                    }}
+                  >
+                    <span className="flex h-[60px] w-10 shrink-0 items-center justify-center rounded-sm border border-paper-300 bg-paper-200">
+                      <BookOpen size={16} className="text-ink-300" aria-hidden />
                     </span>
-                  </span>
-                  <span className="font-semibold num">{formatVnd(r.priceVnd)}</span>
-                </button>
-              </li>
-            ))}
-            {!results.length && <li className="p-6 text-center text-ink-500">{q.trim().length >= 2 ? 'Không có sản phẩm phù hợp.' : 'Kết quả tìm kiếm hiện ở đây. Tìm không dấu cũng được.'}</li>}
-          </ul>
+                    <span className="min-w-0 flex-1">
+                      <span className="line-clamp-2 font-medium">{r.title}</span>
+                      <span className="block text-[13px] text-ink-500">
+                        {r.authors.join(', ')} {r.authors.length ? '· ' : ''}
+                        <span className="code">{r.sku}</span>
+                      </span>
+                    </span>
+                    <span className="font-semibold num">{formatVnd(r.priceVnd)}</span>
+                  </button>
+                </li>
+              ))}
+              {!results.length && <li className="p-6 text-center text-ink-500">Không có sản phẩm phù hợp.</li>}
+            </ul>
+          ) : (
+            // Tablet portrait / phone: the whole cart on the selling screen, no bottom sheet (Design §13.1).
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-paper-300 bg-white lg:hidden" aria-label="Giỏ hàng">
+              {cartPanel}
+            </div>
+          )}
         </section>
         <aside className="hidden w-[420px] shrink-0 border-l border-paper-300 bg-white lg:block">{cartPanel}</aside>
       </div>
-      {/* Tablet portrait / phone: sticky bar that opens the cart as a bottom sheet (Design §13.1). */}
-      <div className="border-t border-paper-300 bg-white p-3 lg:hidden">
-        <div className="flex items-center gap-3">
-          <button type="button" className="flex flex-1 items-center gap-2 text-left" onClick={() => setSheet(true)} aria-expanded={sheet}>
-            <ChevronUp size={20} aria-hidden />
-            <span className="num">
-              {itemCount} sản phẩm · <span className="font-semibold">{formatVnd(total)}</span>
-            </span>
-          </button>
-          <Button variant="accent" size="lg" icon={Check} disabled={!cart.lines.length || !priced || readOnly} onClick={confirm}>
-            Xác nhận
-          </Button>
-        </div>
-      </div>
-      {sheet && (
-        <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Giỏ hàng">
-          <div className="absolute inset-0 bg-[rgba(26,38,56,0.45)]" onClick={() => setSheet(false)} />
-          <div className="absolute inset-x-0 bottom-0 flex max-h-[90dvh] flex-col rounded-t-xl bg-white shadow-lg">
-            <div className="mx-auto mt-2 h-1 w-8 rounded-full bg-paper-300" aria-hidden />
-            {cartPanel}
-          </div>
-        </div>
-      )}
 
       {camera && (
         <CameraScanner

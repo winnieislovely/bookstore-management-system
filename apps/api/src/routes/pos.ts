@@ -27,9 +27,9 @@ export function posRoutes(app: OpenAPIHono<AppEnv>): void {
   );
   defineRoute(
     app,
-    { method: 'get', path: '/api/v1/pos/shifts', access: 'shift.view_all', summary: 'Shift history', query: z.object({ from: z.iso.datetime().optional(), to: z.iso.datetime().optional(), limit: z.coerce.number().int().optional() }) },
+    { method: 'get', path: '/api/v1/pos/shifts', access: 'shift.view_all', summary: 'Shift history', query: z.object({ q: z.string().max(100).optional(), register: z.string().optional(), from: z.iso.datetime().optional(), to: z.iso.datetime().optional(), limit: z.coerce.number().int().optional() }) },
     async ({ ctx, query }) => ({
-      items: await sales.listShifts(ctx, { from: query.from ? new Date(query.from) : undefined, to: query.to ? new Date(query.to) : undefined, limit: query.limit }),
+      items: await sales.listShifts(ctx, { from: query.from ? new Date(query.from) : undefined, to: query.to ? new Date(query.to) : undefined, limit: query.limit, q: query.q, registerIds: query.register ? query.register.split(',').filter((x) => z.uuid().safeParse(x).success) : undefined }),
     }),
   );
   defineRoute(app, { method: 'get', path: '/api/v1/pos/shifts/:id', access: 'session', summary: 'Shift report', params: IdParams }, async ({ ctx, params }) => sales.shiftReport(ctx, params.id));
@@ -81,13 +81,13 @@ export function posRoutes(app: OpenAPIHono<AppEnv>): void {
   // --- Customers ------------------------------------------------------------------------------
   defineRoute(
     app,
-    { method: 'get', path: '/api/v1/customers', access: 'customer.view', summary: 'Search customers', query: z.object({ q: z.string().optional(), phone: z.string().optional() }) },
+    { method: 'get', path: '/api/v1/customers', access: 'customer.view', summary: 'Customer list: search, filters, purchase stats', query: customers.CustomerListQuery.extend({ phone: z.string().optional() }) },
     async ({ ctx, query }) => {
       if (query.phone) {
         const c = await customers.findByPhone(ctx, query.phone);
         return { items: c ? [c] : [] };
       }
-      return { items: await customers.search(ctx, query.q ?? '') };
+      return { items: await customers.search(ctx, query) };
     },
   );
   defineRoute(app, { method: 'post', path: '/api/v1/customers', access: 'customer.manage', summary: 'Create a customer', status: 201, body: customers.CustomerSchema }, async ({ ctx, body }) =>
@@ -98,19 +98,6 @@ export function posRoutes(app: OpenAPIHono<AppEnv>): void {
   );
   defineRoute(app, { method: 'get', path: '/api/v1/customers/:id', access: 'customer.view', summary: 'Customer profile', params: IdParams }, async ({ ctx, params }) =>
     customers.getCustomer(ctx, params.id),
-  );
-
-  defineRoute(
-    app,
-    {
-      method: 'post',
-      path: '/api/v1/customers/:id/store-credit-adjust',
-      access: 'customer.adjust_points',
-      summary: 'Manual store-credit adjustment with reason',
-      params: IdParams,
-      body: customers.CreditAdjustSchema,
-    },
-    async ({ ctx, params, body }) => customers.adjustCredit(ctx, params.id, body),
   );
 
   defineRoute(

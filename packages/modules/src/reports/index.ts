@@ -73,22 +73,10 @@ export async function dashboard(ctx: Ctx) {
   const actor = requirePermission(ctx, 'report.view');
   const now = ctx.clock.now();
   const today = storeDate(now);
-  const local = new Date(now.getTime() + OFFSET_MS);
-  const weekday = (local.getUTCDay() + 6) % 7; // Monday = 0 (Design §10.3)
-  const weekStart = storeDate(new Date(now.getTime() - weekday * 86_400_000));
-  const monthStart = `${today.slice(0, 8)}01`;
-  const r = (from: string) => storeRange(from, today);
-
-  const [dayT, weekT, monthT] = await Promise.all([salesTotals(ctx, r(today).start, r(today).end), salesTotals(ctx, r(weekStart).start, r(weekStart).end), salesTotals(ctx, r(monthStart).start, r(monthStart).end)]);
-  const trendStart = storeRange(storeDate(new Date(now.getTime() - 29 * 86_400_000)), today);
-  const trend = await ctx.db.execute<{ day: string; gross: string }>(sql`
-    select to_char(sold_at at time zone ${TZ}, 'YYYY-MM-DD') as day, sum(total_vnd) as gross
-    from sales.sale where status = 'completed' and sold_at >= ${tsParam(trendStart.start)} and sold_at < ${tsParam(trendStart.end)}
-    group by 1 order by 1`);
-  const month = r(monthStart);
-  const byChannel = await ctx.db.execute<{ channel: string; gross: string }>(sql`
-    select channel, sum(total_vnd) as gross from sales.sale
-    where status = 'completed' and sold_at >= ${tsParam(month.start)} and sold_at < ${tsParam(month.end)} group by channel order by 2 desc`);
+  const day = storeRange(today, today);
+  const dayT = await salesTotals(ctx, day.start, day.end);
+  // The trend and by-channel charts read the sales report for the user's range (TDD §4.11).
+  const month = storeRange(`${today.slice(0, 8)}01`, today);
   const bestsellers = await ctx.db.execute<{ variant_id: string; sku: string; title: string; units: number; gross: string }>(sql`
     select l.variant_id, v.sku, i.i18n -> 'en' ->> 'title' as title, sum(l.qty)::int as units, sum(l.total_vnd) as gross
     from sales.sale_line l join sales.sale s on s.id = l.sale_id
@@ -107,10 +95,6 @@ export async function dashboard(ctx: Ctx) {
     : null;
   return {
     today: dayT,
-    week: weekT,
-    month: monthT,
-    trend: trend.map((t) => ({ day: t.day, grossVnd: n(t.gross) })),
-    salesByChannel: byChannel.map((c) => ({ channel: c.channel, grossVnd: n(c.gross) })),
     bestsellers: bestsellers.map((b) => ({ variantId: b.variant_id, sku: b.sku, title: b.title, units: b.units, grossVnd: n(b.gross) })),
     ...(lowStock && { lowStock: lowStock.map((l) => ({ variantId: l.variant_id, sku: l.sku, title: l.title, available: l.available, minStock: l.min_stock })) }),
     // Events (R3) and library (R4) lists join the dashboard in their releases.

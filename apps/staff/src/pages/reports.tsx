@@ -162,14 +162,14 @@ export function ReportsPage() {
             {t.data.from && ` · Từ ${formatDate(t.data.from)} đến ${formatDate(t.data.to)}`}
           </p>
           {t.data.totals && (
-            <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-4">
               {t.data.columns
                 .filter((c) => t.data!.totals![c.key] != null && c.type !== 'text' && c.type !== 'date')
                 .slice(0, 4)
                 .map((c) => (
                   <div key={c.key} className="rounded-lg border border-paper-300 bg-white p-4">
                     <p className="text-[13px] text-ink-500">{c.label}</p>
-                    <p className="font-display text-[26px] leading-8 font-semibold text-navy-700 num">{c.type === 'vnd' ? formatVndCompact(Number(t.data!.totals![c.key])) : cell(c.type, t.data!.totals![c.key])}</p>
+                    <p className="text-2xl leading-8 font-semibold text-navy-700 num">{c.type === 'vnd' ? formatVndCompact(Number(t.data!.totals![c.key])) : cell(c.type, t.data!.totals![c.key])}</p>
                   </div>
                 ))}
             </div>

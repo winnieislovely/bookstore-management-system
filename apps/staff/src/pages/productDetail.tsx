@@ -99,7 +99,7 @@ export function ProductDetailPage() {
         {x.images.length === 0 && <StatusChip tone="neutral" icon={ImageOff}>Thiếu ảnh</StatusChip>}
         {x.releaseDate && new Date(x.releaseDate) > new Date() && <StatusChip tone="accent">Sắp phát hành {formatDate(x.releaseDate)}</StatusChip>}
       </div>
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex flex-col gap-6">
           {x.variants.map((v) => (
             <Card
@@ -119,7 +119,7 @@ export function ProductDetailPage() {
                 )
               }
             >
-              <div className="grid gap-6 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                 <Facts
                   items={[
                     ['Giá bán', <span className="text-lg font-semibold num">{formatVnd(v.priceVnd)}</span>],

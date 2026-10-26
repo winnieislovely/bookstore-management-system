@@ -146,7 +146,7 @@ function ItemHistory({ item }: { item: ProductHit }) {
     { header: 'Ghi chú', cell: (m) => m.note ?? '' },
   ];
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
       <div className="flex flex-col gap-3">
         <SelectField label="Loại giao dịch" className="max-w-xs" value={type} onChange={(e) => (setType(e.target.value), setPages(['']))}>
           <option value="">Tất cả</option>
@@ -250,7 +250,7 @@ function AdjustDialog({ initial, onClose }: { initial: ProductHit | null; onClos
         ) : (
           <ProductSearch onPick={setItem} autoFocus />
         )}
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Số lượng (+ tăng, − giảm)" required inputMode="numeric" value={delta} onChange={(e) => setDelta(e.target.value)} />
           <SelectField label="Vị trí" value={location} onChange={(e) => setLocation(e.target.value)}>
             <option value="floor">Quầy</option>

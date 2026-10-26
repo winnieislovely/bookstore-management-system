@@ -25,7 +25,6 @@ export interface CartCustomer {
   phoneE164: string | null;
   tierCode: string | null;
   pointsBalance: number;
-  storeCreditVnd: number;
 }
 
 /** Supervisor approvals for this cart: an online token or an offline approver id (FR-ADM-09). */
@@ -104,13 +103,29 @@ export async function findCustomerByPhone(phone: string, online: boolean): Promi
     try {
       const r = await get<{ items: (CartCustomer & { tierCode: string | null })[] }>('/api/v1/customers', { phone: e164 });
       const c = r.items[0];
-      return c ? { id: c.id, name: c.name, phoneE164: c.phoneE164, tierCode: c.tierCode, pointsBalance: c.pointsBalance, storeCreditVnd: c.storeCreditVnd } : null;
+      return c ? { id: c.id, name: c.name, phoneE164: c.phoneE164, tierCode: c.tierCode, pointsBalance: c.pointsBalance } : null;
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 0)) throw e;
     }
   }
   const cached: CachedCustomer | undefined = await db.customers.where('phoneE164').equals(e164).first();
   return cached ?? null;
+}
+
+/** Name search without accents (FR-POS-04); offline it runs on the cached customer list (TDD §7.1). */
+export async function searchCustomersByName(q: string, online: boolean, limit = 8): Promise<CartCustomer[]> {
+  const term = foldText(q).trim();
+  if (term.length < 2) return [];
+  if (online) {
+    try {
+      const r = await get<{ items: CartCustomer[] }>('/api/v1/customers', { q: term });
+      return r.items.slice(0, limit).map((c) => ({ id: c.id, name: c.name, phoneE164: c.phoneE164, tierCode: c.tierCode, pointsBalance: c.pointsBalance }));
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 0)) throw e;
+    }
+  }
+  const words = term.split(/\s+/);
+  return db.customers.filter((c) => words.every((w) => foldText(c.name).includes(w))).limit(limit).toArray();
 }
 
 // ---------------------------------------------------------------------------------------------

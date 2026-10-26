@@ -6,7 +6,7 @@ import { formatDateTime, formatNumber } from './format';
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const n = (v: number) => formatNumber(v);
 
-const METHOD: Record<string, string> = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', card: 'Thẻ', store_credit: 'Tín dụng cửa hàng' };
+const METHOD: Record<string, string> = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', card: 'Thẻ' };
 
 interface Slip {
   store: { name: string; address: string; taxCode: string; phone: string };

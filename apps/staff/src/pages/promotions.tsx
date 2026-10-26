@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { BadgePercent, Pause, Pencil, Play, Plus, X } from 'lucide-react';
+import { foldText } from '@bookstore/domain';
+import { BadgePercent, Pause, Play, Plus, X } from 'lucide-react';
 import { useState } from 'react';
-import { DataTable, SelectField, toast, type Column } from '../components/data';
+import { DataTable, FilterMenu, SearchBox, SelectField, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Field, InlineAlert, PageHeader, StatusChip, type Tone } from '../components/ui';
 import { get, patch, post } from '../lib/api';
 import { formatDateTime, formatNumber, formatVnd } from '../lib/format';
@@ -78,38 +79,29 @@ function summary(r: Rule): string {
   }
 }
 
+/** Run period [startsAt, endsAt or open] overlaps the filter range. */
+const overlaps = (p: Promotion, from?: string, to?: string) => (!to || new Date(p.startsAt) <= new Date(to)) && (!from || !p.endsAt || new Date(p.endsAt) >= new Date(from));
+
 export function PromotionsPage() {
   const list = useQuery({ queryKey: ['promotions'], queryFn: () => get<{ items: Promotion[] }>('/api/v1/promotions') });
   const [editing, setEditing] = useState<Promotion | 'new' | null>(null);
-  const toggle = async (p: Promotion) => {
-    try {
-      await post(`/api/v1/promotions/${p.id}/${p.state === 'paused' ? 'resume' : 'pause'}`);
-      toast.success(p.state === 'paused' ? `Đã chạy lại “${p.name}”.` : `Đã tạm dừng “${p.name}”.`);
-      await list.refetch();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
-  };
+  const [q, setQ] = useParam('q');
+  const [time, setTime] = useParam('time');
+  const [states, setStates] = useListParam('state');
+  // The list is small and unpaged, so search and filters run here (Design §12.1).
+  const term = foldText(q).trim();
+  const range = timeRange(time);
+  const rows = list.data?.items.filter(
+    (p) => (!term || foldText(`${p.name} ${p.rule.conditions.couponCode ?? ''}`).includes(term)) && (!states.length || states.includes(p.state)) && overlaps(p, range.from, range.to),
+  );
+  const filtered = !!(term || time || states.length);
   const columns: Column<Promotion>[] = [
-    { header: 'Chương trình', cell: (p) => <span><span className="font-medium">{p.name}</span>{p.rule.conditions.couponCode && <span className="ml-2 code text-ink-500">{p.rule.conditions.couponCode}</span>}</span> },
+    { header: 'Mã', className: 'whitespace-nowrap', cell: (p) => (p.rule.conditions.couponCode ? <span className="code">{p.rule.conditions.couponCode}</span> : <span className="text-ink-500">—</span>) },
+    { header: 'Chương trình', cell: (p) => <span className="font-medium">{p.name}</span> },
     { header: 'Ưu đãi', cell: (p) => summary(p.rule) },
     { header: 'Áp dụng', cell: (p) => SCOPE_LABEL[p.rule.scope.kind] },
-    { header: 'Thời gian', cell: (p) => <span className="text-[13px]">{formatDateTime(p.startsAt)}<br />{p.endsAt ? `→ ${formatDateTime(p.endsAt)}` : 'Không hết hạn'}</span> },
+    { header: 'Thời gian', className: 'whitespace-nowrap', cell: (p) => <span className="text-[13px]">{formatDateTime(p.startsAt)}<br />{p.endsAt ? `→ ${formatDateTime(p.endsAt)}` : 'Không hết hạn'}</span> },
     { header: 'Trạng thái', cell: (p) => <StatusChip tone={STATE[p.state].tone}>{STATE[p.state].label}</StatusChip> },
-    {
-      header: '',
-      align: 'right',
-      cell: (p) => (
-        <span className="inline-flex gap-1" onClick={(e) => e.stopPropagation()}>
-          {p.state !== 'expired' && (
-            <Button size="sm" variant="ghost" icon={p.state === 'paused' ? Play : Pause} onClick={() => void toggle(p)}>
-              {p.state === 'paused' ? 'Chạy lại' : 'Tạm dừng'}
-            </Button>
-          )}
-          <Button size="sm" variant="ghost" icon={Pencil} aria-label="Sửa" onClick={() => setEditing(p)} />
-        </span>
-      ),
-    },
   ];
   return (
     <>
@@ -121,14 +113,28 @@ export function PromotionsPage() {
           </Button>
         }
       />
+      <div className="mb-4 flex items-center gap-2">
+        <SearchBox value={q} onChange={setQ} placeholder="Tìm theo tên hoặc mã chương trình…" />
+        <FilterMenu
+          groups={[
+            { kind: 'custom', label: 'Thời gian', summary: timeLabel(time), active: !!time, onClear: () => setTime(''), content: <TimeFilter value={time} onChange={setTime} /> },
+            { label: 'Trạng thái', options: (Object.keys(STATE) as Promotion['state'][]).map((k) => ({ key: k, label: STATE[k].label })), values: states, onChange: setStates },
+          ]}
+        />
+      </div>
       <DataTable
         columns={columns}
-        rows={list.data?.items}
+        rows={rows}
         rowKey={(p) => p.id}
         onRow={(p) => setEditing(p)}
         error={list.error}
         onRetry={() => list.refetch()}
-        empty={{ icon: BadgePercent, title: 'Chưa có chương trình khuyến mãi', help: 'Tạo chương trình giảm giá, mua X tặng Y, đồng giá hoặc mã giảm giá.' }}
+        minWidth={760}
+        empty={
+          filtered
+            ? { icon: BadgePercent, title: 'Không có chương trình phù hợp', help: 'Thử bỏ bớt bộ lọc hoặc đổi từ khóa.' }
+            : { icon: BadgePercent, title: 'Chưa có chương trình khuyến mãi', help: 'Tạo chương trình giảm giá, mua X tặng Y, đồng giá hoặc mã giảm giá.' }
+        }
       />
       {editing && <PromotionForm promotion={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={() => list.refetch()} />}
     </>
@@ -201,6 +207,38 @@ function ProductPicker({ value, labels, onChange, single }: { value: string[]; l
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  );
+}
+
+/** Status and pause/resume, inside the editor rather than on list rows (Design §12.1, FR-PRM-04). */
+function StatusRow({ promotion, onChanged }: { promotion: Promotion; onChanged: () => void }) {
+  const [state, setState] = useState(promotion.state);
+  const [busy, setBusy] = useState(false);
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      await post(`/api/v1/promotions/${promotion.id}/${state === 'paused' ? 'resume' : 'pause'}`);
+      toast.success(state === 'paused' ? `Đã chạy lại “${promotion.name}”.` : `Đã tạm dừng “${promotion.name}”.`);
+      // Resumed: scheduled until it starts (expired programs never show the button).
+      setState(state === 'paused' ? (new Date(promotion.startsAt) > new Date() ? 'scheduled' : 'running') : 'paused');
+      onChanged();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-paper-300 bg-paper-50 px-4 py-3">
+      <span className="inline-flex items-center gap-2 text-sm text-ink-700">
+        Trạng thái <StatusChip tone={STATE[state].tone}>{STATE[state].label}</StatusChip>
+      </span>
+      {state !== 'expired' && (
+        <Button size="sm" variant="secondary" icon={state === 'paused' ? Play : Pause} loading={busy} onClick={toggle}>
+          {state === 'paused' ? 'Chạy lại' : 'Tạm dừng'}
+        </Button>
       )}
     </div>
   );
@@ -298,8 +336,9 @@ function PromotionForm({ promotion, onClose, onSaved }: { promotion: Promotion |
       }
     >
       <div className="flex flex-col gap-6">
+        {promotion && <StatusRow promotion={promotion} onChanged={onSaved} />}
         {promotion && <InlineAlert tone="info">Lưu sẽ tạo phiên bản mới. Các đơn đã bán vẫn giữ phiên bản cũ.</InlineAlert>}
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Tên chương trình" required value={name} onChange={(e) => setName(e.target.value)} className="sm:col-span-2" autoFocus />
           <SelectField label="Loại ưu đãi" value={type} onChange={(e) => setType(e.target.value as RuleType)}>
             {(['percent', 'fixed', 'buy_x_get_y', 'bundle_price', 'gift'] as const).map((k) => (
@@ -368,7 +407,7 @@ function PromotionForm({ promotion, onClose, onSaved }: { promotion: Promotion |
           )}
         </fieldset>
 
-        <fieldset className="grid gap-4 sm:grid-cols-2">
+        <fieldset className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <legend className="mb-2 text-sm font-semibold">Điều kiện</legend>
           <Field label="Mã giảm giá (để trống nếu tự áp dụng)" className="code" value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} />
           <Field label="Đơn tối thiểu" suffix="₫" inputMode="numeric" value={minOrder ? formatNumber(num(minOrder) ?? 0) : ''} onChange={(e) => setMinOrder(e.target.value)} />
@@ -391,7 +430,7 @@ function PromotionForm({ promotion, onClose, onSaved }: { promotion: Promotion |
           </div>
         </fieldset>
 
-        <fieldset className="grid gap-4 sm:grid-cols-2">
+        <fieldset className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <legend className="mb-2 text-sm font-semibold">Thời gian và ưu tiên</legend>
           <Field label="Bắt đầu" type="datetime-local" required value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
           <Field label="Kết thúc (để trống = không hết hạn)" type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />

@@ -37,11 +37,25 @@ async function uploadPreview(kind: Kind, file: File): Promise<Preview> {
   return body;
 }
 
+/** Standalone “Nhập dữ liệu” page: any import kind the user may run. */
 export function ImportPage() {
   const { data: me } = useMe();
   const allowed = (['products', 'stock_in', 'customers'] as Kind[]).filter((k) => can(me, k === 'customers' ? 'data.import' : 'catalog.import'));
   const [kindParam, setKindParam] = useParam('kind', allowed[0] ?? 'products');
   const kind = (allowed.includes(kindParam as Kind) ? kindParam : allowed[0]) as Kind;
+  return (
+    <>
+      <PageHeader title="Nhập dữ liệu" />
+      <ImportWizard kind={kind} kinds={allowed} onKindChange={(k) => setKindParam(k)} />
+    </>
+  );
+}
+
+/**
+ * The wizard itself. With `kinds`/`onKindChange` it offers a data-type choice; without, the kind is
+ * fixed (e.g. products, inside a dialog on the Products page, Design §12.10).
+ */
+export function ImportWizard({ kind, kinds, onKindChange, onImported }: { kind: Kind; kinds?: Kind[]; onKindChange?: (k: Kind) => void; onImported?: () => void }) {
   const [step, setStep] = useState(0);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -84,6 +98,7 @@ export function ImportPage() {
       const r = await post<Record<string, unknown>>(`/api/v1/admin/import/jobs/${preview!.jobId}/commit`);
       setResult(r);
       toast.success('Đã nhập dữ liệu.');
+      onImported?.();
     } catch (e) {
       setError((e as Error).message);
       setStep(2);
@@ -97,7 +112,6 @@ export function ImportPage() {
 
   return (
     <>
-      <PageHeader title="Nhập dữ liệu" />
       <ol className="mb-6 flex flex-wrap gap-2" aria-label="Các bước">
         {STEPS.map((label, i) => (
           <li key={label} className={clsx('inline-flex h-9 items-center gap-2 rounded-full px-4 text-sm', i === step ? 'bg-navy-700 text-white' : i < step ? 'bg-success-50 text-success-700' : 'bg-paper-200 text-ink-500')} aria-current={i === step ? 'step' : undefined}>
@@ -109,13 +123,15 @@ export function ImportPage() {
       {step === 0 && (
         <Card>
           <div className="flex max-w-xl flex-col gap-4">
-            <SelectField label="Loại dữ liệu" value={kind} onChange={(e) => (setKindParam(e.target.value), restart())}>
-              {allowed.map((k) => (
-                <option key={k} value={k}>
-                  {KIND_LABEL[k]}
-                </option>
-              ))}
-            </SelectField>
+            {kinds && onKindChange && (
+              <SelectField label="Loại dữ liệu" value={kind} onChange={(e) => (onKindChange(e.target.value as Kind), restart())}>
+                {kinds.map((k) => (
+                  <option key={k} value={k}>
+                    {KIND_LABEL[k]}
+                  </option>
+                ))}
+              </SelectField>
+            )}
             <a className="inline-flex items-center gap-2 text-sm text-navy-700 underline" href={`/api/v1/admin/import/${kind}/template`}>
               <Download size={16} aria-hidden /> Tải file mẫu
             </a>

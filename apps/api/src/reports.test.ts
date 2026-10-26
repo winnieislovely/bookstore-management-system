@@ -82,13 +82,12 @@ const range = `from=${TODAY}&to=${TODAY}`;
 const rowOf = (rows: { key: string }[], key: string) => rows.find((r) => r.key === key) as Record<string, unknown>;
 
 describe('dashboard (FR-RPT-01)', () => {
-  it('shows today, week and month figures, bestsellers and low stock — no alert tiles', async () => {
+  it('shows today’s figures, bestsellers and low stock — no alert tiles', async () => {
     const d = (await get('/api/v1/reports/dashboard', manager)).body;
     expect(d.today).toEqual({ grossVnd: 233000, returnsVnd: 100000, netVnd: 133000, orders: 2, averageBasketVnd: 116500 });
-    expect(d.week).toEqual(d.today);
+    expect(Object.keys(d)).not.toContain('week');
     expect(d.bestsellers[0]).toMatchObject({ sku: 'PEN', units: 3 });
     expect(d.lowStock.map((l: { sku: string }) => l.sku)).toEqual(['BOOK']);
-    expect(d.salesByChannel).toEqual([{ channel: 'counter', grossVnd: 233000 }]);
     expect(Object.keys(d)).not.toContain('failedEinvoices');
     expect((await get('/api/v1/reports/dashboard', cashier)).status).toBe(403);
   });

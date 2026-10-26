@@ -155,6 +155,23 @@ describe('product list and detail (FR-CAT-14, Design §12.1)', () => {
     expect(asWarehouse.variants[0].avgCostVnd).toBe(Math.round((15 * 52000 + 110000) / 16));
     expect(asWarehouse.variants[0].stock).toMatchObject({ onHand: 16, available: 16 });
   });
+
+  it('filters by kind, several states and categories, with on-hand, cost (by permission) and last update', async () => {
+    const list = async (qs: string, cookie = warehouse) => (await h.call('GET', `/api/v1/catalog/items?${qs}`, { cookie })).body;
+    const row = (await list('q=nguyen nhat anh')).items[0];
+    expect(row).toMatchObject({ onHand: 16, avgCostVnd: Math.round((15 * 52000 + 110000) / 16) });
+    expect(new Date(row.updatedAt).getTime()).not.toBeNaN();
+    expect((await list('q=nguyen nhat anh', cashier)).items[0]).not.toHaveProperty('avgCostVnd');
+    expect((await list('kind=book')).items.every((r: { kind: string }) => r.kind === 'book')).toBe(true);
+    expect((await list('kind=stationery,other')).items.map((r: { itemId: string }) => r.itemId)).not.toContain(bookItem);
+    expect((await list('stock=low,out,in_stock')).total).toBe((await list('')).total);
+    expect((await list('status=active,hidden')).items.map((r: { itemId: string }) => r.itemId)).toContain(bookItem);
+    const cats = (await h.call('GET', '/api/v1/catalog/categories', { cookie: warehouse })).body.items as { id: string; kinds: string[] }[];
+    const bookCat = cats.find((c) => c.kinds.includes('book'));
+    expect(bookCat, JSON.stringify(cats.map((c) => c.kinds))).toBeTruthy();
+    expect((await list(`category=${bookCat!.id}`)).items.map((r: { itemId: string }) => r.itemId)).toContain(bookItem);
+    expect((await h.call('GET', '/api/v1/catalog/items?kind=ebook', { cookie: warehouse })).status).toBe(400);
+  });
 });
 
 describe('adjustments (FR-INV-07)', () => {
