@@ -586,7 +586,8 @@ export function timeLabel(time: string): string {
   return d ? `${formatDate(d[0])} – ${formatDate(d[1])}` : 'Tất cả';
 }
 
-export function TimeFilter({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+/** `allowAll={false}` drops “Tất cả” for screens that always need a range (reports). */
+export function TimeFilter({ value, onChange, allowAll = true }: { value: string; onChange: (v: string) => void; allowAll?: boolean }) {
   const custom = !!value && !TIME_PRESETS.some((p) => p.key === value);
   const [showCustom, setShowCustom] = useState(custom);
   const days = custom ? timeDays(value) : null;
@@ -596,10 +597,12 @@ export function TimeFilter({ value, onChange }: { value: string; onChange: (v: s
   const row = 'flex h-10 cursor-pointer items-center gap-3 rounded-md px-2 text-sm hover:bg-navy-50';
   return (
     <div role="radiogroup" aria-label="Thời gian">
-      <label className={row}>
-        <input type="radio" className={radio} checked={!value && !showCustom} onChange={() => { setShowCustom(false); onChange(''); }} />
-        Tất cả
-      </label>
+      {allowAll && (
+        <label className={row}>
+          <input type="radio" className={radio} checked={!value && !showCustom} onChange={() => { setShowCustom(false); onChange(''); }} />
+          Tất cả
+        </label>
+      )}
       {TIME_PRESETS.map((p) => (
         <label key={p.key} className={row}>
           <input type="radio" className={radio} checked={value === p.key && !showCustom} onChange={() => { setShowCustom(false); onChange(p.key); }} />

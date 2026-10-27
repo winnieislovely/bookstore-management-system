@@ -106,14 +106,13 @@ export async function dashboard(ctx: Ctx) {
 // Sales (FR-RPT-02)
 
 export const SalesReportSchema = RangeSchema.extend({
-  groupBy: z.enum(['day', 'month', 'channel', 'category', 'item', 'cashier', 'payment', 'customer']).default('day'),
+  groupBy: z.enum(['day', 'month', 'channel', 'category', 'item', 'payment', 'customer']).default('day'),
 });
 
 const SALES_GROUPS = {
   day: { label: 'Ngày', key: sql`to_char(s.sold_at at time zone ${TZ}, 'YYYY-MM-DD')`, rkey: sql`to_char(r.created_at at time zone ${TZ}, 'YYYY-MM-DD')` },
   month: { label: 'Tháng', key: sql`to_char(s.sold_at at time zone ${TZ}, 'YYYY-MM')`, rkey: sql`to_char(r.created_at at time zone ${TZ}, 'YYYY-MM')` },
   channel: { label: 'Kênh', key: sql`s.channel`, rkey: sql`s.channel` },
-  cashier: { label: 'Thu ngân', key: sql`(select u.display_name from platform.app_user u where u.id = s.cashier_id)`, rkey: sql`(select u.display_name from platform.app_user u where u.id = s.cashier_id)` },
   customer: {
     label: 'Khách hàng',
     key: sql`coalesce((select c.name from crm.customer c where c.id = s.customer_id), 'Khách lẻ')`,
@@ -159,10 +158,11 @@ export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>):
   }
 
   // Line-level for item/category; sale-level keys otherwise. Returns are attributed by return date.
+  // Items key on SKU; the name is looked up after the join so SKU and name stay separate columns.
   const lineKey: SQL =
-    q.groupBy === 'item' ? sql`v.sku || ' · ' || (i.i18n -> 'en' ->> 'title')` : q.groupBy === 'category' ? sql`coalesce(${PRIMARY_CATEGORY}, '—')` : SALES_GROUPS[q.groupBy].key;
+    q.groupBy === 'item' ? sql`v.sku` : q.groupBy === 'category' ? sql`coalesce(${PRIMARY_CATEGORY}, '—')` : SALES_GROUPS[q.groupBy].key;
   const returnKey: SQL = q.groupBy === 'item' || q.groupBy === 'category' ? lineKey : SALES_GROUPS[q.groupBy].rkey;
-  const res = await ctx.db.execute<{ key: string; orders: number; units: number; gross: string; discount: string; vat: string; cost: string; returns: string }>(sql`
+  const res = await ctx.db.execute<{ key: string; title: string | null; orders: number; units: number; gross: string; discount: string; vat: string; cost: string; returns: string }>(sql`
     with sold as (
       select ${lineKey} as key, count(distinct s.id)::int as orders, sum(l.qty)::int as units, sum(l.total_vnd) as gross,
              sum(l.discount_vnd) as discount, sum(l.vat_vnd) as vat, sum(l.cost_vnd) as cost
@@ -175,7 +175,9 @@ export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>):
       join sales.sale s on s.id = r.sale_id join sales.sale_line l on l.id = rl.sale_line_id
       left join catalog.item_variant v on v.id = l.variant_id left join catalog.item i on i.id = v.item_id
       where ${returnsInRange} group by 1)
-    select coalesce(sold.key, ret.key) as key, coalesce(sold.orders, 0) as orders, coalesce(sold.units, 0) as units,
+    select coalesce(sold.key, ret.key) as key,
+           ${q.groupBy === 'item' ? sql`(select i2.i18n -> 'en' ->> 'title' from catalog.item_variant v2 join catalog.item i2 on i2.id = v2.item_id where v2.sku = coalesce(sold.key, ret.key))` : sql`null`} as title,
+           coalesce(sold.orders, 0) as orders, coalesce(sold.units, 0) as units,
            coalesce(sold.gross, 0) as gross, coalesce(sold.discount, 0) as discount, coalesce(sold.vat, 0) as vat,
            coalesce(sold.cost, 0) as cost, coalesce(ret.returns, 0) as returns
     from sold full join ret on ret.key = sold.key
@@ -184,6 +186,7 @@ export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>):
     const gross = n(r.gross);
     const row: Record<string, unknown> = {
       key: r.key,
+      ...(q.groupBy === 'item' && { title: r.title }),
       orders: r.orders,
       units: r.units,
       grossVnd: gross,
@@ -209,7 +212,12 @@ export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>):
     from: q.from,
     to: q.to,
     columns: [
-      { key: 'key', label, type: q.groupBy === 'day' ? 'date' : 'text' },
+      ...(q.groupBy === 'item'
+        ? [
+            { key: 'key', label: 'SKU', type: 'text' as const },
+            { key: 'title', label: 'Tên sản phẩm', type: 'text' as const },
+          ]
+        : [{ key: 'key', label, type: q.groupBy === 'day' ? ('date' as const) : ('text' as const) }]),
       { key: 'orders', label: 'Số đơn', type: 'int' },
       { key: 'units', label: 'Số lượng', type: 'int' },
       { key: 'grossVnd', label: 'Doanh thu', type: 'vnd' },
@@ -590,7 +598,8 @@ export const REPORTS = {
 } as const;
 export type ReportName = keyof typeof REPORTS;
 
-export const ExportSchema = z.object({ format: z.enum(['xlsx', 'csv']).default('xlsx'), params: z.record(z.string(), z.unknown()).default({}) });
+// Excel only (FR-RPT-10): no CSV export for reports.
+export const ExportSchema = z.object({ format: z.enum(['xlsx']).default('xlsx'), params: z.record(z.string(), z.unknown()).default({}) });
 
 export async function createExport(ctx: Ctx, report: ReportName, input: z.input<typeof ExportSchema>) {
   const actor = requirePermission(ctx, 'report.export');
@@ -613,17 +622,6 @@ function formatCell(v: unknown, type: ColumnType): string | number | null {
   return typeof v === 'number' ? v : String(v);
 }
 
-function toCsv(t: Table): string {
-  const esc = (v: unknown) => {
-    const s = v === null || v === undefined ? '' : String(v);
-    return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [t.columns.map((c) => esc(c.label)).join(',')];
-  for (const r of t.rows) lines.push(t.columns.map((c) => esc(formatCell(r[c.key], c.type))).join(','));
-  if (t.totals) lines.push(t.columns.map((c, i) => esc(i === 0 ? 'Tổng cộng' : formatCell(t.totals![c.key], c.type))).join(','));
-  return `\uFEFF${lines.join('\r\n')}\r\n`;
-}
-
 /** Redeem a token once: runs the report as its creator and returns the file; audit-logged. */
 export async function download(ctx: Ctx, token: string): Promise<{ bytes: Uint8Array; mime: string; filename: string }> {
   const now = ctx.clock.now();
@@ -638,7 +636,6 @@ export async function download(ctx: Ctx, token: string): Promise<{ bytes: Uint8A
   const table = await REPORTS[name].run(ctx, row.params as never);
   await audit.record(ctx.db, ctx, { action: 'report.export', entity: 'report', entityId: name, after: { params: row.params, format: row.format, rows: table.rows.length } });
   const base = `bao-cao-${name}-${table.from ?? storeDate(now)}${table.to ? `_${table.to}` : ''}`;
-  if (row.format === 'csv') return { bytes: new TextEncoder().encode(toCsv(table)), mime: 'text/csv; charset=utf-8', filename: `${base}.csv` };
   const header = table.columns.map((c) => c.label);
   const body = table.rows.map((r) => table.columns.map((c) => formatCell(r[c.key], c.type)));
   if (table.totals) body.push(table.columns.map((c, i) => (i === 0 ? 'Tổng cộng' : formatCell(table.totals![c.key], c.type))));

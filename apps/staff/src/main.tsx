@@ -22,7 +22,7 @@ import { ProductDetailPage } from './pages/productDetail';
 import { ProductNewPage } from './pages/productNew';
 import { ProductsPage } from './pages/products';
 import { PromotionsPage } from './pages/promotions';
-import { ReportsPage } from './pages/reports';
+import { InventoryReportsPage, SalesReportsPage, TaxReportsPage } from './pages/reports';
 import { SaleDetailPage, SalesPage } from './pages/sales';
 import { SettingsPage } from './pages/settings';
 import { ShiftDetailPage, ShiftsPage } from './pages/shifts';
@@ -92,7 +92,9 @@ const BUILT: Record<string, ReactNode> = {
   '/consignment': <ConsignmentPage />,
   '/users': <UsersPage />,
   '/roles': <RolesPage />,
-  '/reports': <ReportsPage />,
+  '/reports/sales': <SalesReportsPage />,
+  '/reports/inventory': <InventoryReportsPage />,
+  '/reports/tax': <TaxReportsPage />,
   '/settings': <SettingsPage />,
   '/import': <ImportPage />,
   '/devices': <DevicesPage />,
@@ -109,6 +111,8 @@ const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   { path: 'stock/:id', anyOf: ['inventory.view', 'purchasing.manage'], element: <StockItemPage /> },
   { path: 'products/new', anyOf: ['catalog.edit'], element: <ProductNewPage /> },
   { path: 'products/:id', anyOf: ['catalog.view'], element: <ProductDetailPage /> },
+  // One page per report area now (Design §12.6); the old link opens sales.
+  { path: 'reports', anyOf: ['report.view'], element: <Navigate to="/reports/sales" replace /> },
   { path: 'counts/:id', anyOf: ['inventory.count'], element: <CountDetailPage /> },
 ];
 

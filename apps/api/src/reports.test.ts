@@ -96,9 +96,11 @@ describe('dashboard (FR-RPT-01)', () => {
 describe('sales report (FR-RPT-02)', () => {
   it('groups by item with VAT, returns, net and margin (profit permission)', async () => {
     const r = (await get(`/api/v1/reports/sales?${range}&groupBy=item`, manager)).body;
-    const b = rowOf(r.rows, 'BOOK · BOOK');
+    const b = rowOf(r.rows, 'BOOK');
+    expect(r.columns.slice(0, 2).map((c: { label: string }) => c.label)).toEqual(['SKU', 'Tên sản phẩm']);
+    expect(b).toMatchObject({ title: 'BOOK' });
     expect(b).toMatchObject({ units: 2, grossVnd: 200000, vatVnd: 0, returnsVnd: 100000, netVnd: 100000, costVnd: 100000, marginVnd: 100000 });
-    const p = rowOf(r.rows, 'PEN · PEN');
+    const p = rowOf(r.rows, 'PEN');
     expect(p).toMatchObject({ units: 3, grossVnd: 33000, vatVnd: 3000, costVnd: 15000, marginVnd: 15000 });
     expect(r.totals).toMatchObject({ orders: 2, grossVnd: 233000, returnsVnd: 100000, netVnd: 133000 });
   });
@@ -121,6 +123,7 @@ describe('sales report (FR-RPT-02)', () => {
   it('enforces the date range rules', async () => {
     expect((await get('/api/v1/reports/sales?from=2025-01-01&to=2026-10-25', manager)).body.error.code).toBe('range_too_long');
     expect((await get('/api/v1/reports/sales?groupBy=day', manager)).status).toBe(400);
+    expect((await get(`/api/v1/reports/sales?${range}&groupBy=cashier`, manager)).status).toBe(400);
     const empty = (await get('/api/v1/reports/sales?from=2026-10-24&to=2026-10-24', manager)).body;
     expect(empty.rows).toEqual([]);
   });
@@ -175,18 +178,16 @@ describe('exports (FR-RPT-10)', () => {
     const res = await h.app.request(t.body.url, { headers: { cookie: manager } });
     expect(res.headers.get('content-disposition')).toMatch(/bao-cao-sales-2026-10-25_2026-10-25\.xlsx/);
     const table = await readTable(new Uint8Array(await res.arrayBuffer()), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    expect(table[0]![0]).toBe('Sản phẩm');
+    expect(table[0]!.slice(0, 2)).toEqual(['SKU', 'Tên sản phẩm']);
     expect(table.at(-1)![0]).toBe('Tổng cộng');
     expect((await h.app.request(t.body.url, { headers: { cookie: manager } })).status).toBe(404);
     // Someone else cannot redeem the token.
-    const t2 = await h.call('POST', '/api/v1/reports/tax/export', { cookie: manager, body: { format: 'csv', params: { from: TODAY, to: TODAY, view: 'vat' } } });
+    const t2 = await h.call('POST', '/api/v1/reports/tax/export', { cookie: manager, body: { params: { from: TODAY, to: TODAY, view: 'vat' } } });
     expect((await h.app.request(t2.body.url, { headers: { cookie: viewer } })).status).toBe(403);
-    const t3 = await h.call('POST', '/api/v1/reports/tax/export', { cookie: manager, body: { format: 'csv', params: { from: TODAY, to: TODAY, view: 'vat' } } });
-    const csv = await (await h.app.request(t3.body.url, { headers: { cookie: manager } })).text();
-    expect(csv.split('\r\n')[0]).toBe('Thuế suất,Doanh thu (gồm VAT),Doanh thu chưa VAT,Thuế GTGT');
-    expect(csv).toContain('10,33000,30000,3000');
+    // No CSV export for reports (FR-RPT-10).
+    expect((await h.call('POST', '/api/v1/reports/tax/export', { cookie: manager, body: { format: 'csv', params: { from: TODAY, to: TODAY, view: 'vat' } } })).status).toBe(400);
     const audit = (await get('/api/v1/admin/audit?action=report.export', await h.login('lan', 'chu-cua-hang-2026'))).body.items;
-    expect(audit.length).toBe(2);
+    expect(audit.length).toBe(1);
   });
 });
 

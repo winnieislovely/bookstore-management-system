@@ -1,11 +1,11 @@
 import {
   BadgePercent,
-  BarChart3,
   BookOpen,
   Boxes,
   Building2,
   ClipboardList,
   Handshake,
+  Landmark,
   LayoutDashboard,
   Monitor,
   Receipt,
@@ -13,6 +13,7 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  TrendingUp,
   Upload,
   UserRound,
   Users,
@@ -69,7 +70,14 @@ export const NAV: NavGroup[] = [
       { path: '/roles', label: 'nav.roles', icon: ShieldCheck, anyOf: ['role.manage'] },
     ],
   },
-  { label: 'nav.group.reports', items: [{ path: '/reports', label: 'nav.reports', icon: BarChart3, anyOf: ['report.view'] }] },
+  {
+    label: 'nav.group.reports',
+    items: [
+      { path: '/reports/sales', label: 'nav.reportsSales', icon: TrendingUp, anyOf: ['report.view'] },
+      { path: '/reports/inventory', label: 'nav.reportsInventory', icon: Boxes, anyOf: ['report.view'] },
+      { path: '/reports/tax', label: 'nav.reportsTax', icon: Landmark, anyOf: ['report.view'] },
+    ],
+  },
   {
     label: 'nav.group.settings',
     items: [
