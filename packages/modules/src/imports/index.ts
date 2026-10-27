@@ -1,6 +1,7 @@
 import { schema } from '@bookstore/db';
 import { foldText, isMarginTooLow, netOfVat, normalizeIsbn, normalizePhone, parseVnd, vnd, type Permission } from '@bookstore/domain';
 import { and, asc, eq, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import * as audit from '../audit/index.js';
 import * as catalog from '../catalog/index.js';
 import * as customers from '../customers/index.js';
@@ -655,3 +656,28 @@ export async function exportCatalog(ctx: Ctx): Promise<Uint8Array> {
 }
 
 export { rollback } from './rollback.js';
+
+/** Create-product page with its cost and optional opening stock (FR-CAT-01, Design §12.1). */
+export const CreateProductSchema = catalog.ItemSchema.extend({
+  /** Cost, plus opening stock posted like the Excel product import (FR-CAT-11) when `qty` > 0. */
+  opening: z.object({ costVnd: z.number().int().min(0), qty: z.number().int().min(0).optional() }).optional(),
+});
+
+export async function createProduct(ctx: Ctx, input: z.input<typeof CreateProductSchema>) {
+  const actor = requirePermission(ctx, 'catalog.edit');
+  const { opening, ...item } = CreateProductSchema.parse(input);
+  if (opening && !can(actor, 'catalog.import') && !can(actor, 'purchasing.manage')) {
+    throw new AppError(403, 'forbidden', 'Bạn không có quyền nhập giá nhập hoặc tồn đầu kỳ.');
+  }
+  return ctx.db.transaction(async (tx) => {
+    const made = await catalog.createItemTx(tx, ctx, item);
+    const variantId = made.variantIds[0]!;
+    if (opening?.qty) {
+      await inventory.apply(tx, ctx, { variantId, type: 'stock_in', qtyDelta: opening.qty, unitCostVnd: opening.costVnd, refType: 'item', refId: made.itemId, note: 'Tồn đầu kỳ' });
+    } else if (opening) {
+      // No stock yet: keep the cost on an empty level row (on hand 0 still equals the movement sum).
+      await tx.insert(schema.stockLevel).values({ variantId, location: 'floor', onHand: 0, avgCostVnd: opening.costVnd }).onConflictDoNothing();
+    }
+    return made;
+  });
+}

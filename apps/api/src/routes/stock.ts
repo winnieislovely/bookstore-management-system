@@ -1,4 +1,5 @@
 import * as catalog from '@bookstore/modules/catalog';
+import * as imports from '@bookstore/modules/imports';
 import * as inventory from '@bookstore/modules/inventory';
 import * as purchasing from '@bookstore/modules/purchasing';
 import type { OpenAPIHono } from '@hono/zod-openapi';
@@ -12,8 +13,8 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'get', path: '/api/v1/catalog/items', access: 'catalog.view', summary: 'Search and filter items', query: catalog.ListQuery }, async ({ ctx, query }) =>
     catalog.listItems(ctx, query),
   );
-  defineRoute(app, { method: 'post', path: '/api/v1/catalog/items', access: 'catalog.edit', summary: 'Create an item with its variants', status: 201, body: catalog.ItemSchema }, async ({ ctx, body }) =>
-    catalog.createItem(ctx, body),
+  defineRoute(app, { method: 'post', path: '/api/v1/catalog/items', access: 'catalog.edit', summary: 'Create an item with its variants (optional opening stock)', status: 201, body: imports.CreateProductSchema }, async ({ ctx, body }) =>
+    imports.createProduct(ctx, body),
   );
   defineRoute(app, { method: 'get', path: '/api/v1/catalog/items/:id', access: 'catalog.view', summary: 'Product detail', params: IdParams }, async ({ ctx, params }) =>
     catalog.getItem(ctx, params.id),

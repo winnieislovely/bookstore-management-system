@@ -19,6 +19,7 @@ import { ConsignmentPage } from './pages/consignment';
 import { CountDetailPage, CountsPage } from './pages/counts';
 import { CustomerDetailPage, CustomersPage } from './pages/customers';
 import { ProductDetailPage } from './pages/productDetail';
+import { ProductNewPage } from './pages/productNew';
 import { ProductsPage } from './pages/products';
 import { PromotionsPage } from './pages/promotions';
 import { ReportsPage } from './pages/reports';
@@ -107,6 +108,7 @@ const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   { path: 'sales/:id', anyOf: ['sale.create'], element: <SaleDetailPage /> },
   { path: 'shifts/:id', anyOf: ['shift.view_all'], element: <ShiftDetailPage /> },
   { path: 'customers/:id', anyOf: ['customer.view'], element: <CustomerDetailPage /> },
+  { path: 'products/new', anyOf: ['catalog.edit'], element: <ProductNewPage /> },
   { path: 'products/:id', anyOf: ['catalog.view'], element: <ProductDetailPage /> },
   { path: 'counts/:id', anyOf: ['inventory.count'], element: <CountDetailPage /> },
   { path: 'supplier-orders/:id', anyOf: ['purchasing.manage'], element: <SupplierOrderDetailPage /> },

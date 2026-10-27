@@ -172,6 +172,47 @@ describe('product list and detail (FR-CAT-14, Design §12.1)', () => {
     expect((await list(`category=${bookCat!.id}`)).items.map((r: { itemId: string }) => r.itemId)).toContain(bookItem);
     expect((await h.call('GET', '/api/v1/catalog/items?kind=ebook', { cookie: warehouse })).status).toBe(400);
   });
+
+  it('creates a product from the Products page with opening stock at cost (Design §12.1)', async () => {
+    const [cat] = (await h.call('GET', '/api/v1/catalog/categories', { cookie: warehouse })).body.items as { id: string }[];
+    const r = await h.call('POST', '/api/v1/catalog/items', {
+      cookie: warehouse,
+      body: {
+        kind: 'stationery',
+        unit: 'cái',
+        i18n: { en: { title: 'Sổ tay A5', description: 'Sổ tay bìa cứng' } },
+        categoryIds: [cat!.id],
+        variants: [{ sku: 'VPP-SO-A5', weightG: 200, priceVnd: 45000, vatBp: 1000 }],
+        opening: { qty: 12, costVnd: 30000 },
+      },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const v = (await h.call('GET', `/api/v1/catalog/items/${r.body.itemId}`, { cookie: warehouse })).body.variants[0];
+    expect(v.stock).toMatchObject({ onHand: 12 });
+    expect(v.avgCostVnd).toBe(30000);
+
+    // Cost without a quantity: zero stock, cost kept, stock invariant intact.
+    const empty = await h.call('POST', '/api/v1/catalog/items', {
+      cookie: warehouse,
+      body: {
+        kind: 'other',
+        unit: 'hộp quà',
+        i18n: { en: { title: 'Hộp quà', description: 'Hộp quà giấy kraft' } },
+        categoryIds: [cat!.id],
+        variants: [{ sku: 'KHAC-HOP-QUA', weightG: 150, priceVnd: 20000, vatBp: 1000 }],
+        opening: { costVnd: 12000 },
+      },
+    });
+    expect(empty.status, JSON.stringify(empty.body)).toBe(201);
+    const ev = (await h.call('GET', `/api/v1/catalog/items/${empty.body.itemId}`, { cookie: warehouse })).body.variants[0];
+    expect(ev.stock).toMatchObject({ onHand: 0 });
+    expect(ev.avgCostVnd).toBe(12000);
+    const drift = await h.t.sql`select 1 from inventory.stock_level s where s.on_hand <> (select coalesce(sum(qty_delta), 0) from inventory.stock_movement m where m.variant_id = s.variant_id and m.location = s.location)`;
+    expect(drift).toHaveLength(0);
+    // Setting a cost needs catalog.import or purchasing.manage.
+    const denied = await h.call('POST', '/api/v1/catalog/items', { cookie: cashier, body: { kind: 'other', i18n: { en: { title: 'X', description: 'X' } }, categoryIds: [cat!.id], variants: [{ sku: 'KHAC-X', weightG: 1, priceVnd: 1, vatBp: 1000 }], opening: { costVnd: 1 } } });
+    expect(denied.status).toBe(403);
+  });
 });
 
 describe('adjustments (FR-INV-07)', () => {

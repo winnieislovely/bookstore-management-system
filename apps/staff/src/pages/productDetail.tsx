@@ -1,7 +1,7 @@
 import { VAT_RATES_BP } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ArrowLeft, Globe, History, ImageOff, ImagePlus, Package, Pencil, Printer, Store, Tag, Trash2 } from 'lucide-react';
+import { ArrowLeft, Globe, History, ImageOff, ImagePlus, Package, Pencil, Printer, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { ConfirmDialog, Facts, SelectField, TextArea, toast } from '../components/data';
@@ -42,6 +42,7 @@ interface Item {
   i18n: { en: { title: string; description: string; subtitle?: string }; vi?: { title?: string; description?: string } };
   authors: string[];
   translator: string | null;
+  unit: string | null;
   publisherId: string | null;
   publicationYear: number | null;
   pageCount: number | null;
@@ -81,16 +82,9 @@ export function ProductDetailPage() {
         }
         title={title}
         actions={
-          <>
-            <Button variant="secondary" icon={Printer} onClick={() => setDialog({ kind: 'labels' })}>
-              In nhãn
-            </Button>
-            {edit && (
-              <Button variant="primary" icon={Pencil} onClick={() => setDialog({ kind: 'info' })}>
-                Sửa thông tin
-              </Button>
-            )}
-          </>
+          <Button variant="secondary" icon={Printer} onClick={() => setDialog({ kind: 'labels' })}>
+            In nhãn
+          </Button>
         }
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -98,99 +92,51 @@ export function ProductDetailPage() {
         {x.status !== 'active' && <StatusChip tone="neutral">{STATUS[x.status]}</StatusChip>}
         {x.images.length === 0 && <StatusChip tone="neutral" icon={ImageOff}>Thiếu ảnh</StatusChip>}
         {x.releaseDate && new Date(x.releaseDate) > new Date() && <StatusChip tone="accent">Sắp phát hành {formatDate(x.releaseDate)}</StatusChip>}
-      </div>
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="flex flex-col gap-6">
+        {/* Always sold at the counter; only the website is chosen (FR-CAT-09, Design §12.3). */}
+        <span className="ml-auto flex flex-wrap gap-3">
           {x.variants.map((v) => (
-            <Card
-              key={v.id}
-              title={v.sku}
-              action={
-                edit && (
-                  <div className="flex gap-1">
-                    <Button size="sm" variant="ghost" icon={History} onClick={() => setDialog({ kind: 'history', v })}>
-                      Lịch sử giá
-                    </Button>
-                    <Button size="sm" variant="tonal" icon={Tag} onClick={() => setDialog({ kind: 'price', v })}>
-                      Đổi giá
-                    </Button>
-                    <Button size="sm" variant="ghost" icon={Pencil} aria-label="Sửa biến thể" onClick={() => setDialog({ kind: 'variant', v })} />
-                  </div>
-                )
-              }
-            >
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                <Facts
-                  items={[
-                    ['Giá bán', <span className="text-lg font-semibold num">{formatVnd(v.priceVnd)}</span>],
-                    ...(v.listPriceVnd ? ([['Giá bìa', <span className="num">{formatVnd(v.listPriceVnd)}</span>]] as [string, React.ReactNode][]) : []),
-                    ['Thuế VAT', `${v.vatBp / 100}%`],
-                    ...(v.avgCostVnd !== undefined
-                      ? ([
-                          ['Giá vốn bình quân', <span className="num">{formatVnd(v.avgCostVnd)}</span>],
-                          ['Lãi gộp', <span className={clsx('num', (v.marginVnd ?? 0) < 0 && 'text-danger-700')}>{formatVnd(v.marginVnd ?? 0)}{v.priceVnd ? ` (${Math.round(((v.marginVnd ?? 0) / v.priceVnd) * 100)}%)` : ''}</span>],
-                        ] as [string, React.ReactNode][])
-                      : []),
-                    ...(v.isbn13 ? ([['ISBN', <span className="code">{v.isbn13}</span>]] as [string, React.ReactNode][]) : []),
-                    ['Mã vạch', <span className="code">{v.barcodes.map((b) => b.code).join(', ') || '—'}</span>],
-                    ['Khối lượng', `${formatNumber(v.weightG)} g`],
-                  ]}
-                />
-                <div className="flex flex-col gap-3">
-                  <Facts
-                    items={[
-                      ['Tồn kho', <span className="font-semibold num">{formatNumber(v.stock.onHand)}</span>],
-                      ['Đang giữ', <span className="num">{formatNumber(v.stock.reserved)}</span>],
-                      ['Có thể bán', <span className={clsx('font-semibold num', v.stock.available <= 0 && 'text-danger-700')}>{formatNumber(v.stock.available)}</span>],
-                      ['Tồn tối thiểu', v.minStock == null ? '—' : formatNumber(v.minStock)],
-                    ]}
-                  />
-                  <div className="flex gap-3 text-sm">
-                    <span className={clsx('inline-flex items-center gap-1', !v.publishedPos && 'text-ink-300 line-through')}>
-                      <Store size={16} aria-hidden /> Tại quầy
-                    </span>
-                    <span className={clsx('inline-flex items-center gap-1', !v.publishedWeb && 'text-ink-300 line-through')}>
-                      <Globe size={16} aria-hidden /> Website
-                    </span>
-                  </div>
-                </div>
-              </div>
-              {x.kind === 'bundle' && (
-                <div className="mt-6 border-t border-paper-300 pt-4">
-                  <div className="mb-2 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold">Sản phẩm trong combo</h3>
-                    {edit && (
-                      <Button size="sm" variant="tonal" icon={Package} onClick={() => setDialog({ kind: 'bundle', v })}>
-                        Sửa thành phần
-                      </Button>
-                    )}
-                  </div>
-                  <ul className="divide-y divide-paper-300 text-sm">
-                    {x.components
-                      .filter((c) => c.bundleVariantId === v.id)
-                      .map((c) => (
-                        <li key={c.variantId} className="flex justify-between py-1.5">
-                          <span>
-                            {c.title} <span className="code text-ink-500">{c.sku}</span>
-                          </span>
-                          <span className="num">× {c.qty}</span>
-                        </li>
-                      ))}
-                  </ul>
-                </div>
-              )}
-            </Card>
+            <WebToggle key={v.id} v={v} label={x.variants.length > 1 ? `${v.sku} · Bán trên website` : 'Bán trên website'} disabled={!edit} onSaved={refresh} />
           ))}
-          <Card title="Mô tả">
-            <p className="whitespace-pre-line text-sm text-ink-700">{x.i18n.vi?.description || x.i18n.en.description}</p>
-          </Card>
-        </div>
-        <div className="flex flex-col gap-6">
-          <Card
-            title="Ảnh"
-            action={
-              edit && (
-                <label className="inline-flex h-8 cursor-pointer items-center gap-1 rounded-full bg-navy-50 px-3 text-sm text-navy-700 hover:bg-navy-100">
+        </span>
+      </div>
+      <div className="flex flex-col gap-6">
+        <Card
+          title="Thông tin sản phẩm"
+          action={
+            edit && (
+              <Button size="sm" variant="tonal" icon={Pencil} onClick={() => setDialog({ kind: 'info' })}>
+                Sửa
+              </Button>
+            )
+          }
+        >
+          <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-4 sm:grid-cols-[200px_minmax(0,1fr)] sm:gap-6">
+            {/* Photo on the left */}
+            <div className="flex flex-col gap-2">
+              {x.images.length === 0 ? (
+                <div className={clsx('flex flex-col items-center justify-center gap-2 rounded-md bg-paper-200 text-ink-500', x.kind === 'book' ? 'aspect-[2/3]' : 'aspect-square')}>
+                  <ImageOff size={32} aria-hidden />
+                  <span className="text-sm">Chưa có ảnh</span>
+                </div>
+              ) : (
+                <>
+                  <img src={`/api/v1/files/${x.images[0]!.fileId}`} alt="" className={clsx('w-full rounded-sm border border-paper-300 bg-white object-cover', x.kind === 'book' ? 'aspect-[2/3]' : 'aspect-square')} />
+                  <div className="grid grid-cols-4 gap-1">
+                    {x.images.map((img) => (
+                      <div key={img.id} className="relative">
+                        <img src={`/api/v1/files/${img.fileId}`} alt="" className="aspect-square w-full rounded-sm border border-paper-300 bg-white object-cover" />
+                        {edit && (
+                          <button type="button" className="absolute -top-1 -right-1 inline-flex size-6 items-center justify-center rounded-full bg-white shadow-sm" aria-label="Xóa ảnh" onClick={() => setDialog({ kind: 'image-delete', imageId: img.id })}>
+                            <Trash2 size={12} aria-hidden />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              {edit && (
+                <label className="inline-flex h-8 cursor-pointer items-center gap-1 self-start rounded-full px-2 text-sm whitespace-nowrap text-navy-700 hover:bg-navy-50">
                   <ImagePlus size={16} aria-hidden /> {uploading ? 'Đang tải…' : 'Thêm ảnh'}
                   <input
                     type="file"
@@ -214,43 +160,112 @@ export function ProductDetailPage() {
                     }}
                   />
                 </label>
-              )
-            }
-          >
-            {x.images.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 rounded-md bg-paper-200 py-8 text-ink-500">
-                <ImageOff size={32} aria-hidden />
-                <span className="text-sm">Chưa có ảnh sản phẩm</span>
-              </div>
-            ) : (
-              <div className="grid grid-cols-3 gap-2">
-                {x.images.map((img) => (
-                  <div key={img.id} className="group relative">
-                    <img src={`/api/v1/files/${img.fileId}`} alt="" className={clsx('w-full rounded-sm border border-paper-300 bg-white object-cover', x.kind === 'book' ? 'aspect-[2/3]' : 'aspect-square')} />
-                    {edit && (
-                      <button type="button" className="absolute top-1 right-1 inline-flex size-8 items-center justify-center rounded-full bg-white/90 shadow-sm" aria-label="Xóa ảnh" onClick={() => setDialog({ kind: 'image-delete', imageId: img.id })}>
-                        <Trash2 size={16} aria-hidden />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-          <Card title="Thông tin">
+              )}
+            </div>
+            {/* Details on the right */}
             <Facts
               items={[
-                ['Tên tiếng Anh', x.i18n.en.title],
-                ['Danh mục', x.categories.map((c) => c.i18n.vi?.name || c.i18n.en?.name).join(', ')],
+                ['SKU', <span className="code">{x.variants.map((v) => v.sku).join(', ')}</span>],
+                ['Tên sản phẩm', title],
                 ...(x.authors.length ? ([['Tác giả', x.authors.join(', ')]] as [string, string][]) : []),
+                ['Danh mục', x.categories.map((c) => c.i18n.vi?.name || c.i18n.en?.name).join(', ')],
+                ['Trạng thái', STATUS[x.status] ?? x.status],
                 ...(x.translator ? ([['Dịch giả', x.translator]] as [string, string][]) : []),
                 ...(x.publicationYear ? ([['Năm xuất bản', String(x.publicationYear)]] as [string, string][]) : []),
                 ...(x.pageCount ? ([['Số trang', formatNumber(x.pageCount)]] as [string, string][]) : []),
-                ['Trạng thái', STATUS[x.status] ?? x.status],
+                ...(x.unit ? ([['Đơn vị', x.unit]] as [string, string][]) : []),
               ]}
             />
-          </Card>
-        </div>
+          </div>
+          {/* Description below */}
+          <div className="mt-5 border-t border-paper-300 pt-4">
+            <h3 className="mb-1 text-sm font-semibold text-ink-700">Mô tả</h3>
+            <p className="whitespace-pre-line text-sm text-ink-700">{x.i18n.vi?.description || x.i18n.en.description}</p>
+          </div>
+        </Card>
+
+        {x.variants.map((v) => {
+          const suffix = x.variants.length > 1 ? ` · ${v.sku}` : '';
+          return (
+            <div key={v.id} className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <Card
+                title={`Giá bán${suffix}`}
+                action={
+                  edit && (
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="ghost" icon={History} onClick={() => setDialog({ kind: 'history', v })}>
+                        Lịch sử giá
+                      </Button>
+                      <Button size="sm" variant="tonal" icon={Pencil} onClick={() => setDialog({ kind: 'price', v })}>
+                        Sửa
+                      </Button>
+                    </div>
+                  )
+                }
+              >
+                <Facts
+                  items={[
+                    ['Giá bán', <span className="text-lg font-semibold num">{formatVnd(v.priceVnd)}</span>],
+                    ...(v.listPriceVnd ? ([['Giá bìa', <span className="num">{formatVnd(v.listPriceVnd)}</span>]] as [string, React.ReactNode][]) : []),
+                    ...(v.avgCostVnd !== undefined
+                      ? ([
+                          ['Giá vốn', <span className="num">{formatVnd(v.avgCostVnd)}</span>],
+                          ['Lãi mỗi sản phẩm', <span className={clsx('num', (v.marginVnd ?? 0) < 0 && 'text-danger-700')}>{formatVnd(v.marginVnd ?? 0)}{v.priceVnd ? ` (${Math.round(((v.marginVnd ?? 0) / v.priceVnd) * 100)}%)` : ''}</span>],
+                        ] as [string, React.ReactNode][])
+                      : []),
+                    ['Thuế VAT', `${v.vatBp / 100}%`],
+                  ]}
+                />
+              </Card>
+              <Card
+                title={`Tồn kho${suffix}`}
+                action={
+                  edit && (
+                    <Button size="sm" variant="tonal" icon={Pencil} onClick={() => setDialog({ kind: 'variant', v })}>
+                      Sửa
+                    </Button>
+                  )
+                }
+              >
+                <Facts
+                  items={[
+                    ['Tồn kho', <span className="font-semibold num">{formatNumber(v.stock.onHand)}</span>],
+                    ['Đang giữ', <span className="num">{formatNumber(v.stock.reserved)}</span>],
+                    ['Có thể bán', <span className={clsx('font-semibold num', v.stock.available <= 0 && 'text-danger-700')}>{formatNumber(v.stock.available)}</span>],
+                    ['Tồn tối thiểu', v.minStock == null ? '—' : formatNumber(v.minStock)],
+                    ...(v.isbn13 ? ([['ISBN', <span className="code">{v.isbn13}</span>]] as [string, React.ReactNode][]) : []),
+                    ['Mã vạch', <span className="code">{v.barcodes.map((b) => b.code).join(', ') || '—'}</span>],
+                    ['Khối lượng', `${formatNumber(v.weightG)} g`],
+                  ]}
+                />
+                {x.kind === 'bundle' && (
+                  <div className="mt-6 border-t border-paper-300 pt-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="text-sm font-semibold">Sản phẩm trong combo</h3>
+                      {edit && (
+                        <Button size="sm" variant="tonal" icon={Package} onClick={() => setDialog({ kind: 'bundle', v })}>
+                          Sửa thành phần
+                        </Button>
+                      )}
+                    </div>
+                    <ul className="divide-y divide-paper-300 text-sm">
+                      {x.components
+                        .filter((c) => c.bundleVariantId === v.id)
+                        .map((c) => (
+                          <li key={c.variantId} className="flex justify-between py-1.5">
+                            <span>
+                              {c.title} <span className="code text-ink-500">{c.sku}</span>
+                            </span>
+                            <span className="num">× {c.qty}</span>
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
+              </Card>
+            </div>
+          );
+        })}
       </div>
 
       {dialog?.kind === 'info' && <InfoForm item={x} onClose={() => setDialog(null)} onSaved={refresh} />}
@@ -382,19 +397,53 @@ function PriceHistory({ v, onClose }: { v: Variant; onClose: () => void }) {
   );
 }
 
+function WebToggle({ v, label, disabled, onSaved }: { v: Variant; label: string; disabled: boolean; onSaved: () => void }) {
+  const [on, setOn] = useState(v.publishedWeb);
+  const [busy, setBusy] = useState(false);
+  const flip = async () => {
+    const next = !on;
+    setOn(next);
+    setBusy(true);
+    try {
+      await patch(`/api/v1/catalog/variants/${v.id}`, { version: v.version, publishedWeb: next });
+      toast.success(next ? 'Đã bật bán trên website.' : 'Đã tắt bán trên website.');
+      onSaved();
+    } catch (e) {
+      setOn(!next);
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <label className={clsx('inline-flex items-center gap-2 text-sm', disabled ? 'cursor-not-allowed text-ink-500' : 'cursor-pointer')}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        disabled={disabled || busy}
+        onClick={flip}
+        className={clsx('relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors', on ? 'bg-success-700' : 'bg-paper-500', (disabled || busy) && 'opacity-60')}
+      >
+        <span className={clsx('inline-block size-5 rounded-full bg-white shadow-sm transition-transform', on ? 'translate-x-[22px]' : 'translate-x-0.5')} />
+      </button>
+      <Globe size={16} aria-hidden /> {label}
+    </label>
+  );
+}
+
 function VariantForm({ v, onClose, onSaved }: { v: Variant; onClose: () => void; onSaved: () => void }) {
   const [weight, setWeight] = useState(String(v.weightG));
   const [minStock, setMinStock] = useState(v.minStock == null ? '' : String(v.minStock));
-  const [pos, setPos] = useState(v.publishedPos);
-  const [web, setWeb] = useState(v.publishedWeb);
   const [barcode, setBarcode] = useState('');
   return (
     <ConfirmDialog
-      title={`Sửa ${v.sku}`}
+      title={`Sửa tồn kho ${v.sku}`}
       confirm="Lưu"
       onClose={onClose}
       onConfirm={async () => {
-        await patch(`/api/v1/catalog/variants/${v.id}`, { version: v.version, weightG: Number(weight) || v.weightG, minStock: minStock === '' ? null : Number(minStock), publishedPos: pos, publishedWeb: web, ...(barcode.trim() && { addBarcodes: [barcode.trim()] }) });
+        await patch(`/api/v1/catalog/variants/${v.id}`, { version: v.version, weightG: Number(weight) || v.weightG, minStock: minStock === '' ? null : Number(minStock), ...(barcode.trim() && { addBarcodes: [barcode.trim()] }) });
         toast.success('Đã lưu.');
         onSaved();
       }}
@@ -402,12 +451,6 @@ function VariantForm({ v, onClose, onSaved }: { v: Variant; onClose: () => void;
       <Field label="Khối lượng" suffix="g" inputMode="numeric" value={weight} onChange={(e) => setWeight(e.target.value.replace(/\D/g, ''))} />
       <Field label="Tồn tối thiểu" inputMode="numeric" value={minStock} onChange={(e) => setMinStock(e.target.value.replace(/\D/g, ''))} />
       <Field label="Thêm mã vạch" value={barcode} onChange={(e) => setBarcode(e.target.value)} />
-      <label className="inline-flex items-center gap-2 text-sm">
-        <input type="checkbox" className="size-5" checked={pos} onChange={(e) => setPos(e.target.checked)} /> Bán tại quầy
-      </label>
-      <label className="inline-flex items-center gap-2 text-sm">
-        <input type="checkbox" className="size-5" checked={web} onChange={(e) => setWeb(e.target.checked)} /> Hiện trên website
-      </label>
     </ConfirmDialog>
   );
 }

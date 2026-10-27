@@ -1,12 +1,11 @@
-import { VAT_RATES_BP } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { AlertOctagon, AlertTriangle, BookOpen, CalendarClock, EyeOff, ImageOff, Package, Plus, Printer, Search, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { ConfirmDialog, DataTable, FilterMenu, Pager, SearchBox, SelectField, TextArea, toast, useListParam, useParam, type Column } from '../components/data';
+import { DataTable, FilterMenu, Pager, SearchBox, SelectField, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Field, PageHeader, StatusChip } from '../components/ui';
-import { get, post } from '../lib/api';
+import { get } from '../lib/api';
 import { formatDate, formatNumber, formatVnd } from '../lib/format';
 import { t } from '../lib/i18n';
 import { printHtml } from '../lib/print';
@@ -41,17 +40,17 @@ interface ProductPage {
   page: number;
   limit: number;
 }
-interface Category {
+export interface Category {
   id: string;
   parentId: string | null;
   i18n: { vi?: { name?: string }; en?: { name?: string } };
   kinds: string[];
 }
-interface Named {
+export interface Named {
   id: string;
   i18n: { vi?: { name?: string }; en?: { name?: string } };
 }
-const nameOf = (n: Named) => n.i18n.vi?.name || n.i18n.en?.name || '';
+export const nameOf = (n: Named) => n.i18n.vi?.name || n.i18n.en?.name || '';
 
 const KINDS = [
   { key: 'book', label: 'Sách' },
@@ -61,7 +60,7 @@ const KINDS = [
 ];
 
 /** Category tree in display order with depth; with kinds set, only branches holding items of those kinds (Design §12.1). */
-function categoryOptions(all: Category[], kinds: string[]): { key: string; label: string }[] {
+export function categoryOptions(all: Category[], kinds: string[]): { key: string; label: string }[] {
   const children = new Map<string | null, Category[]>();
   for (const c of all) children.set(c.parentId, [...(children.get(c.parentId) ?? []), c]);
   const holds = (c: Category): boolean => c.kinds.some((k) => kinds.includes(k)) || (children.get(c.id) ?? []).some(holds);
@@ -116,7 +115,7 @@ export function ProductsPage() {
   const [image, setImage] = useListParam('image');
   const [page, setPage] = useParam('page', '1');
   const [selected, setSelected] = useState<Map<string, ProductRow>>(new Map());
-  const [dialog, setDialog] = useState<null | 'create' | 'labels' | 'import'>(null);
+  const [dialog, setDialog] = useState<null | 'labels' | 'import'>(null);
   const categories = useQuery({ queryKey: ['categories'], queryFn: () => get<{ items: Category[] }>('/api/v1/catalog/categories') });
 
   const csv = (v: string[]) => v.join(',') || undefined;
@@ -171,7 +170,7 @@ export function ProductsPage() {
               </Button>
             )}
             {can(me, 'catalog.edit') && (
-              <Button variant="primary" icon={Plus} onClick={() => setDialog('create')}>
+              <Button variant="primary" icon={Plus} onClick={() => navigate('/products/new')}>
                 {t('products.add')}
               </Button>
             )}
@@ -232,7 +231,6 @@ export function ProductsPage() {
         empty={filtered ? { icon: Search, title: q ? t('products.noResults', { q }) : 'Không có sản phẩm phù hợp', help: t('products.noResultsHelp') } : { icon: BookOpen, title: t('products.empty'), help: t('products.emptyHelp') }}
       />
       <Pager page={Number(page)} hasMore={Number(page) * 40 < (list.data?.total ?? 0)} total={list.data?.total ?? 0} onPage={(p) => setPage(String(p))} />
-      {dialog === 'create' && <CreateProductDialog categories={categories.data?.items ?? []} onClose={() => setDialog(null)} onCreated={(id) => navigate(`/products/${id}`)} />}
       {dialog === 'labels' && <BulkLabelDialog rows={[...selected.values()]} onClose={() => setDialog(null)} />}
       {/* Excel import without leaving the Products page (Design §12.10). */}
       {dialog === 'import' && (
@@ -241,95 +239,6 @@ export function ProductsPage() {
         </Dialog>
       )}
     </>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Create a product on the Products page, with zero stock (FR-CAT-01..04, Design §12.1)
-
-function CreateProductDialog({ categories, onClose, onCreated }: { categories: Category[]; onClose: () => void; onCreated: (itemId: string) => void }) {
-  const publishers = useQuery({ queryKey: ['publishers'], queryFn: () => get<{ items: Named[] }>('/api/v1/catalog/publishers') });
-  const [f, setF] = useState({ kind: 'book' as 'book' | 'stationery' | 'other', categoryId: '', title: '', titleVi: '', description: '', sku: '', isbn: '', barcode: '', authors: '', publisherId: '', weightG: '', price: '', vatBp: 0, minStock: '' });
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
-  const digits = (v: string) => Number(v.replace(/\D/g, ''));
-  const book = f.kind === 'book';
-  const ready = f.categoryId && f.title.trim() && f.description.trim() && f.sku.trim() && digits(f.weightG) > 0 && f.price.trim();
-  return (
-    <ConfirmDialog
-      title={t('products.add')}
-      confirm="Tạo sản phẩm"
-      size="md"
-      onClose={onClose}
-      onConfirm={async () => {
-        if (!ready) throw new Error('Hãy điền đủ các ô bắt buộc (*).');
-        const r = await post<{ itemId: string }>('/api/v1/catalog/items', {
-          kind: f.kind,
-          i18n: { en: { title: f.title.trim(), description: f.description.trim() }, ...(f.titleVi.trim() && { vi: { title: f.titleVi.trim() } }) },
-          authors: book ? f.authors.split(',').map((a) => a.trim()).filter(Boolean) : [],
-          ...(book && f.publisherId && { publisherId: f.publisherId }),
-          categoryIds: [f.categoryId],
-          variants: [
-            {
-              sku: f.sku.trim(),
-              ...(book && f.isbn.trim() && { isbn: f.isbn.trim() }),
-              barcodes: !book && f.barcode.trim() ? [f.barcode.trim()] : [],
-              weightG: digits(f.weightG),
-              priceVnd: digits(f.price),
-              vatBp: f.vatBp,
-              minStock: f.minStock ? digits(f.minStock) : null,
-            },
-          ],
-        });
-        onCreated(r.itemId);
-      }}
-    >
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <SelectField label="Loại" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as typeof f.kind, vatBp: e.target.value === 'book' ? 0 : 1000 })}>
-          <option value="book">Sách</option>
-          <option value="stationery">Văn phòng phẩm</option>
-          <option value="other">Sản phẩm khác</option>
-        </SelectField>
-        <SelectField label="Danh mục" required value={f.categoryId} onChange={set('categoryId')}>
-          <option value="">— Chọn —</option>
-          {categoryOptions(categories, []).map((c) => (
-            <option key={c.key} value={c.key}>
-              {c.label}
-            </option>
-          ))}
-        </SelectField>
-        <Field label="Tên sản phẩm (tiếng Anh)" required value={f.title} onChange={set('title')} autoFocus />
-        <Field label="Tên tiếng Việt" value={f.titleVi} onChange={set('titleVi')} />
-        <div className="sm:col-span-2">
-          <TextArea label="Mô tả (tiếng Anh)" required value={f.description} onChange={set('description')} />
-        </div>
-        <Field label="SKU" required className="code" value={f.sku} onChange={(e) => setF({ ...f, sku: e.target.value.toUpperCase() })} />
-        {book ? <Field label="ISBN" inputMode="numeric" value={f.isbn} onChange={set('isbn')} /> : <Field label="Mã vạch" value={f.barcode} onChange={set('barcode')} helper="Để trống để in mã nội bộ." />}
-        {book && (
-          <>
-            <Field label="Tác giả (cách nhau dấu phẩy)" value={f.authors} onChange={set('authors')} />
-            <SelectField label="Nhà xuất bản" value={f.publisherId} onChange={set('publisherId')}>
-              <option value="">—</option>
-              {(publishers.data?.items ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {nameOf(p)}
-                </option>
-              ))}
-            </SelectField>
-          </>
-        )}
-        <Field label="Giá bán" required suffix="₫" inputMode="numeric" value={f.price ? formatNumber(digits(f.price)) : ''} onChange={(e) => setF({ ...f, price: e.target.value.replace(/\D/g, '') })} />
-        <Field label="Khối lượng" required suffix="g" inputMode="numeric" value={f.weightG} onChange={(e) => setF({ ...f, weightG: e.target.value.replace(/\D/g, '') })} />
-        <SelectField label="Thuế VAT" value={String(f.vatBp)} onChange={(e) => setF({ ...f, vatBp: Number(e.target.value) })}>
-          {VAT_RATES_BP.map((v) => (
-            <option key={v} value={v}>
-              {v / 100}%
-            </option>
-          ))}
-        </SelectField>
-        <Field label="Tồn tối thiểu" inputMode="numeric" value={f.minStock} onChange={(e) => setF({ ...f, minStock: e.target.value.replace(/\D/g, '') })} />
-      </div>
-      <p className="mt-3 text-[13px] text-ink-500">Sản phẩm được tạo với tồn kho 0. Thêm ảnh ở trang sản phẩm; hàng về nhập qua Nhập hàng.</p>
-    </ConfirmDialog>
   );
 }
 
