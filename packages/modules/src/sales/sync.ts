@@ -113,7 +113,7 @@ export async function authenticateDevice(ctx: Ctx, req: DeviceRequest): Promise<
   if (d.revokedAt) throw new AppError(401, 'device_revoked', 'Thiết bị đã bị thu hồi. Dữ liệu trên máy sẽ được xóa.', { wipe: true });
   const bodyHash = createHash('sha256').update(req.body).digest('hex');
   const message = `${req.method.toUpperCase()}\n${req.path}\n${req.timestamp}\n${bodyHash}`;
-  let ok = false;
+  let ok: boolean;
   try {
     ok = verifySignature('sha256', Buffer.from(message), { key: importKey(d.publicKey), dsaEncoding: 'ieee-p1363' }, Buffer.from(req.signature, 'base64'));
   } catch {

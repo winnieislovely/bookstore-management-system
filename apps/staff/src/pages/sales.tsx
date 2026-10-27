@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { ApprovalPrompt, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
-import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
+import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { printSlip } from '../lib/print';
 import { can, useMe } from '../lib/session';
 import { Dialog } from '../pos/widgets';

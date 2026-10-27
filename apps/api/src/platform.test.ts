@@ -180,7 +180,7 @@ describe('supervisor approval (FR-ADM-09)', () => {
       cookie: owner,
       body: { username: 'hoa', displayName: 'Hoa', roleId: roles.cashier!.id, password: 'thu-ngan-ha-1' },
     });
-    let ha = await login('hoa', 'thu-ngan-ha-1');
+    const ha = await login('hoa', 'thu-ngan-ha-1');
     await call('PATCH', '/api/v1/me/password', { cookie: ha, body: { currentPassword: 'thu-ngan-ha-1', newPassword: 'thu-ngan-ha-2' } });
     await call('PUT', '/api/v1/me/pin', { cookie: ha, body: { pin: '135790' } });
 

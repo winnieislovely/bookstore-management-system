@@ -2,7 +2,6 @@ import * as catalog from '@bookstore/modules/catalog';
 import * as customers from '@bookstore/modules/customers';
 import * as imports from '@bookstore/modules/imports';
 import * as masterdata from '@bookstore/modules/masterdata';
-import * as purchasing from '@bookstore/modules/purchasing';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import type { AppEnv } from '../http/context.js';

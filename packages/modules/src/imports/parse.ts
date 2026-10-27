@@ -2,7 +2,7 @@ import ExcelJS from 'exceljs';
 
 /** Read an uploaded XLSX or CSV into rows of trimmed strings (first row = headers). */
 export async function readTable(bytes: Uint8Array, mime: string): Promise<string[][]> {
-  if (mime === 'text/csv') return parseCsv(new TextDecoder('utf-8').decode(bytes).replace(/^﻿/, ''));
+  if (mime === 'text/csv') return parseCsv(new TextDecoder('utf-8').decode(bytes).replace(/^\uFEFF/, ''));
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(Buffer.from(bytes) as never);
   const ws = wb.worksheets[0];

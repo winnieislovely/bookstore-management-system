@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - tools/*
 
 # TDD §10.7: adopt new package versions only after a release-age cooldown (14 days, in minutes).
 minimumReleaseAge: 20160

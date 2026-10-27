@@ -1,0 +1,14 @@
+{
+  "name": "@bookstore/lint",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "typescript-eslint": "^8.71.2"
+  },
+  "description": "ESLint and its plugins, kept apart so typescript-eslint gets the TypeScript 6 API; run it with `pnpm lint` from the repository root."
+}

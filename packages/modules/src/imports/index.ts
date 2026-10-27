@@ -685,17 +685,18 @@ export async function createProduct(ctx: Ctx, input: z.input<typeof CreateProduc
   return ctx.db.transaction(async (tx) => {
     const made = await catalog.createItemTx(tx, ctx, item);
     const variantId = made.variantIds[0]!;
-    if (opening?.consignment) {
-      // Keep the cost on the product, then post the quantity as a consignment stock-in: one SI
-      // entry and a consignment lot, without touching the average cost (TDD §4.3).
-      await tx.insert(schema.stockLevel).values({ variantId, location: 'floor', onHand: 0, avgCostVnd: opening.costVnd }).onConflictDoNothing();
+    if (opening?.supplierId && opening.qty) {
+      // The product's first stock-in (FR-PUR-02, FR-PUR-04): one SI entry from the supplier. A
+      // consignment one keeps the cost on the product and adds a lot without touching the average
+      // cost (TDD §4.3).
+      if (opening.consignment) await tx.insert(schema.stockLevel).values({ variantId, location: 'floor', onHand: 0, avgCostVnd: opening.costVnd }).onConflictDoNothing();
       await purchasing.postStockInTx(tx, ctx, {
         supplierId: opening.supplierId,
-        consignment: true,
+        consignment: opening.consignment,
         ...(opening.consignmentDiscountBp !== undefined && { consignmentDiscountBp: opening.consignmentDiscountBp }),
         ...(opening.consignmentDeadline && { consignmentDeadline: opening.consignmentDeadline }),
         note: 'Tồn đầu kỳ',
-        lines: [{ kind: 'existing', variantId, costVnd: opening.costVnd, sellingPriceVnd: item.variants[0]!.priceVnd, qty: opening.qty! }],
+        lines: [{ kind: 'existing', variantId, costVnd: opening.costVnd, sellingPriceVnd: item.variants[0]!.priceVnd, qty: opening.qty }],
       });
     } else if (opening?.qty) {
       await inventory.apply(tx, ctx, { variantId, type: 'stock_in', qtyDelta: opening.qty, unitCostVnd: opening.costVnd, refType: 'item', refId: made.itemId, note: 'Tồn đầu kỳ' });

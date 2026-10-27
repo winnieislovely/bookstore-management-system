@@ -16,6 +16,8 @@ export const version = () => integer().notNull().default(1);
 /** `CHECK (col IN (...))` generated from the same constant as the TypeScript type (TDD §5.1). */
 export function inList(column: AnyColumn | SQL, values: readonly string[]): SQL {
   return sql`${column} in (${sql.join(
+    // Constant enum values from our own code, quoted and escaped – never user input.
+    // eslint-disable-next-line no-restricted-properties
     values.map((v) => sql.raw(`'${v.replace(/'/g, "''")}'`)),
     sql`, `,
   )})`;

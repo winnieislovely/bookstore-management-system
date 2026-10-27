@@ -50,8 +50,6 @@ const GROUPS: [string, Def[]][] = [
       { key: 'inventory.adjust_approval_vnd', label: 'Điều chỉnh tồn cần duyệt khi giá trị vượt', kind: 'vnd' },
       { key: 'catalog.duplicate_mode', label: 'Sản phẩm trùng', kind: 'enum', options: [['block', 'Chặn'], ['warn', 'Chỉ cảnh báo']] },
       { key: 'purchasing.min_margin_bp', label: 'Lãi tối thiểu khi nhập', kind: 'percent' },
-      { key: 'purchasing.velocity_days', label: 'Tính tốc độ bán trong', kind: 'int', helper: 'ngày' },
-      { key: 'purchasing.reorder_cover_days', label: 'Đặt hàng đủ bán trong', kind: 'int', helper: 'ngày' },
       { key: 'purchasing.consignment_alert_days', label: 'Báo hạn ký gửi trước', kind: 'int', helper: 'ngày' },
     ],
   ],

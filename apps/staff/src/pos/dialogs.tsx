@@ -77,13 +77,11 @@ function newRef(): string {
 
 export function PaymentSheet({
   priced,
-  customer,
   online,
   onPay,
   onClose,
 }: {
   priced: PriceCartResult;
-  customer: CartCustomer | null;
   online: boolean;
   onPay: (payments: Payment[]) => Promise<void>;
   onClose: () => void;

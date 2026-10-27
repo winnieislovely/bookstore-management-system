@@ -34,6 +34,8 @@ export async function merge(ctx: Ctx, targetId: string, sourceId: string) {
     if (target.anonymisedAt || source.anonymisedAt) throw errors.conflict('customer_erased', 'Không thể gộp khách hàng đã xóa dữ liệu.');
 
     for (const ref of CUSTOMER_REFS.filter((r) => r.mode === 'move')) {
+      // Table and column names come from the constant registry above, never from input.
+      // eslint-disable-next-line no-restricted-properties
       await tx.execute(sql`update ${sql.raw(ref.table)} set ${sql.raw(ref.column)} = ${targetId}::uuid where ${sql.raw(ref.column)} = ${sourceId}::uuid`);
     }
     // Earlier merges into the source now point at the target.

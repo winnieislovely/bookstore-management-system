@@ -590,7 +590,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           }}
         />
       )}
-      {dialog?.kind === 'pay' && priced && <PaymentSheet priced={priced.result} customer={cart.customer} online={status.online} onClose={() => setDialog(null)} onPay={pay} />}
+      {dialog?.kind === 'pay' && priced && <PaymentSheet priced={priced.result} online={status.online} onClose={() => setDialog(null)} onPay={pay} />}
       {dialog?.kind === 'done' && <SaleDone outcome={dialog.outcome} online={status.online} onNew={newSale} />}
       {dialog?.kind === 'coupon' && (
         <SimpleInput

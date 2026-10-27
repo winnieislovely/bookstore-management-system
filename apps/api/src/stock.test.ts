@@ -242,6 +242,15 @@ describe('product list and detail (FR-CAT-14, Design §12.1)', () => {
     expect(v.avgCostVnd).toBe(17500);
     const [lot] = await h.t.sql`select l.qty_received, l.discount_bp, e.consignment from purchasing.consignment_lot l join purchasing.stock_in_line sl on sl.id = l.stock_in_line_id join purchasing.stock_in_entry e on e.id = sl.entry_id where l.variant_id = ${v.id}`;
     expect(lot).toMatchObject({ qty_received: 15, discount_bp: 3000, consignment: true });
+    // With a supplier the opening quantity is the product's first SI stock-in (FR-PUR-02, FR-PUR-04).
+    const own = await h.call('POST', '/api/v1/catalog/items', { cookie: warehouse, body: body('SACH-KG-4', { costVnd: 20000, qty: 6, supplierId }) });
+    expect(own.status, JSON.stringify(own.body)).toBe(201);
+    const ov = (await h.call('GET', `/api/v1/catalog/items/${own.body.itemId}`, { cookie: warehouse })).body.variants[0];
+    expect(ov.stock).toMatchObject({ onHand: 6 });
+    expect(ov.avgCostVnd).toBe(20000);
+    const [entry] = await h.t.sql`select e.entry_no, e.supplier_id, e.consignment from purchasing.stock_in_entry e join purchasing.stock_in_line l on l.entry_id = e.id where l.variant_id = ${ov.id}`;
+    expect(entry).toMatchObject({ supplier_id: supplierId, consignment: false });
+    expect(entry!.entry_no).toMatch(/^SI-2026-/);
     // Consignment needs a quantity and a supplier that takes consignment; nothing is left behind.
     expect((await h.call('POST', '/api/v1/catalog/items', { cookie: warehouse, body: body('SACH-KG-2', { costVnd: 1, supplierId: consignorId, consignment: true }) })).status).toBe(400);
     const notConsignor = await h.call('POST', '/api/v1/catalog/items', { cookie: warehouse, body: body('SACH-KG-3', { costVnd: 1, qty: 1, supplierId, consignment: true }) });
@@ -313,14 +322,14 @@ describe('blind stock count (FR-INV-06, UC-07)', () => {
       h.app.request(path, { method, headers: { origin: ORIGIN, 'x-bms-request': '1', cookie: warehouse, 'content-type': mime }, ...(body && { body: body as never }) });
     // CSV sheet: blind, so no expected column.
     const csv = await (await req('GET', `/api/v1/inventory/counts/${c.body.id}/sheet?format=csv`)).text();
-    const head = csv.replace(/^﻿/, '').split('\r\n')[0]!;
+    const head = csv.replace(/^\uFEFF/, '').split('\r\n')[0]!;
     expect(head).toBe('SKU,Sản phẩm,Đếm được');
     expect((await req('GET', `/api/v1/inventory/counts/${c.body.id}/sheet`)).headers.get('content-type')).toContain('spreadsheetml');
 
     // A bad row rejects the whole upload; a good one sets the counts.
-    const bad = await req('POST', `/api/v1/inventory/counts/${c.body.id}/sheet`, new TextEncoder().encode('﻿SKU,Sản phẩm,Đếm được\r\nNOPE,x,3\r\n'));
+    const bad = await req('POST', `/api/v1/inventory/counts/${c.body.id}/sheet`, new TextEncoder().encode('\uFEFFSKU,Sản phẩm,Đếm được\r\nNOPE,x,3\r\n'));
     expect(bad.status).toBe(422);
-    const ok = await req('POST', `/api/v1/inventory/counts/${c.body.id}/sheet`, new TextEncoder().encode('﻿SKU,Sản phẩm,Đếm được\r\nSACH-NNA-0012,x,7\r\n'));
+    const ok = await req('POST', `/api/v1/inventory/counts/${c.body.id}/sheet`, new TextEncoder().encode('\uFEFFSKU,Sản phẩm,Đếm được\r\nSACH-NNA-0012,x,7\r\n'));
     expect(ok.status).toBe(200);
     expect(await ok.json()).toMatchObject({ updated: 1, counted: 1 });
 

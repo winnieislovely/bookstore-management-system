@@ -42,7 +42,7 @@ export async function uploadCountSheet(ctx: Ctx, id: string, file: { bytes: Uint
   if (file.mime !== XLSX && file.mime !== 'text/csv') throw new AppError(415, 'unsupported_file_type', 'Chỉ nhận tệp Excel (.xlsx) hoặc CSV.');
   const table = await readTable(file.bytes, file.mime);
   const [head, ...body] = table;
-  const col = (name: string) => (head ?? []).findIndex((h) => foldText(h.replace(/^﻿/, '')) === foldText(name));
+  const col = (name: string) => (head ?? []).findIndex((h) => foldText(h.replace(/^\uFEFF/, '')) === foldText(name));
   const iSku = col(H_SKU);
   const iCounted = col(H_COUNTED);
   if (iSku < 0 || iCounted < 0) throw new AppError(400, 'count_sheet_columns', `Tệp cần có cột “${H_SKU}” và “${H_COUNTED}”. Hãy dùng phiếu đếm tải từ hệ thống.`);

@@ -10,7 +10,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "lint": "eslint ."
+    "lint": "node tools/lint/node_modules/eslint/bin/eslint.js ."
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

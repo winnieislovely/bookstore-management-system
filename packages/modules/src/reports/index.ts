@@ -2,9 +2,8 @@ import { schema } from '@bookstore/db';
 import { sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
-import * as purchasing from '../purchasing/index.js';
 import { AppError, can, errors, randomToken, requirePermission, sha256, tsParam, type Ctx } from '../platform/index.js';
-import { writeTable } from '../imports/parse.js';
+import { writeTable } from '../imports/index.js';
 
 /**
  * Reports (FR-RPT-01..05, FR-RPT-10, TDD §4.11): read models with a mandatory date range in store
@@ -622,7 +621,7 @@ function toCsv(t: Table): string {
   const lines = [t.columns.map((c) => esc(c.label)).join(',')];
   for (const r of t.rows) lines.push(t.columns.map((c) => esc(formatCell(r[c.key], c.type))).join(','));
   if (t.totals) lines.push(t.columns.map((c, i) => esc(i === 0 ? 'Tổng cộng' : formatCell(t.totals![c.key], c.type))).join(','));
-  return `﻿${lines.join('\r\n')}\r\n`;
+  return `\uFEFF${lines.join('\r\n')}\r\n`;
 }
 
 /** Redeem a token once: runs the report as its creator and returns the file; audit-logged. */

@@ -10,7 +10,7 @@ import { formatDateTime, formatNumber, formatVnd } from '../lib/format';
 import { t } from '../lib/i18n';
 import { can, useMe } from '../lib/session';
 import { Dialog } from '../pos/widgets';
-import { StockInForm, type StockInPick } from './stockin';
+import { StockInForm } from './stockin';
 
 /**
  * Stock (FR-INV-01..11, FR-PUR-01..07, Design §12.1): one page for stock and stock-in – a product-style

@@ -37,18 +37,18 @@ export function ProductNewPage() {
   // Consignment opening stock only from a supplier that takes consignment (FR-PUR-09).
   const consignor = !!suppliers.data?.items.find((x) => x.id === f.supplierId)?.isConsignor;
   const consignment = consignor && f.consignment;
-  const ready = f.sku.trim() && f.title.trim() && f.categoryId && f.description.trim() && f.cost.trim() && f.price.trim() && digits(f.weightG) > 0 && (!consignment || digits(f.qty) > 0);
+  const ready = f.sku.trim() && f.title.trim() && f.categoryId && f.description.trim() && f.cost.trim() && f.price.trim() && digits(f.weightG) > 0 && f.supplierId && digits(f.qty) > 0 && !!image;
   // Profit on one unit sold: selling price − cost, and its share of the selling price.
   const profit = f.cost.trim() && f.price.trim() ? digits(f.price) - digits(f.cost) : null;
   const profitPct = profit !== null && digits(f.price) > 0 ? Math.round((profit / digits(f.price)) * 100) : null;
 
   const save = async () => {
-    if (!ready) return setError('Hãy điền đủ các ô bắt buộc (*).');
+    if (!ready) return setError(image ? 'Hãy điền đủ các ô bắt buộc (*).' : 'Hãy điền đủ các ô bắt buộc (*) và chọn ảnh sản phẩm.');
     setBusy(true);
     setError(null);
     try {
       // Upload the photo first so a failed upload does not leave a product behind.
-      const fileId = image ? (await upload(image, 'image')).id : null;
+      const fileId = image ? (await upload(image, 'image')).id : null; // always set: the photo is required (FR-PUR-02)
       const r = await post<{ itemId: string }>('/api/v1/catalog/items', {
         kind: f.kind,
         i18n: { en: { title: f.title.trim(), description: f.description.trim() } },
@@ -67,11 +67,12 @@ export function ProductNewPage() {
             minStock: f.minStock ? digits(f.minStock) : null,
           },
         ],
+        // First stock-in from the supplier (FR-PUR-02, FR-PUR-04).
         opening: {
           costVnd: digits(f.cost),
-          ...(digits(f.qty) > 0 && { qty: digits(f.qty) }),
+          qty: digits(f.qty),
+          supplierId: f.supplierId,
           ...(consignment && {
-            supplierId: f.supplierId,
             consignment: true,
             ...(f.discount && { consignmentDiscountBp: Math.round(Number(f.discount.replace(',', '.')) * 100) }),
             ...(f.deadline && { consignmentDeadline: new Date(f.deadline).toISOString() }),
@@ -122,8 +123,8 @@ export function ProductNewPage() {
                 </option>
               ))}
             </SelectField>
-            <SelectField label="Nhà cung cấp" value={f.supplierId} onChange={(e) => setF({ ...f, supplierId: e.target.value })} className="sm:col-span-2">
-              <option value="">— Không chọn —</option>
+            <SelectField label="Nhà cung cấp" required value={f.supplierId} onChange={(e) => setF({ ...f, supplierId: e.target.value })} className="sm:col-span-2">
+              <option value="">— Chọn —</option>
               {suppliers.data?.items.map((x) => (
                 <option key={x.id} value={x.id}>
                   {x.name}
@@ -175,7 +176,7 @@ export function ProductNewPage() {
 
         <Card title="Tồn kho và thuế">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Field label="Số lượng nhập lần đầu" required={consignment} inputMode="numeric" value={f.qty} onChange={num('qty')} helper={consignment ? undefined : 'Để trống nếu chưa có hàng.'} />
+            <Field label="Số lượng nhập lần đầu" required inputMode="numeric" value={f.qty} onChange={num('qty')} />
             <Field label="Tồn tối thiểu" inputMode="numeric" value={f.minStock} onChange={num('minStock')} />
             <SelectField label="Thuế VAT" value={String(f.vatBp)} onChange={(e) => setF({ ...f, vatBp: Number(e.target.value) })}>
               {VAT_RATES_BP.map((v) => (
@@ -200,6 +201,7 @@ export function ProductNewPage() {
         </Card>
 
         <Card title="Ảnh sản phẩm">
+          <p className="mb-3 text-[13px] text-ink-500">Bắt buộc một ảnh (JPG, PNG hoặc WebP).</p>
           <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-full border border-paper-500 px-4 text-sm hover:bg-navy-50">
             <ImagePlus size={18} aria-hidden />
             <span className="max-w-[240px] truncate">{image ? image.name : 'Chọn ảnh'}</span>

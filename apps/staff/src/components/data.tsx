@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { Check, ChevronDown, ListFilter, Search, ShieldCheck, X, type LucideIcon } from 'lucide-react';
+import { ChevronDown, ListFilter, Search, ShieldCheck, X, type LucideIcon } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { useSearchParams } from 'react-router';
 import { create } from 'zustand';
