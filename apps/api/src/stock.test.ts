@@ -1,6 +1,6 @@
 import * as inventory from '@bookstore/modules/inventory';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startHarness, type Harness } from './testing.js';
+import { ORIGIN, startHarness, type Harness } from './testing.js';
 
 /** Catalogue, inventory and purchasing end to end (FR-CAT, FR-INV, FR-PUR; UC-05, UC-07). */
 let h: Harness;
@@ -275,6 +275,33 @@ describe('blind stock count (FR-INV-06, UC-07)', () => {
     expect((await h.call('POST', `/api/v1/inventory/counts/${c.body.id}/approve`, { cookie: owner })).body.posted).toBe(1);
     const lv = await h.call('GET', `/api/v1/inventory/levels?variant=${bookVariant}`, { cookie: warehouse });
     expect(lv.body.items[0].onHand).toBe(5);
+  });
+
+  it('scopes by product type, round-trips the count sheet and can be cancelled before approval', async () => {
+    const c = await h.call('POST', '/api/v1/inventory/counts', { cookie: warehouse, body: { scope: { kind: 'types', itemKinds: ['book'] }, blind: true } });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    const view = (await h.call('GET', `/api/v1/inventory/counts/${c.body.id}`, { cookie: warehouse })).body as { lines: { sku: string }[] };
+    expect(view.lines.map((l) => l.sku)).toContain('SACH-NNA-0012');
+    expect(view.lines.every((l) => l.sku.startsWith('SACH'))).toBe(true);
+
+    const req = (method: string, path: string, body?: Uint8Array, mime = 'text/csv') =>
+      h.app.request(path, { method, headers: { origin: ORIGIN, 'x-bms-request': '1', cookie: warehouse, 'content-type': mime }, ...(body && { body: body as never }) });
+    // CSV sheet: blind, so no expected column.
+    const csv = await (await req('GET', `/api/v1/inventory/counts/${c.body.id}/sheet?format=csv`)).text();
+    const head = csv.replace(/^﻿/, '').split('\r\n')[0]!;
+    expect(head).toBe('SKU,Sản phẩm,Đếm được');
+    expect((await req('GET', `/api/v1/inventory/counts/${c.body.id}/sheet`)).headers.get('content-type')).toContain('spreadsheetml');
+
+    // A bad row rejects the whole upload; a good one sets the counts.
+    const bad = await req('POST', `/api/v1/inventory/counts/${c.body.id}/sheet`, new TextEncoder().encode('﻿SKU,Sản phẩm,Đếm được\r\nNOPE,x,3\r\n'));
+    expect(bad.status).toBe(422);
+    const ok = await req('POST', `/api/v1/inventory/counts/${c.body.id}/sheet`, new TextEncoder().encode('﻿SKU,Sản phẩm,Đếm được\r\nSACH-NNA-0012,x,7\r\n'));
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ updated: 1, counted: 1 });
+
+    expect((await h.call('POST', `/api/v1/inventory/counts/${c.body.id}/cancel`, { cookie: warehouse })).status).toBe(204);
+    expect((await h.call('GET', `/api/v1/inventory/counts/${c.body.id}`, { cookie: warehouse })).body.status).toBe('cancelled');
+    expect((await h.call('POST', `/api/v1/inventory/counts/${c.body.id}/cancel`, { cookie: warehouse })).status).toBe(409);
   });
 });
 

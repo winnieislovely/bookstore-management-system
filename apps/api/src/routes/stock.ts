@@ -103,6 +103,9 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'post', path: '/api/v1/inventory/counts/:id/submit', access: 'inventory.count', summary: 'Submit a count for approval', status: 204, params: IdParams }, async ({ ctx, params }) => {
     await inventory.submitCount(ctx, params.id);
   });
+  defineRoute(app, { method: 'post', path: '/api/v1/inventory/counts/:id/cancel', access: 'inventory.count', summary: 'Cancel a count that is not approved', status: 204, params: IdParams }, async ({ ctx, params }) =>
+    inventory.cancelCount(ctx, params.id),
+  );
   defineRoute(app, { method: 'post', path: '/api/v1/inventory/counts/:id/approve', access: 'inventory.count_approve', summary: 'Approve and post variances', params: IdParams }, async ({ ctx, params }) =>
     inventory.approveCount(ctx, params.id),
   );

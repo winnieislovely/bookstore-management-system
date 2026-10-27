@@ -70,6 +70,21 @@ export function importRoutes(app: OpenAPIHono<AppEnv>, deps: Deps): void {
   );
 
   // --- Imports (permission per kind is checked by the module) ---------------------------------
+  // --- Stock count sheet (FR-INV-06) ------------------------------------------------------------
+  defineRoute(
+    app,
+    { method: 'get', path: '/api/v1/inventory/counts/:id/sheet', access: 'inventory.count', summary: 'Download the count sheet (XLSX or CSV)', params: IdParams, query: z.object({ format: z.enum(['xlsx', 'csv']).default('xlsx') }) },
+    async ({ ctx, params, query, c }) => {
+      const f = await imports.countSheet(ctx, params.id, query.format);
+      return download(c, f.bytes, f.filename, f.mime);
+    },
+  );
+  defineRoute(
+    app,
+    { method: 'post', path: '/api/v1/inventory/counts/:id/sheet', access: 'inventory.count', summary: 'Upload a filled count sheet (raw XLSX/CSV body)', params: IdParams },
+    async ({ ctx, params, c }) => imports.uploadCountSheet(ctx, params.id, await rawUpload(c)),
+  );
+
   defineRoute(app, { method: 'get', path: '/api/v1/admin/import/:kind/template', access: 'session', summary: 'Download the import template', params: KindParams }, async ({ ctx, params, c }) =>
     download(c, await imports.template(ctx, params.kind), `mau-nhap-${params.kind}.xlsx`),
   );

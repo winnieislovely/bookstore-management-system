@@ -287,7 +287,12 @@ export const CountScope = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('full') }),
   z.object({ kind: z.literal('category'), categoryIds: z.array(z.uuid()).min(1) }),
   z.object({ kind: z.literal('variants'), variantIds: z.array(z.uuid()).min(1) }),
+  /** Product types (books, stationery, other goods), optionally narrowed to categories (FR-INV-06). */
+  z.object({ kind: z.literal('types'), itemKinds: z.array(z.enum(['book', 'stationery', 'other', 'bundle'])).min(1), categoryIds: z.array(z.uuid()).optional() }),
 ]);
+
+/** Above this many lines, counted quantities come from the count sheet only (FR-INV-06). */
+export const COUNT_SHEET_REQUIRED_ABOVE = 50;
 
 export const CreateCountSchema = z.object({
   scope: CountScope,
@@ -305,15 +310,19 @@ export async function createCount(ctx: Ctx, input: z.input<typeof CreateCountSch
       .values({ docNo, scope: data.scope, location: data.location, blind: data.blind, createdBy: actor.userId })
       .returning({ id: schema.stockCount.id });
     // Snapshot expected quantities for every active variant in scope.
-    const scopeSql =
-      data.scope.kind === 'full'
-        ? sql`true`
-        : data.scope.kind === 'variants'
-          ? sql`v.id in (${sql.join(data.scope.variantIds.map((id) => sql`${id}::uuid`), sql`, `)})`
-          : sql`exists (with recursive tree as (
-                select id from catalog.category where id in (${sql.join(data.scope.categoryIds.map((id) => sql`${id}::uuid`), sql`, `)})
+    const inCategories = (ids: string[]) => sql`exists (with recursive tree as (
+                select id from catalog.category where id in (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)})
                 union all select c.id from catalog.category c join tree on c.parent_id = tree.id)
               select 1 from catalog.item_category ic where ic.item_id = v.item_id and ic.category_id in (select id from tree))`;
+    const scope = data.scope;
+    const scopeSql =
+      scope.kind === 'full'
+        ? sql`true`
+        : scope.kind === 'variants'
+          ? sql`v.id in (${sql.join(scope.variantIds.map((id) => sql`${id}::uuid`), sql`, `)})`
+          : scope.kind === 'category'
+            ? inCategories(scope.categoryIds)
+            : sql`exists (select 1 from catalog.item i where i.id = v.item_id and i.kind in (${sql.join(scope.itemKinds.map((k) => sql`${k}`), sql`, `)}))${scope.categoryIds?.length ? sql` and ${inCategories(scope.categoryIds)}` : sql``}`;
     await tx.execute(sql`
       insert into inventory.stock_count_line (count_id, variant_id, expected)
       select ${count!.id}::uuid, v.id, coalesce(s.on_hand, 0)
@@ -391,6 +400,10 @@ export async function recordCount(ctx: Ctx, countId: string, input: z.input<type
     const [count] = await tx.select().from(schema.stockCount).where(eq(schema.stockCount.id, countId)).for('update');
     if (!count) throw errors.notFound('Phiếu kiểm kho');
     if (count.status !== 'open') throw errors.conflict('count_not_open', 'Phiếu kiểm kho đã nộp, không thể đếm thêm.');
+    const [{ n }] = (await tx.execute<{ n: number }>(sql`select count(*)::int as n from inventory.stock_count_line where count_id = ${countId}::uuid`)) as unknown as [{ n: number }];
+    if (n > COUNT_SHEET_REQUIRED_ABOVE) {
+      throw errors.conflict('count_sheet_required', `Phiếu có hơn ${COUNT_SHEET_REQUIRED_ABOVE} sản phẩm: hãy tải phiếu đếm về, điền số đếm rồi tải lên.`);
+    }
     const l = schema.stockCountLine;
     const newCounted = data.mode === 'add' ? sql`coalesce(${l.counted}, 0) + ${data.qty}` : sql`${data.qty}`;
     let [line] = await tx
@@ -427,6 +440,16 @@ export async function submitCount(ctx: Ctx, id: string) {
   await ctx.db.transaction(async (tx) => {
     await transitionCount(tx, id, 'submitted');
     await tx.update(schema.stockCount).set({ status: 'submitted' }).where(eq(schema.stockCount.id, id));
+  });
+}
+
+/** Cancel a count that is not approved yet (FR-INV-06). */
+export async function cancelCount(ctx: Ctx, id: string) {
+  requirePermission(ctx, 'inventory.count');
+  await ctx.db.transaction(async (tx) => {
+    const count = await transitionCount(tx, id, 'cancelled');
+    await tx.update(schema.stockCount).set({ status: 'cancelled' }).where(eq(schema.stockCount.id, id));
+    await audit.record(tx, ctx, { action: 'stock_count.cancel', entity: 'stock_count', entityId: id, after: { docNo: count.docNo } });
   });
 }
 

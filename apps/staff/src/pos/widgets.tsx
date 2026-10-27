@@ -7,7 +7,8 @@ import { t } from '../lib/i18n';
 
 /** Touch-first POS widgets (Design §10.3, §10.9, §13). */
 
-export function Dialog({ title, onClose, children, size = 'md', footer }: { title: string; onClose?: (() => void) | undefined; children: ReactNode; size?: 'sm' | 'md' | 'lg'; footer?: ReactNode }) {
+/** `plain`: no divider lines between title, body and buttons (confirmation dialogs, Design §13.8). */
+export function Dialog({ title, onClose, children, size = 'md', footer, plain }: { title: string; onClose?: (() => void) | undefined; children: ReactNode; size?: 'sm' | 'md' | 'lg'; footer?: ReactNode; plain?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -24,7 +25,7 @@ export function Dialog({ title, onClose, children, size = 'md', footer }: { titl
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 bg-[rgba(26,38,56,0.45)]" onClick={onClose} />
       <div ref={ref} className={clsx('relative flex max-h-[90dvh] w-full flex-col rounded-t-xl bg-white shadow-lg sm:rounded-lg', w)}>
-        <header className="flex items-center justify-between gap-2 border-b border-paper-300 px-6 py-4">
+        <header className={clsx('flex items-center justify-between gap-2 px-6 py-4', !plain && 'border-b border-paper-300', plain && 'pb-0')}>
           <h2 className="text-base font-semibold">{title}</h2>
           {onClose && (
             <button type="button" className="inline-flex size-10 items-center justify-center rounded-full hover:bg-navy-50" aria-label={t('common.close')} onClick={onClose}>
@@ -33,7 +34,7 @@ export function Dialog({ title, onClose, children, size = 'md', footer }: { titl
           )}
         </header>
         <div className="overflow-y-auto px-6 py-4">{children}</div>
-        {footer && <footer className="flex justify-end gap-2 border-t border-paper-300 px-6 py-4 max-sm:[&>*]:flex-1">{footer}</footer>}
+        {footer && <footer className={clsx('flex justify-end gap-2 px-6 py-4 max-sm:[&>*]:flex-1', !plain && 'border-t border-paper-300', plain && 'pt-2')}>{footer}</footer>}
       </div>
     </div>
   );
