@@ -1,5 +1,5 @@
 import { schema } from '@bookstore/db';
-import { divRoundHalfUp } from '@bookstore/domain';
+import { divRoundHalfUp, foldText } from '@bookstore/domain';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
@@ -19,8 +19,14 @@ export function monthRange(period: string): { from: Date; to: Date } {
   return { from: new Date(Date.UTC(y, mo - 1, 1) - offset), to: new Date(Date.UTC(y, mo, 1) - offset) };
 }
 
-export async function listLots(ctx: Ctx, supplierId?: string) {
+/** Lots by deadline; `q` matches product name, SKU or consignor, accent-insensitive (Design §13.8). */
+export async function listLots(ctx: Ctx, supplierId?: string, q?: string) {
   requirePermission(ctx, 'purchasing.manage');
+  const term = foldText(q ?? '').trim();
+  const like = `%${term}%`;
+  const search = term
+    ? sql`(lower(public.f_unaccent(coalesce(i.i18n -> 'en' ->> 'title', ''))) like ${like} or lower(public.f_unaccent(coalesce(i.i18n -> 'vi' ->> 'title', ''))) like ${like} or lower(v.sku) like ${like} or lower(public.f_unaccent(s.name)) like ${like})`
+    : sql`true`;
   return ctx.db.execute<{
     id: string;
     supplier_name: string;
@@ -39,7 +45,7 @@ export async function listLots(ctx: Ctx, supplierId?: string) {
     join purchasing.supplier s on s.id = l.supplier_id
     join catalog.item_variant v on v.id = l.variant_id
     join catalog.item i on i.id = v.item_id
-    where ${supplierId ? sql`l.supplier_id = ${supplierId}::uuid` : sql`true`}
+    where ${supplierId ? sql`l.supplier_id = ${supplierId}::uuid` : sql`true`} and ${search}
     order by l.deadline_at nulls last, l.created_at`);
 }
 

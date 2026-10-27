@@ -1,5 +1,5 @@
 import { schema } from '@bookstore/db';
-import { ALL_PERMISSIONS, DEFAULT_ROLES, isPermission, type Permission, type RoleCode } from '@bookstore/domain';
+import { ALL_PERMISSIONS, DEFAULT_ROLES, foldText, isPermission, type Permission, type RoleCode } from '@bookstore/domain';
 import { hash, verify } from '@node-rs/argon2';
 import { and, asc, count, eq, gte, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -395,13 +395,17 @@ function publicUser(u: typeof schema.appUser.$inferSelect & { roleName?: string 
   };
 }
 
-export async function listUsers(ctx: Ctx) {
+/** Users by display name; `q` matches display name or username, accent-insensitive (Design §13.8). */
+export async function listUsers(ctx: Ctx, q?: string) {
   requirePermission(ctx, 'user.manage');
+  const term = foldText(q ?? '').trim();
+  const u = schema.appUser;
   const rows = await ctx.db
-    .select({ u: schema.appUser, roleName: schema.role.name })
-    .from(schema.appUser)
-    .innerJoin(schema.role, eq(schema.role.id, schema.appUser.roleId))
-    .orderBy(asc(schema.appUser.displayName));
+    .select({ u, roleName: schema.role.name })
+    .from(u)
+    .innerJoin(schema.role, eq(schema.role.id, u.roleId))
+    .where(term ? sql`(lower(public.f_unaccent(${u.displayName})) like ${`%${term}%`} or lower(${u.username}) like ${`%${term}%`})` : undefined)
+    .orderBy(asc(u.displayName));
   return rows.map((r) => publicUser({ ...r.u, roleName: r.roleName }));
 }
 

@@ -1,5 +1,5 @@
 import { schema } from '@bookstore/db';
-import { isMarginTooLow, netOfVat, vnd } from '@bookstore/domain';
+import { foldText, isMarginTooLow, netOfVat, vnd } from '@bookstore/domain';
 import { and, asc, desc, eq, gte, lte, ne, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
@@ -17,13 +17,15 @@ const money = z.number().int().min(0);
 
 export const SupplierSchema = z.object({
   name: z.string().trim().min(1),
+  phone: z.string().trim().regex(/^[0-9+ .()-]{6,20}$/, 'Số điện thoại không hợp lệ.'),
+  email: z.email().nullable().optional(),
   taxCode: z.string().trim().min(1).nullable().optional(),
-  kind: z.enum(['publisher', 'distributor', 'vendor', 'individual']),
   isConsignor: z.boolean().default(false),
-  contacts: z.array(z.object({ name: z.string(), phone: z.string().optional(), email: z.string().optional() })).default([]),
-  bank: z.object({ bankName: z.string(), accountNo: z.string(), accountName: z.string() }).nullable().optional(),
   note: z.string().trim().optional(),
 });
+
+/** Phone and email live in `contacts` as one entry; type and bank account are retired (TDD §5). */
+const contactsOf = (phone: string, email: string | null | undefined) => [{ phone, ...(email && { email }) }];
 
 export async function createSupplier(ctx: Ctx, input: z.input<typeof SupplierSchema>) {
   requirePermission(ctx, 'purchasing.manage');
@@ -38,10 +40,9 @@ export async function createSupplier(ctx: Ctx, input: z.input<typeof SupplierSch
       .values({
         name: data.name,
         taxCode: data.taxCode ?? null,
-        kind: data.kind,
+        kind: 'vendor',
         isConsignor: data.isConsignor,
-        contacts: data.contacts,
-        bankEnc: data.bank ? ctx.crypto.encrypt(JSON.stringify(data.bank)) : null,
+        contacts: contactsOf(data.phone, data.email),
         note: data.note ?? null,
       })
       .returning({ id: schema.supplier.id });
@@ -52,7 +53,9 @@ export async function createSupplier(ctx: Ctx, input: z.input<typeof SupplierSch
 
 export const SupplierUpdateSchema = SupplierSchema.partial().extend({ status: z.enum(['active', 'inactive']).optional(), version: z.number().int() });
 
-/** Edit the supplier master (TDD §6.2); bank details stay write-only and encrypted. */
+type Contact = { phone?: string; email?: string };
+
+/** Edit the supplier master (TDD §6.2). */
 export async function updateSupplier(ctx: Ctx, id: string, input: z.input<typeof SupplierUpdateSchema>) {
   requirePermission(ctx, 'purchasing.manage');
   const data = SupplierUpdateSchema.parse(input);
@@ -64,25 +67,40 @@ export async function updateSupplier(ctx: Ctx, id: string, input: z.input<typeof
       const [dupe] = await tx.select({ name: schema.supplier.name }).from(schema.supplier).where(and(eq(schema.supplier.taxCode, data.taxCode), ne(schema.supplier.id, id)));
       if (dupe) throw errors.conflict('duplicate_tax_code', `Mã số thuế ${data.taxCode} đã có cho nhà cung cấp '${dupe.name}'.`);
     }
-    const { bank, version, ...rest } = data;
+    const { phone, email, version, ...rest } = data;
+    const cur = ((before.contacts as Contact[])[0] ?? {}) as Contact;
+    const contacts = phone !== undefined || email !== undefined ? contactsOf(phone ?? cur.phone ?? '', email === undefined ? cur.email : email) : undefined;
     await tx
       .update(schema.supplier)
       .set({
         ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)),
-        ...(bank !== undefined && { bankEnc: bank ? ctx.crypto.encrypt(JSON.stringify(bank)) : null }),
+        ...(contacts && { contacts }),
         updatedAt: ctx.clock.now(),
         version: before.version + 1,
       })
       .where(eq(schema.supplier.id, id));
-    await audit.record(tx, ctx, { action: 'supplier.update', entity: 'supplier', entityId: id, before: { name: before.name, status: before.status }, after: { ...rest, bankChanged: bank !== undefined } });
+    await audit.record(tx, ctx, { action: 'supplier.update', entity: 'supplier', entityId: id, before: { name: before.name, status: before.status }, after: { ...rest, ...(contacts && { phone, email }) } });
     return { version: before.version + 1 };
   });
 }
 
-export async function listSuppliers(ctx: Ctx) {
+/** Active suppliers; `q` matches the name (accent-insensitive) or the phone digits (Design §13.8). */
+export async function listSuppliers(ctx: Ctx, q?: string) {
   requirePermission(ctx, 'purchasing.manage');
-  const rows = await ctx.db.select().from(schema.supplier).where(eq(schema.supplier.status, 'active')).orderBy(asc(schema.supplier.name));
-  return rows.map(({ bankEnc, ...s }) => ({ ...s, hasBank: bankEnc !== null }));
+  const s = schema.supplier;
+  const where: SQL[] = [eq(s.status, 'active')];
+  const term = foldText(q ?? '').trim();
+  const digits = (q ?? '').replace(/\D/g, '');
+  if (term) {
+    const byName = sql`lower(public.f_unaccent(${s.name})) like ${`%${term}%`}`;
+    const byPhone = sql`regexp_replace(coalesce(${s.contacts} -> 0 ->> 'phone', ''), '\\D', '', 'g') like ${`%${digits}%`}`;
+    where.push(digits.length >= 3 ? sql`(${byName} or ${byPhone})` : byName);
+  }
+  const rows = await ctx.db.select().from(s).where(and(...where)).orderBy(asc(s.name));
+  return rows.map((s) => {
+    const c = ((s.contacts as Contact[])[0] ?? {}) as Contact;
+    return { id: s.id, name: s.name, phone: c.phone ?? null, email: c.email ?? null, taxCode: s.taxCode, isConsignor: s.isConsignor, note: s.note, status: s.status, version: s.version };
+  });
 }
 
 // ---------------------------------------------------------------------------------------------

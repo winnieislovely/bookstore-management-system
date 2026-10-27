@@ -9,8 +9,8 @@ import { defineRoute, IdParams } from '../http/route.js';
 
 /** Users, roles, settings and audit log (TDD §6.2, FR-ADM-03..05). */
 export function adminRoutes(app: OpenAPIHono<AppEnv>): void {
-  defineRoute(app, { method: 'get', path: '/api/v1/admin/users', access: 'user.manage', summary: 'List users' }, async ({ ctx }) => ({
-    items: await identity.listUsers(ctx),
+  defineRoute(app, { method: 'get', path: '/api/v1/admin/users', access: 'user.manage', summary: 'List users', query: z.object({ q: z.string().max(100).optional() }) }, async ({ ctx, query }) => ({
+    items: await identity.listUsers(ctx, query.q),
   }));
 
   defineRoute(

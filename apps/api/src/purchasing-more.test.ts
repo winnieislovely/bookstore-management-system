@@ -22,7 +22,7 @@ beforeAll(async () => {
   warehouse = await h.staff(owner, 'kho', roles.warehouse!);
   cashier = await h.staff(owner, 'thu', roles.cashier!);
   cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Stationery' } } } })).body.id;
-  supplierId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Thiên Long', kind: 'vendor' } })).body.id;
+  supplierId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Thiên Long', phone: '0900000000' } })).body.id;
   const mk = async (sku: string, price: number, qty: number, minStock: number | null = null) => {
     const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
       cookie: owner,
@@ -150,7 +150,7 @@ describe('import rollback (FR-ADM-07)', () => {
 
 describe('consignment deadline alerts (FR-PUR-13)', () => {
   it('notifies payables holders once per lot near its deadline', async () => {
-    const consignor = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Kim Đồng', kind: 'publisher', isConsignor: true } })).body.id;
+    const consignor = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Kim Đồng', phone: '0900000000', isConsignor: true } })).body.id;
     const deadline = new Date(h.clock.now().getTime() + 3 * 86_400_000).toISOString();
     await h.call('POST', '/api/v1/purchasing/stock-in/existing', {
       cookie: owner,

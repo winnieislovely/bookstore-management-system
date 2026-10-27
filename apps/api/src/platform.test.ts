@@ -100,6 +100,10 @@ describe('users, forced password change and RBAC (FR-ADM-01, FR-ADM-03)', () => 
       body: { username: 'thu', displayName: 'Thu', roleId: roles.cashier!.id, password: 'tam-thoi-123' },
     });
     expect(created.status).toBe(201);
+    // Search by display name or username, accent-insensitive (Design §13.8).
+    const names = async (q: string) => ((await call('GET', `/api/v1/admin/users?q=${encodeURIComponent(q)}`, { cookie: owner })).body.items as { username: string }[]).map((u) => u.username);
+    expect(await names('THU')).toContain('thu');
+    expect(await names('khong-co-ai')).toEqual([]);
     cashier = await login('thu', 'tam-thoi-123');
     const blocked = await call('GET', '/api/v1/admin/users', { cookie: cashier });
     expect(blocked.body.error.code).toBe('password_change_required');

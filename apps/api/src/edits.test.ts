@@ -57,13 +57,20 @@ describe('PATCH /promotions/:id (FR-PRM-02)', () => {
 
 describe('PATCH /purchasing/suppliers/:id', () => {
   it('edits a supplier with a version check and keeps the tax code unique', async () => {
-    const a = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'NXB Trẻ', kind: 'publisher', taxCode: '0301' } })).body.id;
-    await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', kind: 'distributor', taxCode: '0302' } });
+    const a = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'NXB Trẻ', phone: '0900000000', taxCode: '0301' } })).body.id;
+    await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', phone: '0900000000', taxCode: '0302' } });
     const s = (await h.call('GET', '/api/v1/purchasing/suppliers', { cookie: owner })).body.items.find((x: { id: string }) => x.id === a);
-    const ok = await h.call('PATCH', `/api/v1/purchasing/suppliers/${a}`, { cookie: owner, body: { bank: { bankName: 'VCB', accountNo: '001', accountName: 'NXB TRE' }, version: s.version } });
+    const ok = await h.call('PATCH', `/api/v1/purchasing/suppliers/${a}`, { cookie: owner, body: { phone: '028 3930 5243', email: 'nxbtre@example.vn', version: s.version } });
     expect(ok.status, JSON.stringify(ok.body)).toBe(200);
     const after = (await h.call('GET', '/api/v1/purchasing/suppliers', { cookie: owner })).body.items.find((x: { id: string }) => x.id === a);
-    expect(after).toMatchObject({ hasBank: true, version: s.version + 1 });
+    expect(after).toMatchObject({ phone: '028 3930 5243', email: 'nxbtre@example.vn', version: s.version + 1 });
+    // Search by name (accent-insensitive) or phone digits (Design §13.8).
+    const names = async (q: string) => ((await h.call('GET', `/api/v1/purchasing/suppliers?q=${encodeURIComponent(q)}`, { cookie: owner })).body.items as { name: string }[]).map((x) => x.name);
+    expect(await names('nxb tre')).toEqual(['NXB Trẻ']);
+    expect(await names('39305243')).toEqual(['NXB Trẻ']);
+    expect(await names('fahasa')).toEqual(['Fahasa']);
+    // Phone is required on create (FR-PUR-01).
+    expect((await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'No phone' } })).status).toBe(400);
     expect((await h.call('PATCH', `/api/v1/purchasing/suppliers/${a}`, { cookie: owner, body: { name: 'x', version: s.version } })).status).toBe(412);
     const dup = await h.call('PATCH', `/api/v1/purchasing/suppliers/${a}`, { cookie: owner, body: { taxCode: '0302', version: after.version } });
     expect(dup.body.error.code).toBe('duplicate_tax_code');

@@ -19,8 +19,8 @@ beforeAll(async () => {
   warehouse = await h.staff(owner, 'kho', roles.warehouse!);
   cashier = await h.staff(owner, 'thu', roles.cashier!);
   const cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Children' }, vi: { name: 'Thiếu nhi' } } } })).body.id;
-  await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', kind: 'distributor' } });
-  await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Phương Nam', kind: 'distributor' } });
+  await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', phone: '0900000000' } });
+  await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Phương Nam', phone: '0900000000' } });
   await h.call('POST', '/api/v1/catalog/publishers', { cookie: owner, body: { i18n: { en: { name: 'NXB Trẻ' } } } });
   const img = await upload(owner, PNG, 'image/png');
   const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {

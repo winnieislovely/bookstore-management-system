@@ -60,10 +60,10 @@ describe('master data', () => {
     supplierId = (
       await h.call('POST', '/api/v1/purchasing/suppliers', {
         cookie: warehouse,
-        body: { name: 'Fahasa', kind: 'distributor', taxCode: '0300000001' },
+        body: { name: 'Fahasa', phone: '0900000000', taxCode: '0300000001' },
       })
     ).body.id;
-    consignorId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: warehouse, body: { name: 'NXB Kim Đồng', kind: 'publisher', isConsignor: true } })).body.id;
+    consignorId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: warehouse, body: { name: 'NXB Kim Đồng', phone: '0900000000', isConsignor: true } })).body.id;
     expect(supplierId && consignorId).toBeTruthy();
   });
 });
@@ -221,6 +221,32 @@ describe('product list and detail (FR-CAT-14, Design §12.1)', () => {
     // Setting a cost needs catalog.import or purchasing.manage.
     const denied = await h.call('POST', '/api/v1/catalog/items', { cookie: cashier, body: { kind: 'other', i18n: { en: { title: 'X', description: 'X' } }, categoryIds: [cat!.id], variants: [{ sku: 'KHAC-X', weightG: 1, priceVnd: 1, vatBp: 1000 }], opening: { costVnd: 1 } } });
     expect(denied.status).toBe(403);
+  });
+
+  it('posts a new product’s opening quantity as consignment (FR-CAT-01, FR-PUR-09)', async () => {
+    const [cat] = (await h.call('GET', '/api/v1/catalog/categories', { cookie: warehouse })).body.items as { id: string }[];
+    const body = (sku: string, opening: object) => ({
+      kind: 'book',
+      i18n: { en: { title: `Truyện ${sku}`, description: 'Truyện tranh ký gửi' } },
+      categoryIds: [cat!.id],
+      variants: [{ sku, weightG: 120, priceVnd: 25000, vatBp: 500 }],
+      opening,
+    });
+    const r = await h.call('POST', '/api/v1/catalog/items', {
+      cookie: warehouse,
+      body: body('SACH-KG-1', { costVnd: 17500, qty: 15, supplierId: consignorId, consignment: true, consignmentDiscountBp: 3000, consignmentDeadline: '2026-12-31T00:00:00.000Z' }),
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const v = (await h.call('GET', `/api/v1/catalog/items/${r.body.itemId}`, { cookie: warehouse })).body.variants[0];
+    expect(v.stock).toMatchObject({ onHand: 15 });
+    expect(v.avgCostVnd).toBe(17500);
+    const [lot] = await h.t.sql`select l.qty_received, l.discount_bp, e.consignment from purchasing.consignment_lot l join purchasing.stock_in_line sl on sl.id = l.stock_in_line_id join purchasing.stock_in_entry e on e.id = sl.entry_id where l.variant_id = ${v.id}`;
+    expect(lot).toMatchObject({ qty_received: 15, discount_bp: 3000, consignment: true });
+    // Consignment needs a quantity and a supplier that takes consignment; nothing is left behind.
+    expect((await h.call('POST', '/api/v1/catalog/items', { cookie: warehouse, body: body('SACH-KG-2', { costVnd: 1, supplierId: consignorId, consignment: true }) })).status).toBe(400);
+    const notConsignor = await h.call('POST', '/api/v1/catalog/items', { cookie: warehouse, body: body('SACH-KG-3', { costVnd: 1, qty: 1, supplierId, consignment: true }) });
+    expect(notConsignor.body.error.code).toBe('not_a_consignor');
+    expect(await h.t.sql`select 1 from catalog.item_variant where sku = 'SACH-KG-3'`).toHaveLength(0);
   });
 });
 

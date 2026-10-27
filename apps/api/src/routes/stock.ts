@@ -157,8 +157,8 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'get', path: '/api/v1/purchasing/stock-in', access: 'purchasing.manage', summary: 'List stock-in entries', query: purchasing.StockInQuery }, async ({ ctx, query }) =>
     purchasing.listStockIns(ctx, query),
   );
-  defineRoute(app, { method: 'get', path: '/api/v1/purchasing/suppliers', access: 'purchasing.manage', summary: 'Suppliers' }, async ({ ctx }) => ({
-    items: await purchasing.listSuppliers(ctx),
+  defineRoute(app, { method: 'get', path: '/api/v1/purchasing/suppliers', access: 'purchasing.manage', summary: 'Suppliers', query: z.object({ q: z.string().max(100).optional() }) }, async ({ ctx, query }) => ({
+    items: await purchasing.listSuppliers(ctx, query.q),
   }));
   defineRoute(app, { method: 'patch', path: '/api/v1/purchasing/suppliers/:id', access: 'purchasing.manage', summary: 'Edit a supplier', params: IdParams, body: purchasing.SupplierUpdateSchema }, async ({ ctx, params, body }) =>
     purchasing.updateSupplier(ctx, params.id, body),
@@ -169,8 +169,8 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
   // --- Consignment ----------------------------------------------------------------------------
   defineRoute(
     app,
-    { method: 'get', path: '/api/v1/purchasing/consignment/lots', access: 'purchasing.manage', summary: 'Consignment lots', query: z.object({ supplier: z.uuid().optional() }) },
-    async ({ ctx, query }) => ({ items: await purchasing.listLots(ctx, query.supplier) }),
+    { method: 'get', path: '/api/v1/purchasing/consignment/lots', access: 'purchasing.manage', summary: 'Consignment lots', query: z.object({ supplier: z.uuid().optional(), q: z.string().max(100).optional() }) },
+    async ({ ctx, query }) => ({ items: await purchasing.listLots(ctx, query.supplier, query.q) }),
   );
   defineRoute(
     app,

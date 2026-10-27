@@ -23,8 +23,8 @@ beforeAll(async () => {
   manager = await h.staff(owner, 'quanly', roles.manager!, '112233');
   cashier = await h.staff(owner, 'thu', roles.cashier!);
   const cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Books' } } } })).body.id;
-  const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', kind: 'distributor' } })).body.id;
-  consignorId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Kim Đồng', kind: 'publisher', isConsignor: true } })).body.id;
+  const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', phone: '0900000000' } })).body.id;
+  consignorId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Kim Đồng', phone: '0900000000', isConsignor: true } })).body.id;
   const mk = async (sku: string, price: number, opts: Record<string, unknown> = {}) => {
     const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
       cookie: owner,
@@ -107,6 +107,11 @@ describe('consignment return (FR-PUR-12)', () => {
   it('returns unsold units without cost impact and refuses more than remain', async () => {
     const lot = (await h.call('GET', `/api/v1/purchasing/consignment/lots?supplier=${consignorId}`, { cookie: owner })).body.items[0];
     expect(lot.remaining).toBe(3);
+    // Search by consignor (accent-insensitive) or SKU (Design §13.8).
+    const ids = async (q: string) => ((await h.call('GET', `/api/v1/purchasing/consignment/lots?q=${encodeURIComponent(q)}`, { cookie: owner })).body.items as { id: string }[]).map((x) => x.id);
+    expect(await ids('kim dong')).toContain(lot.id);
+    expect(await ids(lot.sku.toLowerCase())).toContain(lot.id);
+    expect(await ids('khong-co-gi')).toEqual([]);
     const r = await h.call('POST', '/api/v1/purchasing/consignment/returns', { cookie: owner, body: { lotId: lot.id, qty: 2 } });
     expect(r.body.remaining).toBe(1);
     expect((await h.call('POST', '/api/v1/purchasing/consignment/returns', { cookie: owner, body: { lotId: lot.id, qty: 5 } })).body.error.code).toBe('return_exceeds_remaining');

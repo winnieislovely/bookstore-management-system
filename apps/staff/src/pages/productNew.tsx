@@ -9,6 +9,7 @@ import { Button, Card, Field, InlineAlert, PageHeader } from '../components/ui';
 import { get, post, upload } from '../lib/api';
 import { formatNumber, formatVnd } from '../lib/format';
 import { categoryOptions, nameOf, type Category, type Named } from './products';
+import { useSuppliers } from './stockin';
 
 /** “Thêm sản phẩm mới” page (FR-CAT-01..04, Design §12.1, §12.4): grouped cards, cost required, profit per unit. */
 
@@ -23,7 +24,8 @@ export function ProductNewPage() {
   const publishers = useQuery({ queryKey: ['publishers'], queryFn: () => get<{ items: Named[] }>('/api/v1/catalog/publishers') });
   const units = useQuery({ queryKey: ['master-data', 'unit'], queryFn: () => get<{ items: Unit[] }>('/api/v1/admin/master-data/unit') });
   const unitList = useId();
-  const [f, setF] = useState({ kind: 'book' as 'book' | 'stationery' | 'other', sku: '', title: '', categoryId: '', description: '', isbn: '', barcode: '', authors: '', publisherId: '', unit: '', weightG: '', cost: '', price: '', qty: '', minStock: '', vatBp: 0 });
+  const suppliers = useSuppliers();
+  const [f, setF] = useState({ kind: 'book' as 'book' | 'stationery' | 'other', sku: '', title: '', categoryId: '', description: '', isbn: '', barcode: '', authors: '', publisherId: '', unit: '', weightG: '', cost: '', price: '', qty: '', supplierId: '', consignment: false, discount: '', deadline: '', minStock: '', vatBp: 0 });
   const [image, setImage] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +34,10 @@ export function ProductNewPage() {
   const digits = (v: string) => Number(v.replace(/\D/g, ''));
   const money = (v: string) => (v ? formatNumber(digits(v)) : '');
   const book = f.kind === 'book';
-  const ready = f.sku.trim() && f.title.trim() && f.categoryId && f.description.trim() && f.cost.trim() && f.price.trim() && digits(f.weightG) > 0;
+  // Consignment opening stock only from a supplier that takes consignment (FR-PUR-09).
+  const consignor = !!suppliers.data?.items.find((x) => x.id === f.supplierId)?.isConsignor;
+  const consignment = consignor && f.consignment;
+  const ready = f.sku.trim() && f.title.trim() && f.categoryId && f.description.trim() && f.cost.trim() && f.price.trim() && digits(f.weightG) > 0 && (!consignment || digits(f.qty) > 0);
   // Profit on one unit sold: selling price − cost, and its share of the selling price.
   const profit = f.cost.trim() && f.price.trim() ? digits(f.price) - digits(f.cost) : null;
   const profitPct = profit !== null && digits(f.price) > 0 ? Math.round((profit / digits(f.price)) * 100) : null;
@@ -62,7 +67,16 @@ export function ProductNewPage() {
             minStock: f.minStock ? digits(f.minStock) : null,
           },
         ],
-        opening: { costVnd: digits(f.cost), ...(digits(f.qty) > 0 && { qty: digits(f.qty) }) },
+        opening: {
+          costVnd: digits(f.cost),
+          ...(digits(f.qty) > 0 && { qty: digits(f.qty) }),
+          ...(consignment && {
+            supplierId: f.supplierId,
+            consignment: true,
+            ...(f.discount && { consignmentDiscountBp: Math.round(Number(f.discount.replace(',', '.')) * 100) }),
+            ...(f.deadline && { consignmentDeadline: new Date(f.deadline).toISOString() }),
+          }),
+        },
       });
       if (fileId) {
         try {
@@ -91,7 +105,7 @@ export function ProductNewPage() {
         title="Thêm sản phẩm mới"
       />
       <div className="flex flex-col gap-6">
-        <Card title="Thông tin chung">
+        <Card title="Thông tin sản phẩm">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <SelectField label="Loại" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as typeof f.kind, vatBp: e.target.value === 'book' ? 0 : 1000 })}>
               <option value="book">Sách</option>
@@ -108,14 +122,17 @@ export function ProductNewPage() {
                 </option>
               ))}
             </SelectField>
+            <SelectField label="Nhà cung cấp" value={f.supplierId} onChange={(e) => setF({ ...f, supplierId: e.target.value })} className="sm:col-span-2">
+              <option value="">— Không chọn —</option>
+              {suppliers.data?.items.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name}
+                </option>
+              ))}
+            </SelectField>
             <div className="sm:col-span-2">
               <TextArea label="Mô tả" required value={f.description} onChange={set('description')} />
             </div>
-          </div>
-        </Card>
-
-        <Card title="Mã và quy cách">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {book ? (
               <>
                 <Field label="ISBN" inputMode="numeric" value={f.isbn} onChange={set('isbn')} />
@@ -158,7 +175,7 @@ export function ProductNewPage() {
 
         <Card title="Tồn kho và thuế">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Field label="Số lượng nhập lần đầu" inputMode="numeric" value={f.qty} onChange={num('qty')} helper="Để trống nếu chưa có hàng." />
+            <Field label="Số lượng nhập lần đầu" required={consignment} inputMode="numeric" value={f.qty} onChange={num('qty')} helper={consignment ? undefined : 'Để trống nếu chưa có hàng.'} />
             <Field label="Tồn tối thiểu" inputMode="numeric" value={f.minStock} onChange={num('minStock')} />
             <SelectField label="Thuế VAT" value={String(f.vatBp)} onChange={(e) => setF({ ...f, vatBp: Number(e.target.value) })}>
               {VAT_RATES_BP.map((v) => (
@@ -167,6 +184,18 @@ export function ProductNewPage() {
                 </option>
               ))}
             </SelectField>
+            {consignor && (
+              <label className="inline-flex items-center gap-2 text-sm sm:col-span-3">
+                <input type="checkbox" className="size-5 accent-navy-700" checked={f.consignment} onChange={(e) => setF({ ...f, consignment: e.target.checked })} />
+                Hàng ký gửi
+              </label>
+            )}
+            {consignment && (
+              <>
+                <Field label="Chiết khấu thỏa thuận" suffix="%" inputMode="decimal" value={f.discount} onChange={set('discount')} />
+                <Field label="Hạn đối soát / trả hàng" type="date" value={f.deadline} onChange={set('deadline')} />
+              </>
+            )}
           </div>
         </Card>
 

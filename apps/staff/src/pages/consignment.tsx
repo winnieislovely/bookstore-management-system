@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { CheckCircle2, FileText, Handshake, Printer, Undo2 } from 'lucide-react';
+import { CheckCircle2, FileText, Handshake, Printer, Search, Undo2 } from 'lucide-react';
 import { useState } from 'react';
-import { ConfirmDialog, DataTable, SelectField, Tabs, TextArea, toast, type Column } from '../components/data';
+import { ConfirmDialog, DataTable, SearchBox, SelectField, Tabs, TextArea, toast, useParam, type Column } from '../components/data';
 import { Button, Field, PageHeader, Skeleton, StatusChip } from '../components/ui';
 import { get, post } from '../lib/api';
 import { formatDate, formatDateTime, formatNumber, formatVnd } from '../lib/format';
@@ -42,7 +42,8 @@ export function ConsignmentPage() {
 }
 
 function Lots() {
-  const lots = useQuery({ queryKey: ['consignment-lots'], queryFn: () => get<{ items: Lot[] }>('/api/v1/purchasing/consignment/lots') });
+  const [q, setQ] = useParam('q');
+  const lots = useQuery({ queryKey: ['consignment-lots', q], queryFn: () => get<{ items: Lot[] }>('/api/v1/purchasing/consignment/lots', { q: q || undefined }) });
   const [returning, setReturning] = useState<Lot | null>(null);
   const soon = Date.now() + 14 * 86_400_000;
   const columns: Column<Lot>[] = [
@@ -79,7 +80,18 @@ function Lots() {
   ];
   return (
     <>
-      <DataTable columns={columns} rows={lots.data?.items} rowKey={(l) => l.id} error={lots.error} minWidth={880} empty={{ icon: Handshake, title: 'Chưa có hàng ký gửi', help: 'Hàng ký gửi được tạo khi nhập hàng từ bên ký gửi và chọn “Hàng ký gửi”.' }} />
+      {/* Search (Design §13.8) */}
+      <div className="mb-4">
+        <SearchBox value={q} onChange={setQ} placeholder="Tìm sản phẩm, SKU hoặc bên ký gửi…" />
+      </div>
+      <DataTable
+        columns={columns}
+        rows={lots.data?.items}
+        rowKey={(l) => l.id}
+        error={lots.error}
+        minWidth={880}
+        empty={q ? { icon: Search, title: 'Không có lô hàng phù hợp', help: 'Thử đổi từ khóa.' } : { icon: Handshake, title: 'Chưa có hàng ký gửi', help: 'Hàng ký gửi được tạo khi nhập hàng từ bên ký gửi và chọn “Hàng ký gửi”.' }}
+      />
       {returning && <ReturnLot lot={returning} onClose={() => setReturning(null)} onDone={() => lots.refetch()} />}
     </>
   );

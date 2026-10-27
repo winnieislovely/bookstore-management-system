@@ -1,8 +1,8 @@
 import { PERMISSIONS } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, Lock, Monitor, Plus, ScrollText, ShieldCheck, Unlock, UserRound } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Lock, Monitor, Plus, RefreshCw, ScrollText, Search, ShieldCheck, Unlock, UserRound } from 'lucide-react';
 import { useState } from 'react';
-import { ConfirmDialog, DataTable, Facts, SelectField, Tabs, TextArea, toast, type Column } from '../components/data';
+import { ConfirmDialog, DataTable, Facts, SearchBox, SelectField, Tabs, TextArea, toast, useParam, type Column } from '../components/data';
 import { Button, Field, InlineAlert, PageHeader, StatusChip, type Tone } from '../components/ui';
 import { get, patch, post } from '../lib/api';
 import { formatDateTime, formatRelative } from '../lib/format';
@@ -42,10 +42,18 @@ const USER_STATUS: Record<string, { tone: Tone; label: string }> = {
   disabled: { tone: 'neutral', label: 'Ngừng dùng' },
 };
 
+/** Temporary password: 12 characters without look-alikes (0/O, 1/l/I), from Web Crypto (Design §13.8). */
+const PASSWORD_CHARS = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function tempPassword(length = 12): string {
+  const bytes = crypto.getRandomValues(new Uint32Array(length));
+  return Array.from(bytes, (b) => PASSWORD_CHARS[b % PASSWORD_CHARS.length]).join('');
+}
+
 export function UsersPage() {
   const { data: me } = useMe();
   const manage = can(me, 'user.manage');
-  const users = useQuery({ queryKey: ['users'], queryFn: () => get<{ items: User[] }>('/api/v1/admin/users') });
+  const [q, setQ] = useParam('q');
+  const users = useQuery({ queryKey: ['users', q], queryFn: () => get<{ items: User[] }>('/api/v1/admin/users', { q: q || undefined }) });
   const roles = useRoles(manage && can(me, 'role.manage'));
   const [editing, setEditing] = useState<User | 'new' | null>(null);
   const [unlocking, setUnlocking] = useState<User | null>(null);
@@ -88,7 +96,19 @@ export function UsersPage() {
           )
         }
       />
-      <DataTable columns={columns} rows={users.data?.items} rowKey={(u) => u.id} onRow={manage ? (u) => setEditing(u) : undefined} error={users.error} onRetry={() => users.refetch()} empty={{ icon: UserRound, title: 'Chưa có nhân viên' }} />
+      {/* Search (Design §13.8) */}
+      <div className="mb-4">
+        <SearchBox value={q} onChange={setQ} placeholder="Tìm tên hoặc tên đăng nhập…" />
+      </div>
+      <DataTable
+        columns={columns}
+        rows={users.data?.items}
+        rowKey={(u) => u.id}
+        onRow={manage ? (u) => setEditing(u) : undefined}
+        error={users.error}
+        onRetry={() => users.refetch()}
+        empty={q ? { icon: Search, title: 'Không có nhân viên phù hợp', help: 'Thử đổi từ khóa.' } : { icon: UserRound, title: 'Chưa có nhân viên' }}
+      />
       {editing && <UserForm user={editing === 'new' ? null : editing} roles={roles.data?.items ?? []} onClose={() => setEditing(null)} onSaved={() => users.refetch()} />}
       {unlocking && (
         <ConfirmDialog
@@ -111,7 +131,7 @@ function UserForm({ user, roles, onClose, onSaved }: { user: User | null; roles:
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState(user?.displayName ?? '');
   const [roleId, setRoleId] = useState(user?.roleId ?? '');
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState(() => (user ? '' : tempPassword()));
   const [status, setStatus] = useState(user?.status === 'disabled' ? 'disabled' : 'active');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -161,7 +181,31 @@ function UserForm({ user, roles, onClose, onSaved }: { user: User | null; roles:
         ) : (
           user && <Facts items={[['Vai trò', user.roleName]]} />
         )}
-        {!user && <Field label="Mật khẩu tạm" required type="password" autoComplete="new-password" helper="Ít nhất 8 ký tự. Nhân viên đổi mật khẩu khi đăng nhập lần đầu." value={password} onChange={(e) => setPassword(e.target.value)} />}
+        {!user && (
+          <div>
+            <Field label="Mật khẩu tạm" readOnly className="code" autoComplete="off" value={password} helper="Gửi mật khẩu này cho nhân viên. Họ sẽ đổi khi đăng nhập lần đầu." />
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="tonal"
+                icon={Copy}
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(password);
+                    toast.success('Đã sao chép mật khẩu tạm.');
+                  } catch {
+                    toast.error('Không sao chép được. Hãy chọn và sao chép thủ công.');
+                  }
+                }}
+              >
+                Sao chép
+              </Button>
+              <Button size="sm" variant="ghost" icon={RefreshCw} onClick={() => setPassword(tempPassword())}>
+                Tạo mã khác
+              </Button>
+            </div>
+          </div>
+        )}
         {user && (
           <SelectField label="Trạng thái" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="active">Đang dùng</option>

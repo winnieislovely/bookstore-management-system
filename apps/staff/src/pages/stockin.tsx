@@ -21,7 +21,7 @@ interface Supplier {
   name: string;
   isConsignor: boolean;
 }
-export const useSuppliers = () => useQuery({ queryKey: ['suppliers'], queryFn: () => get<{ items: (Supplier & { taxCode: string | null; kind: string; contacts: { name: string; phone?: string; email?: string }[]; note: string | null; status: string; hasBank: boolean; version: number })[] }>('/api/v1/purchasing/suppliers') });
+export const useSuppliers = () => useQuery({ queryKey: ['suppliers'], queryFn: () => get<{ items: (Supplier & { phone: string | null; email: string | null; taxCode: string | null; note: string | null; status: string; version: number })[] }>('/api/v1/purchasing/suppliers') });
 
 interface Named {
   id: string;

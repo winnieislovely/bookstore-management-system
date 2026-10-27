@@ -28,7 +28,7 @@ beforeAll(async () => {
   cashierId = users.find((u: { username: string }) => u.username === 'thu').id;
   managerId = users.find((u: { username: string }) => u.username === 'quanly').id;
   const cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Books' } } } })).body.id;
-  const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', kind: 'distributor' } })).body.id;
+  const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', phone: '0900000000' } })).body.id;
   const mk = async (sku: string, price: number, qty: number) => {
     const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
       cookie: owner,

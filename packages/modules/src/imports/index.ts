@@ -659,8 +659,21 @@ export { rollback } from './rollback.js';
 
 /** Create-product page with its cost and optional opening stock (FR-CAT-01, Design §12.1). */
 export const CreateProductSchema = catalog.ItemSchema.extend({
-  /** Cost, plus opening stock posted like the Excel product import (FR-CAT-11) when `qty` > 0. */
-  opening: z.object({ costVnd: z.number().int().min(0), qty: z.number().int().min(0).optional() }).optional(),
+  /**
+   * Cost, plus opening stock posted like the Excel product import (FR-CAT-11) when `qty` > 0, or
+   * as a consignment stock-in from a consignor supplier (FR-CAT-01, FR-PUR-09).
+   */
+  opening: z
+    .object({
+      costVnd: z.number().int().min(0),
+      qty: z.number().int().min(0).optional(),
+      supplierId: z.uuid().optional(),
+      consignment: z.boolean().default(false),
+      consignmentDiscountBp: z.number().int().min(0).max(10000).optional(),
+      consignmentDeadline: z.iso.datetime().optional(),
+    })
+    .refine((o) => !o.consignment || (!!o.supplierId && (o.qty ?? 0) > 0), { message: 'Hàng ký gửi cần chọn nhà cung cấp và số lượng nhập lần đầu.', path: ['consignment'] })
+    .optional(),
 });
 
 export async function createProduct(ctx: Ctx, input: z.input<typeof CreateProductSchema>) {
@@ -672,7 +685,19 @@ export async function createProduct(ctx: Ctx, input: z.input<typeof CreateProduc
   return ctx.db.transaction(async (tx) => {
     const made = await catalog.createItemTx(tx, ctx, item);
     const variantId = made.variantIds[0]!;
-    if (opening?.qty) {
+    if (opening?.consignment) {
+      // Keep the cost on the product, then post the quantity as a consignment stock-in: one SI
+      // entry and a consignment lot, without touching the average cost (TDD §4.3).
+      await tx.insert(schema.stockLevel).values({ variantId, location: 'floor', onHand: 0, avgCostVnd: opening.costVnd }).onConflictDoNothing();
+      await purchasing.postStockInTx(tx, ctx, {
+        supplierId: opening.supplierId,
+        consignment: true,
+        ...(opening.consignmentDiscountBp !== undefined && { consignmentDiscountBp: opening.consignmentDiscountBp }),
+        ...(opening.consignmentDeadline && { consignmentDeadline: opening.consignmentDeadline }),
+        note: 'Tồn đầu kỳ',
+        lines: [{ kind: 'existing', variantId, costVnd: opening.costVnd, sellingPriceVnd: item.variants[0]!.priceVnd, qty: opening.qty! }],
+      });
+    } else if (opening?.qty) {
       await inventory.apply(tx, ctx, { variantId, type: 'stock_in', qtyDelta: opening.qty, unitCostVnd: opening.costVnd, refType: 'item', refId: made.itemId, note: 'Tồn đầu kỳ' });
     } else if (opening) {
       // No stock yet: keep the cost on an empty level row (on hand 0 still equals the movement sum).
