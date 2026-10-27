@@ -42,7 +42,6 @@ const REPORTS: ReportDef[] = [
   { key: 'inv-counts', label: 'Chênh lệch kiểm kho', report: 'inventory', params: { view: 'counts' }, range: true },
   { key: 'inv-consignment', label: 'Hàng ký gửi', report: 'inventory', params: { view: 'consignment' }, range: false },
   { key: 'pur-stockins', label: 'Phiếu nhập hàng', report: 'purchasing', params: { view: 'stock_ins' }, range: true },
-  { key: 'pur-payables', label: 'Công nợ nhà cung cấp', report: 'purchasing', params: { view: 'payables' }, range: false, permission: 'purchasing.payables' },
   { key: 'tax-vat', label: 'Thuế GTGT đầu ra', report: 'tax', params: { view: 'vat' }, range: true },
   { key: 'tax-einvoices', label: 'Hóa đơn điện tử', report: 'tax', params: { view: 'einvoices' }, range: true },
   { key: 'tax-shifts', label: 'Ca làm và chênh lệch tiền', report: 'tax', params: { view: 'shifts' }, range: true },

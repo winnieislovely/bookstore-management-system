@@ -215,7 +215,7 @@ function StatementDialog({ id, onClose, onChanged }: { id: string; onClose: () =
             </Button>
             {x.status !== 'approved' && (
               <Button variant="primary" icon={CheckCircle2} onClick={() => setApproving(true)}>
-                Duyệt và tạo công nợ
+                Duyệt quyết toán
               </Button>
             )}
           </>
@@ -267,12 +267,12 @@ function StatementDialog({ id, onClose, onChanged }: { id: string; onClose: () =
       {approving && x && (
         <ConfirmDialog
           title="Duyệt bảng đối soát?"
-          body={`Tạo công nợ ${formatVnd(x.amountDueVnd)} với ${x.supplierName}. Không sửa được sau khi duyệt.`}
+          body={`Số tiền phải trả ${x.supplierName}: ${formatVnd(x.amountDueVnd)}. Không sửa được sau khi duyệt.`}
           confirm="Duyệt"
           onClose={() => setApproving(false)}
           onConfirm={async () => {
             await post(`/api/v1/purchasing/consignment/statements/${x.id}/approve`);
-            toast.success('Đã duyệt và tạo công nợ.');
+            toast.success('Đã duyệt quyết toán.');
             await s.refetch();
             onChanged();
           }}

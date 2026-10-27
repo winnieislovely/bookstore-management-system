@@ -34,7 +34,7 @@ export const PERMISSIONS = {
   'inventory.count': 'Kiểm kho',
   'inventory.count_approve': 'Duyệt kiểm kho và điều chỉnh lớn',
   'purchasing.manage': 'Nhập hàng, nhà cung cấp, đơn đặt NCC',
-  'purchasing.payables': 'Công nợ và quyết toán ký gửi',
+  'purchasing.payables': 'Quyết toán ký gửi',
   // Orders (R2)
   'online.manage': 'Xử lý đơn online / mạng xã hội',
   'online.confirm_payment': 'Xác nhận chuyển khoản',

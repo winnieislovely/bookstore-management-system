@@ -2,8 +2,7 @@ import { VAT_RATES_BP } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { ImagePlus, Plus, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useState } from 'react';
 import { SelectField, TextArea, toast } from '../components/data';
 import { hitTitle, ProductSearch } from '../components/product-search';
 import { Button, Field, InlineAlert, StatusChip } from '../components/ui';
@@ -21,9 +20,8 @@ interface Supplier {
   id: string;
   name: string;
   isConsignor: boolean;
-  tracksPayables: boolean;
 }
-export const useSuppliers = () => useQuery({ queryKey: ['suppliers'], queryFn: () => get<{ items: (Supplier & { taxCode: string | null; kind: string; termsDays: number | null; contacts: { name: string; phone?: string; email?: string }[]; note: string | null; status: string; hasBank: boolean; version: number })[] }>('/api/v1/purchasing/suppliers') });
+export const useSuppliers = () => useQuery({ queryKey: ['suppliers'], queryFn: () => get<{ items: (Supplier & { taxCode: string | null; kind: string; contacts: { name: string; phone?: string; email?: string }[]; note: string | null; status: string; hasBank: boolean; version: number })[] }>('/api/v1/purchasing/suppliers') });
 
 interface Named {
   id: string;
@@ -41,7 +39,6 @@ interface ExistingLine {
   costVnd: string;
   sellingPriceVnd: string;
   qty: string;
-  orderLineId?: string;
 }
 interface NewLine {
   kind: 'new';
@@ -106,11 +103,10 @@ export interface StockInPick {
 }
 
 /**
- * Stock-in form, opened from the Stock page (“Nhập thêm hàng”) with the ticked products, or to
- * receive a supplier order (FR-PUR-01..07, Design §12.1, §12.4). Posts one stock-in entry.
+ * Stock-in form, opened from the Stock page (“Nhập thêm hàng”) with the ticked products
+ * (FR-PUR-01..06, Design §12.1, §12.4). Posts one stock-in entry.
  */
-export function StockInForm({ orderId, initial = [], onClose, onPosted }: { orderId: string | null; initial?: StockInPick[]; onClose: () => void; onPosted: () => void }) {
-  const navigate = useNavigate();
+export function StockInForm({ initial = [], onClose, onPosted }: { initial?: StockInPick[]; onClose: () => void; onPosted: () => void }) {
   const suppliers = useSuppliers();
   const categories = useQuery({ queryKey: ['categories'], queryFn: () => get<{ items: Named[] }>('/api/v1/catalog/categories') });
   const publishers = useQuery({ queryKey: ['publishers'], queryFn: () => get<{ items: Named[] }>('/api/v1/catalog/publishers') });
@@ -127,32 +123,7 @@ export function StockInForm({ orderId, initial = [], onClose, onPosted }: { orde
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ entryNo: string; totalCostVnd: number; lines: { marginFlag: boolean; createdProduct: boolean; priceChanged: boolean }[] } | null>(null);
   const supplier = suppliers.data?.items.find((s) => s.id === supplierId);
-  const locked = initial.length > 0 || !!orderId;
-
-  // Receiving a supplier order: prefill outstanding lines (FR-PUR-07).
-  useEffect(() => {
-    if (!orderId) return;
-    void get<{ supplierId: string; docNo: string; lines: { id: string; variantId: string; sku: string; title: string; qty: number; receivedQty: number; unitCostVnd: number | null }[] }>(`/api/v1/purchasing/orders/${orderId}`).then(async (o) => {
-      setSupplierId(o.supplierId);
-      setNote(`Nhận hàng đơn ${o.docNo}`);
-      const open = o.lines.filter((l) => l.qty > l.receivedQty);
-      // Current selling price per line, so receiving keeps it unless staff change it.
-      const prices = (await Promise.all(open.map((l) => get<{ items: { variantId: string; priceVnd: number }[] }>('/api/v1/catalog/items', { q: l.sku, limit: 5 }).then((r) => r.items).catch(() => [])))).flat();
-      setLines(
-        open.map((l) => ({
-          kind: 'existing',
-          key: l.id,
-          variantId: l.variantId,
-          title: l.title,
-          sku: l.sku,
-          costVnd: l.unitCostVnd ? String(l.unitCostVnd) : '',
-          sellingPriceVnd: String(prices.find((p) => p.variantId === l.variantId)?.priceVnd ?? ''),
-          qty: String(l.qty - l.receivedQty),
-          orderLineId: l.id,
-        })),
-      );
-    });
-  }, [orderId]);
+  const locked = initial.length > 0;
 
   const update = (key: string, patch: Partial<ExistingLine> | Partial<NewLine>) => setLines((ls) => ls.map((l) => (l.key === key ? ({ ...l, ...patch } as Line) : l)));
   const total = lines.reduce((a, l) => a + digits(l.costVnd) * digits(l.qty), 0);
@@ -171,7 +142,7 @@ export function StockInForm({ orderId, initial = [], onClose, onPosted }: { orde
         ...(consignment && deadline && { consignmentDeadline: new Date(deadline).toISOString() }),
         lines: lines.map((l) =>
           l.kind === 'existing'
-            ? { kind: 'existing', variantId: l.variantId, costVnd: digits(l.costVnd), sellingPriceVnd: digits(l.sellingPriceVnd), qty: digits(l.qty), ...(l.orderLineId && { orderLineId: l.orderLineId }) }
+            ? { kind: 'existing', variantId: l.variantId, costVnd: digits(l.costVnd), sellingPriceVnd: digits(l.sellingPriceVnd), qty: digits(l.qty) }
             : {
                 kind: 'new',
                 item: {
@@ -217,7 +188,7 @@ export function StockInForm({ orderId, initial = [], onClose, onPosted }: { orde
           </p>
           {result.lines.some((l) => l.marginFlag) && <InlineAlert tone="warning">{result.lines.filter((l) => l.marginFlag).length} dòng có lãi dưới mức tối thiểu. Kiểm tra giá bán.</InlineAlert>}
           {result.lines.some((l) => l.priceChanged) && <InlineAlert tone="info">Giá bán đã được cập nhật cho {result.lines.filter((l) => l.priceChanged).length} sản phẩm.</InlineAlert>}
-          <Button variant="primary" full onClick={() => (orderId ? navigate('/supplier-orders') : onClose())}>
+          <Button variant="primary" full onClick={onClose}>
             Xong
           </Button>
         </div>

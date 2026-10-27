@@ -60,10 +60,10 @@ describe('PATCH /purchasing/suppliers/:id', () => {
     const a = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'NXB Trẻ', kind: 'publisher', taxCode: '0301' } })).body.id;
     await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', kind: 'distributor', taxCode: '0302' } });
     const s = (await h.call('GET', '/api/v1/purchasing/suppliers', { cookie: owner })).body.items.find((x: { id: string }) => x.id === a);
-    const ok = await h.call('PATCH', `/api/v1/purchasing/suppliers/${a}`, { cookie: owner, body: { termsDays: 30, tracksPayables: true, bank: { bankName: 'VCB', accountNo: '001', accountName: 'NXB TRE' }, version: s.version } });
+    const ok = await h.call('PATCH', `/api/v1/purchasing/suppliers/${a}`, { cookie: owner, body: { bank: { bankName: 'VCB', accountNo: '001', accountName: 'NXB TRE' }, version: s.version } });
     expect(ok.status, JSON.stringify(ok.body)).toBe(200);
     const after = (await h.call('GET', '/api/v1/purchasing/suppliers', { cookie: owner })).body.items.find((x: { id: string }) => x.id === a);
-    expect(after).toMatchObject({ termsDays: 30, tracksPayables: true, hasBank: true, version: s.version + 1 });
+    expect(after).toMatchObject({ hasBank: true, version: s.version + 1 });
     expect((await h.call('PATCH', `/api/v1/purchasing/suppliers/${a}`, { cookie: owner, body: { name: 'x', version: s.version } })).status).toBe(412);
     const dup = await h.call('PATCH', `/api/v1/purchasing/suppliers/${a}`, { cookie: owner, body: { taxCode: '0302', version: after.version } });
     expect(dup.body.error.code).toBe('duplicate_tax_code');

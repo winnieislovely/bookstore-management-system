@@ -19,7 +19,7 @@ beforeAll(async () => {
   warehouse = await h.staff(owner, 'kho', roles.warehouse!);
   cashier = await h.staff(owner, 'thu', roles.cashier!);
   const cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Children' }, vi: { name: 'Thiếu nhi' } } } })).body.id;
-  await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', kind: 'distributor', tracksPayables: true } });
+  await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', kind: 'distributor' } });
   await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Phương Nam', kind: 'distributor' } });
   await h.call('POST', '/api/v1/catalog/publishers', { cookie: owner, body: { i18n: { en: { name: 'NXB Trẻ' } } } });
   const img = await upload(owner, PNG, 'image/png');
@@ -130,9 +130,6 @@ describe('bulk stock-in (FR-PUR-14)', () => {
     expect(entries[0]).toMatchObject({ entryNo: 'SI-2026-00002', source: 'import', lines: 3, supplierInvoiceNo: 'HD-002' });
     const [lvl] = await h.t.sql`select on_hand from inventory.stock_level where variant_id = ${existingVariant}`;
     expect(lvl!.on_hand).toBe(15);
-    // Supplier tracks payables: one payable for the whole entry.
-    const payables = (await h.call('GET', '/api/v1/purchasing/payables', { cookie: owner })).body.items;
-    expect(payables.some((p: { amountVnd: number }) => p.amountVnd === c.body.totalCostVnd)).toBe(true);
 
     const missing = (await h.call('GET', '/api/v1/catalog/items?image=missing', { cookie: warehouse })).body.items;
     expect(missing.map((i: { sku: string }) => i.sku).sort()).toEqual(['SACH-0003', 'VPP-0099']);

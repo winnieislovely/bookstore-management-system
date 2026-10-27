@@ -22,12 +22,12 @@ beforeAll(async () => {
   ({ owner, roles } = await h.setupOwner());
   manager = await h.staff(owner, 'quanly', roles.manager!, '112233');
   cashier = await h.staff(owner, 'thu', roles.cashier!);
-  // A role that sees reports but not profit, cost or payables.
+  // A role that sees reports but not profit, cost or consignment settlement.
   const viewerRole = await h.call('POST', '/api/v1/admin/roles', { cookie: owner, body: { name: 'Xem báo cáo', permissions: ['report.view'] } });
   viewer = await h.staff(owner, 'xem', viewerRole.body.id);
 
   const cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Books' } } } })).body.id;
-  const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', kind: 'distributor', tracksPayables: true } })).body.id;
+  const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', kind: 'distributor' } })).body.id;
   const mk = async (sku: string, price: number, cost: number, vatBp: number, qty: number, minStock: number | null = null) => {
     const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
       cookie: owner,
@@ -158,12 +158,10 @@ describe('inventory and purchasing reports (FR-RPT-03, FR-RPT-05)', () => {
     expect(mv.rows.find((r: { type: string }) => r.type === 'customer_return')).toMatchObject({ qtyIn: 2 });
   });
 
-  it('stock-ins by supplier; payables only with the payables permission', async () => {
+  it('stock-ins by supplier; there is no payables view', async () => {
     const si = (await get(`/api/v1/reports/purchasing?view=stock_ins&${range}`, manager)).body;
     expect(si.rows[0]).toMatchObject({ supplier: 'Fahasa', entries: 3, units: 64, costVnd: 10 * 50000 + 50 * 5000 + 4 * 10000 });
-    const ageing = (await get('/api/v1/reports/purchasing?view=payables', manager)).body;
-    expect(ageing.rows[0]).toMatchObject({ supplier: 'Fahasa', current: 790000, balanceVnd: 790000 });
-    expect((await get('/api/v1/reports/purchasing?view=payables', viewer)).status).toBe(403);
+    expect((await get('/api/v1/reports/purchasing?view=payables', manager)).status).toBe(400);
   });
 });
 

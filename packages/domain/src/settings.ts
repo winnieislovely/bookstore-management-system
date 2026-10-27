@@ -33,8 +33,6 @@ export const SETTINGS = {
   'inventory.adjust_approval_vnd': { schema: int(0), default: 1000000 },
   'catalog.duplicate_mode': { schema: z.enum(['block', 'warn']), default: 'block' },
   'purchasing.min_margin_bp': { schema: int(0, 10000), default: 0 },
-  'purchasing.velocity_days': { schema: int(7, 365), default: 30 },
-  'purchasing.reorder_cover_days': { schema: int(1, 365), default: 30 },
   'purchasing.consignment_alert_days': { schema: int(1, 90), default: 7 },
 
   // Loyalty and tiers

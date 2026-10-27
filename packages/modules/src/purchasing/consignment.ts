@@ -128,32 +128,22 @@ export async function generateStatement(ctx: Ctx, input: z.input<typeof Statemen
   });
 }
 
-/** Approving creates the payable for the sold quantity (FR-PUR-11); payment then follows FR-PUR-06. */
+/** Approving fixes the amount due to the consignor for the sold quantity (FR-PUR-11); it is paid outside the system. */
 export async function approveStatement(ctx: Ctx, id: string) {
   const actor = requirePermission(ctx, 'purchasing.payables');
   return ctx.db.transaction(async (tx) => {
     const [st] = await tx.select().from(schema.consignmentStatement).where(eq(schema.consignmentStatement.id, id)).for('update');
     if (!st) throw errors.notFound('Bảng đối soát');
     if (st.status !== 'draft') throw errors.conflict('statement_approved', 'Bảng đối soát đã được duyệt.');
-    const [supplier] = await tx.select().from(schema.supplier).where(eq(schema.supplier.id, st.supplierId));
     const now = ctx.clock.now();
-    let payableId: string | null = null;
-    if (st.amountDueVnd > 0) {
-      const dueAt = supplier?.termsDays != null ? new Date(now.getTime() + supplier.termsDays * 86_400_000) : null;
-      const [p] = await tx
-        .insert(schema.payable)
-        .values({ supplierId: st.supplierId, source: 'consignment', sourceId: st.id, amountVnd: st.amountDueVnd, dueAt, createdAt: now })
-        .returning({ id: schema.payable.id });
-      payableId = p!.id;
-    }
-    await tx.update(schema.consignmentStatement).set({ status: 'approved', approvedBy: actor.userId, approvedAt: now, payableId }).where(eq(schema.consignmentStatement.id, id));
+    await tx.update(schema.consignmentStatement).set({ status: 'approved', approvedBy: actor.userId, approvedAt: now }).where(eq(schema.consignmentStatement.id, id));
     await audit.record(tx, ctx, {
       action: 'consignment_statement.approve',
       entity: 'consignment_statement',
       entityId: id,
-      after: { docNo: st.docNo, amountDueVnd: st.amountDueVnd, payableId },
+      after: { docNo: st.docNo, amountDueVnd: st.amountDueVnd },
     });
-    return { id, payableId, amountDueVnd: st.amountDueVnd };
+    return { id, amountDueVnd: st.amountDueVnd };
   });
 }
 

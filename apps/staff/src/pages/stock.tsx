@@ -78,7 +78,6 @@ interface AdjustPick {
 export function StockPage() {
   const { data: me } = useMe();
   const navigate = useNavigate();
-  const [params, setParams] = useSearchParams();
   const [q, setQ] = useParam('q');
   const [state, setState] = useListParam('stock');
   const [changed, setChanged] = useParam('changed');
@@ -86,8 +85,6 @@ export function StockPage() {
   const [page, setPage] = useParam('page', '1');
   const [selected, setSelected] = useState<Map<string, StockRow>>(new Map());
   const [dialog, setDialog] = useState<null | 'in' | 'adjust'>(null);
-  // Receiving a supplier order opens the stock-in form here (FR-PUR-07).
-  const receive = params.get('receive');
   const query = { q: q || undefined, stock: state.join(',') || undefined, changedFrom: changedRange.from, changedTo: changedRange.to, page: Number(page), limit: 40 };
   const list = useQuery({ queryKey: ['stock-list', query], queryFn: () => get<{ items: StockRow[]; total: number }>('/api/v1/catalog/items', query) });
   const value = useQuery({ queryKey: ['valuation'], queryFn: () => get<{ totalVnd: number }>('/api/v1/inventory/valuation'), enabled: can(me, 'catalog.view_cost') });
@@ -191,18 +188,10 @@ export function StockPage() {
         empty={filtered ? { icon: Search, title: 'Không có sản phẩm phù hợp', help: t('products.noResultsHelp') } : { icon: Boxes, title: 'Chưa có sản phẩm', help: 'Thêm sản phẩm ở trang Sản phẩm.' }}
       />
       <Pager page={Number(page)} hasMore={Number(page) * 40 < (list.data?.total ?? 0)} total={list.data?.total ?? 0} onPage={(p) => setPage(String(p))} />
-      {(dialog === 'in' || receive) && (
+      {dialog === 'in' && (
         <StockInForm
-          orderId={receive}
-          initial={dialog === 'in' ? picks.map((r) => ({ variantId: r.variantId, title: nameOfRow(r), sku: r.sku, priceVnd: r.priceVnd })) : []}
-          onClose={() => {
-            setDialog(null);
-            if (receive) {
-              const next = new URLSearchParams(params);
-              next.delete('receive');
-              setParams(next, { replace: true });
-            }
-          }}
+          initial={picks.map((r) => ({ variantId: r.variantId, title: nameOfRow(r), sku: r.sku, priceVnd: r.priceVnd }))}
+          onClose={() => setDialog(null)}
           onPosted={() => {
             setSelected(new Map());
             refresh();
@@ -339,7 +328,7 @@ export function StockItemPage() {
           </Link>
         </Card>
       </div>
-      {dialog === 'in' && <StockInForm orderId={null} initial={[{ variantId: v.id, title, sku: v.sku, priceVnd: v.priceVnd }]} onClose={() => setDialog(null)} onPosted={refresh} />}
+      {dialog === 'in' && <StockInForm initial={[{ variantId: v.id, title, sku: v.sku, priceVnd: v.priceVnd }]} onClose={() => setDialog(null)} onPosted={refresh} />}
       {dialog === 'adjust' && <BulkAdjustDialog picks={[{ variantId: v.id, title, sku: v.sku }]} onClose={() => setDialog(null)} onDone={refresh} />}
     </>
   );

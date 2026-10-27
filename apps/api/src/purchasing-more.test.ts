@@ -3,7 +3,7 @@ import * as jobs from '@bookstore/modules/jobs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ORIGIN, startHarness, type Harness } from './testing.js';
 
-/** Supplier orders, reorder suggestions, bundles, import rollback, consignment alerts. */
+/** Bundles, import rollback, consignment alerts. */
 let h: Harness;
 let owner: string;
 let warehouse: string;
@@ -22,7 +22,7 @@ beforeAll(async () => {
   warehouse = await h.staff(owner, 'kho', roles.warehouse!);
   cashier = await h.staff(owner, 'thu', roles.cashier!);
   cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Stationery' } } } })).body.id;
-  supplierId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Thiên Long', kind: 'vendor', tracksPayables: true } })).body.id;
+  supplierId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Thiên Long', kind: 'vendor' } })).body.id;
   const mk = async (sku: string, price: number, qty: number, minStock: number | null = null) => {
     const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
       cookie: owner,
@@ -85,47 +85,13 @@ describe('bundles (FR-CAT-12)', () => {
   });
 });
 
-describe('supplier orders (FR-PUR-07)', () => {
-  let orderId: string;
-  let lineId: string;
-
-  it('draft → sent → partially received → received → closed, receiving through stock-in', async () => {
-    const o = await h.call('POST', '/api/v1/purchasing/orders', { cookie: warehouse, body: { supplierId, lines: [{ variantId: notebook, qty: 20, unitCostVnd: 10000 }] } });
-    expect(o.body).toMatchObject({ docNo: 'PO-2026-00001', status: 'draft' });
-    orderId = o.body.id;
-    lineId = (await h.call('GET', `/api/v1/purchasing/orders/${orderId}`, { cookie: warehouse })).body.lines[0].id;
-    const early = await h.call('POST', '/api/v1/purchasing/stock-in/existing', { cookie: warehouse, body: { line: { variantId: notebook, costVnd: 10000, sellingPriceVnd: 20000, qty: 5, orderLineId: lineId } } });
-    expect(early.body.error.code).toBe('order_not_open');
-    expect((await h.call('POST', `/api/v1/purchasing/orders/${orderId}/send`, { cookie: warehouse })).body.status).toBe('sent');
-    expect((await h.call('POST', `/api/v1/purchasing/orders/${orderId}/send`, { cookie: warehouse })).body.error.code).toBe('invalid_transition');
-    const wrong = await h.call('POST', '/api/v1/purchasing/stock-in/existing', { cookie: warehouse, body: { line: { variantId: pen, costVnd: 1, sellingPriceVnd: 6000, qty: 1, orderLineId: lineId } } });
-    expect(wrong.body.error.code).toBe('order_line_mismatch');
-    await h.call('POST', '/api/v1/purchasing/stock-in/existing', { cookie: warehouse, body: { line: { variantId: notebook, costVnd: 10000, sellingPriceVnd: 20000, qty: 8, orderLineId: lineId } } });
-    let order = (await h.call('GET', `/api/v1/purchasing/orders/${orderId}`, { cookie: warehouse })).body;
-    expect(order).toMatchObject({ status: 'partially_received', lines: [expect.objectContaining({ qty: 20, receivedQty: 8 })] });
-    await h.call('POST', '/api/v1/purchasing/stock-in/existing', { cookie: warehouse, body: { line: { variantId: notebook, costVnd: 10000, sellingPriceVnd: 20000, qty: 12, orderLineId: lineId } } });
-    order = (await h.call('GET', `/api/v1/purchasing/orders/${orderId}`, { cookie: warehouse })).body;
-    expect(order.status).toBe('received');
-    expect((await h.call('POST', `/api/v1/purchasing/orders/${orderId}/close`, { cookie: warehouse })).body.status).toBe('closed');
-    expect((await h.call('GET', '/api/v1/purchasing/orders', { cookie: cashier })).status).toBe(403);
-  });
-});
-
-describe('reorder suggestions (FR-INV-09, FR-PUR-08)', () => {
-  it('covers 30 days of sales, minus stock and open orders, grouped by supplier', async () => {
-    // 90 pens sold in 30 days → 3 per day → 90 for 30 days of cover.
-    expect((await sell([[pen, 90]], 540000)).status).toBe(201);
-    const s = (await h.call('GET', '/api/v1/purchasing/suggestions', { cookie: warehouse })).body;
-    expect(s).toMatchObject({ velocityDays: 30, coverDays: 30 });
-    const group = s.suppliers.find((g: { supplierName: string }) => g.supplierName === 'Thiên Long');
-    const p = group.lines.find((l: { sku: string }) => l.sku === 'PEN-01');
-    // Sold 4 (bundles) + 90; available 6.
-    expect(p).toMatchObject({ soldInPeriod: 94, available: 6, onOrder: 0, suggestedQty: 94 - 6 });
-    expect(group.lines.find((l: { sku: string }) => l.sku === 'COMBO-01')).toBeUndefined();
-    // An open order reduces the suggestion.
-    await h.call('POST', '/api/v1/purchasing/orders', { cookie: warehouse, body: { supplierId, lines: [{ variantId: pen, qty: 50 }] } });
-    const again = (await h.call('GET', '/api/v1/purchasing/suggestions', { cookie: warehouse })).body;
-    expect(again.suppliers[0].lines.find((l: { sku: string }) => l.sku === 'PEN-01').suggestedQty).toBe(94 - 6 - 50);
+describe('stock-in without supplier orders (FR-PUR-07 removed)', () => {
+  it('adds stock directly; the supplier-order endpoints are gone', async () => {
+    for (const qty of [8, 12]) {
+      const r = await h.call('POST', '/api/v1/purchasing/stock-in/existing', { cookie: warehouse, body: { line: { variantId: notebook, costVnd: 10000, sellingPriceVnd: 20000, qty } } });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
+    expect((await h.call('GET', '/api/v1/purchasing/orders', { cookie: warehouse })).status).toBe(404);
   });
 });
 
@@ -141,7 +107,7 @@ describe('import rollback (FR-ADM-07)', () => {
     return p.jobId;
   };
 
-  it('reverses stock, price, average cost, payable and created products', async () => {
+  it('reverses stock, price, average cost and created products', async () => {
     const before = (await h.t.sql`select s.on_hand, s.avg_cost_vnd, v.price_vnd from inventory.stock_level s join catalog.item_variant v on v.id = s.variant_id where s.variant_id = ${notebook}`)[0]!;
     const jobId = await importFile([
       ['NB-01', '', '', '', '', '', 'Thiên Long', '14000', '22000', '', '10', '', '', ''],
@@ -154,8 +120,6 @@ describe('import rollback (FR-ADM-07)', () => {
     expect(after).toEqual(before);
     const [eraser] = await h.t.sql`select v.sku, v.status, (select count(*)::int from catalog.barcode b where b.variant_id = v.id) as barcodes from catalog.item_variant v where v.sku like 'NEW-99~rb-%'`;
     expect(eraser).toMatchObject({ status: 'discontinued', barcodes: 0 });
-    const [payable] = await h.t.sql`select p.status from purchasing.payable p join purchasing.stock_in_entry e on e.id = p.source_id where e.import_job_id = ${jobId}`;
-    expect(payable!.status).toBe('cancelled');
     expect((await h.call('POST', `/api/v1/admin/import/jobs/${jobId}/rollback`, { cookie: warehouse })).body.error.code).toBe('import_not_committed');
     // The freed SKU can be imported again.
     await importFile([['NEW-99', '', 'Văn phòng phẩm', 'Eraser', 'Eraser', 'Stationery', 'Thiên Long', '2000', '5000', '10', '5', '10', '', '']]);

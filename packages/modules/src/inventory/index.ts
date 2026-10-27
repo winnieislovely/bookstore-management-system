@@ -1,5 +1,5 @@
 import { schema } from '@bookstore/db';
-import { adjustmentValue, movingAverageCost, STOCK_COUNT, canTransition, vnd, type MovementType } from '@bookstore/domain';
+import { adjustmentValue, foldText, movingAverageCost, STOCK_COUNT, canTransition, vnd, type MovementType } from '@bookstore/domain';
 import { and, asc, desc, eq, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
@@ -334,9 +334,15 @@ export async function createCount(ctx: Ctx, input: z.input<typeof CreateCountSch
 }
 
 /** Stock counts, newest first, with progress (TDD §6.2 GET /inventory/counts). */
-export async function listCounts(ctx: Ctx, status?: string) {
+export async function listCounts(ctx: Ctx, q: { statuses?: string[] | undefined; q?: string | undefined; from?: Date | undefined; to?: Date | undefined } = {}) {
   requirePermission(ctx, 'inventory.count');
   const c = schema.stockCount;
+  const where: SQL[] = [];
+  if (q.statuses?.length) where.push(inArray(c.status, q.statuses));
+  if (q.from) where.push(sql`${c.createdAt} >= ${q.from.toISOString()}::timestamptz`);
+  if (q.to) where.push(sql`${c.createdAt} <= ${q.to.toISOString()}::timestamptz`);
+  const term = foldText(q.q ?? '').trim();
+  if (term) where.push(sql`(lower(${c.docNo}) like ${`%${term}%`} or lower(public.f_unaccent(coalesce(${schema.appUser.displayName}, ''))) like ${`%${term}%`})`);
   return ctx.db
     .select({
       id: c.id,
@@ -353,7 +359,7 @@ export async function listCounts(ctx: Ctx, status?: string) {
     })
     .from(c)
     .leftJoin(schema.appUser, eq(schema.appUser.id, c.createdBy))
-    .where(status ? eq(c.status, status) : undefined)
+    .where(where.length ? and(...where) : undefined)
     .orderBy(desc(c.createdAt))
     .limit(100);
 }

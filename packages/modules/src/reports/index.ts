@@ -522,7 +522,7 @@ export async function tax(ctx: Ctx, input: z.input<typeof TaxReportSchema>): Pro
 // Purchasing (FR-RPT-05)
 
 export const PurchasingReportSchema = z.object({
-  view: z.enum(['stock_ins', 'payables', 'consignment']),
+  view: z.enum(['stock_ins', 'consignment']),
   from: z.iso.date().optional(),
   to: z.iso.date().optional(),
 });
@@ -531,39 +531,10 @@ export async function purchasingReport(ctx: Ctx, input: z.input<typeof Purchasin
   const actor = requirePermission(ctx, 'report.view');
   const q = PurchasingReportSchema.parse(input);
 
-  if (q.view === 'payables' || q.view === 'consignment') {
-    // Payables data stays behind its own permission (FR-PUR-06).
+  if (q.view === 'consignment') {
+    // Consignment settlement stays behind its own permission (FR-PUR-11).
     if (!can(actor, 'purchasing.payables')) throw errors.forbidden('purchasing.payables');
   }
-  if (q.view === 'payables') {
-    const { items } = await purchasing.listPayables(ctx);
-    const bySupplier = new Map<string, Record<string, number | string>>();
-    for (const p of items) {
-      const row = bySupplier.get(p.supplierName) ?? { supplier: p.supplierName, current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90: 0, balanceVnd: 0 };
-      const bucket = { current: 'current', '1-30': 'd1_30', '31-60': 'd31_60', '61-90': 'd61_90', '90+': 'd90', paid: null }[p.ageingBucket];
-      if (bucket) row[bucket] = (row[bucket] as number) + p.balanceVnd;
-      row.balanceVnd = (row.balanceVnd as number) + p.balanceVnd;
-      bySupplier.set(p.supplierName, row);
-    }
-    const rows = [...bySupplier.values()].filter((r) => (r.balanceVnd as number) > 0);
-    return {
-      title: 'Tuổi nợ phải trả nhà cung cấp',
-      from: null,
-      to: null,
-      columns: [
-        { key: 'supplier', label: 'Nhà cung cấp', type: 'text' },
-        { key: 'current', label: 'Trong hạn', type: 'vnd' },
-        { key: 'd1_30', label: 'Quá hạn 1–30 ngày', type: 'vnd' },
-        { key: 'd31_60', label: '31–60 ngày', type: 'vnd' },
-        { key: 'd61_90', label: '61–90 ngày', type: 'vnd' },
-        { key: 'd90', label: 'Trên 90 ngày', type: 'vnd' },
-        { key: 'balanceVnd', label: 'Còn nợ', type: 'vnd' },
-      ],
-      rows,
-      totals: sumRows(rows, ['current', 'd1_30', 'd31_60', 'd61_90', 'd90', 'balanceVnd']),
-    };
-  }
-
   if (!q.from || !q.to) throw new AppError(400, 'range_required', 'Cần chọn khoảng thời gian.');
   const { start, end } = storeRange(q.from, q.to);
   if (q.view === 'consignment') {

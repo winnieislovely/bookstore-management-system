@@ -27,7 +27,6 @@ import { SaleDetailPage, SalesPage } from './pages/sales';
 import { SettingsPage } from './pages/settings';
 import { ShiftDetailPage, ShiftsPage } from './pages/shifts';
 import { StockItemPage, StockPage } from './pages/stock';
-import { SupplierOrderDetailPage, SupplierOrdersPage } from './pages/supplierOrders';
 import { SuppliersPage } from './pages/suppliers';
 import { PosPage } from './pos/PosPage';
 
@@ -90,7 +89,6 @@ const BUILT: Record<string, ReactNode> = {
   '/stock': <StockPage />,
   '/counts': <CountsPage />,
   '/suppliers': <SuppliersPage />,
-  '/supplier-orders': <SupplierOrdersPage />,
   '/consignment': <ConsignmentPage />,
   '/users': <UsersPage />,
   '/roles': <RolesPage />,
@@ -112,7 +110,6 @@ const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   { path: 'products/new', anyOf: ['catalog.edit'], element: <ProductNewPage /> },
   { path: 'products/:id', anyOf: ['catalog.view'], element: <ProductDetailPage /> },
   { path: 'counts/:id', anyOf: ['inventory.count'], element: <CountDetailPage /> },
-  { path: 'supplier-orders/:id', anyOf: ['purchasing.manage'], element: <SupplierOrderDetailPage /> },
 ];
 
 const router = createBrowserRouter([

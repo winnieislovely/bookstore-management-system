@@ -3,7 +3,7 @@ import { clsx } from 'clsx';
 import { ArrowLeft, CheckCircle2, ClipboardList, Download, Plus, Send, Upload, XCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ConfirmDialog, DataTable, toast, type Column } from '../components/data';
+import { ConfirmDialog, DataTable, FilterMenu, SearchBox, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Card, ErrorState, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
@@ -52,7 +52,12 @@ const scopeLabel = (s: CountRow['scope']) =>
 export function CountsPage() {
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
-  const list = useQuery({ queryKey: ['counts'], queryFn: () => get<{ items: CountRow[] }>('/api/v1/inventory/counts') });
+  const [q, setQ] = useParam('q');
+  const [statuses, setStatuses] = useListParam('status');
+  const [time, setTime] = useParam('time');
+  const query = { q: q || undefined, status: statuses.join(',') || undefined, ...timeRange(time) };
+  const filtered = !!(q || statuses.length || time);
+  const list = useQuery({ queryKey: ['counts', query], queryFn: () => get<{ items: CountRow[] }>('/api/v1/inventory/counts', query) });
   const columns: Column<CountRow>[] = [
     { header: 'Số phiếu', cell: (r) => <span className="code">{r.docNo}</span> },
     { header: 'Ngày', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.createdAt) },
@@ -71,6 +76,16 @@ export function CountsPage() {
           </Button>
         }
       />
+      {/* Search and filters (Design §13.8) */}
+      <div className="mb-4 flex items-center gap-2">
+        <SearchBox value={q} onChange={setQ} placeholder="Tìm số phiếu hoặc người tạo…" />
+        <FilterMenu
+          groups={[
+            { kind: 'custom', label: 'Thời gian', summary: timeLabel(time), active: !!time, onClear: () => setTime(''), content: <TimeFilter value={time} onChange={setTime} /> },
+            { label: 'Trạng thái', options: Object.entries(STATUS).map(([key, s]) => ({ key, label: s.label })), values: statuses, onChange: setStatuses },
+          ]}
+        />
+      </div>
       <DataTable
         columns={columns}
         rows={list.data?.items}
@@ -78,7 +93,7 @@ export function CountsPage() {
         onRow={(r) => navigate(`/counts/${r.id}`)}
         error={list.error}
         onRetry={() => list.refetch()}
-        empty={{ icon: ClipboardList, title: 'Chưa có phiếu kiểm kho' }}
+        empty={filtered ? { icon: ClipboardList, title: 'Không có phiếu phù hợp', help: 'Thử bỏ bớt bộ lọc hoặc đổi từ khóa.' } : { icon: ClipboardList, title: 'Chưa có phiếu kiểm kho' }}
       />
       {creating && <CreateCount onClose={() => setCreating(false)} onCreated={(id) => navigate(`/counts/${id}`)} />}
     </>

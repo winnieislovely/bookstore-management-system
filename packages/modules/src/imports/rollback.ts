@@ -84,10 +84,6 @@ export async function rollback(ctx: Ctx, jobId: string) {
         if (sold.has(variantId)) reasons.push(`Sản phẩm ${v?.sku} đã được bán.`);
         if ((await onHand(tx, variantId)) < qty) reasons.push(`Tồn kho của ${v?.sku} đã giảm sau khi nhập.`);
       }
-      const [payable] = result.entryId
-        ? await tx.select().from(schema.payable).where(and(eq(schema.payable.source, 'stock_in'), eq(schema.payable.sourceId, result.entryId)))
-        : [];
-      if (payable && payable.paidVnd > 0) reasons.push('Công nợ của phiếu nhập đã được thanh toán một phần.');
       if (reasons.length) throw new Blocked(reasons);
 
       for (const l of lines) {
@@ -106,7 +102,6 @@ export async function rollback(ctx: Ctx, jobId: string) {
         }
       }
       for (const l of lines) if (l.createdProduct) await retire(tx, ctx, l.variantId, jobId);
-      if (payable) await tx.update(schema.payable).set({ status: 'cancelled' }).where(eq(schema.payable.id, payable.id));
       undone.products = lines.filter((l) => l.createdProduct).length;
       undone.units = lines.reduce((a, l) => a + l.qty, 0);
     } else {

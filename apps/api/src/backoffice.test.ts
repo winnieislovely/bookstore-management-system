@@ -24,7 +24,7 @@ beforeAll(async () => {
   cashier = await h.staff(owner, 'thu', roles.cashier!);
   const cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Books' } } } })).body.id;
   const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', kind: 'distributor' } })).body.id;
-  consignorId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Kim Đồng', kind: 'publisher', isConsignor: true, termsDays: 15 } })).body.id;
+  consignorId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Kim Đồng', kind: 'publisher', isConsignor: true } })).body.id;
   const mk = async (sku: string, price: number, opts: Record<string, unknown> = {}) => {
     const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
       cookie: owner,
@@ -91,11 +91,11 @@ describe('consignment statement (FR-PUR-10, FR-PUR-11)', () => {
     expect((await h.call('POST', '/api/v1/purchasing/consignment/statements', { cookie: cashier, body: { supplierId: consignorId, period: '2026-10' } })).status).toBe(403);
   });
 
-  it('approval creates the payable; an approved statement is final', async () => {
+  it('approval fixes the amount due; an approved statement is final', async () => {
     const r = await h.call('POST', `/api/v1/purchasing/consignment/statements/${statementId}/approve`, { cookie: owner });
     expect(r.body).toMatchObject({ amountDueVnd: 112000 });
-    const payables = (await h.call('GET', '/api/v1/purchasing/payables', { cookie: owner })).body.items;
-    expect(payables).toEqual([expect.objectContaining({ source: 'consignment', amountVnd: 112000, supplierName: 'Kim Đồng' })]);
+    // No payable is written (FR-PUR-06 removed); the amount is paid outside the system.
+    expect((await h.t.sql`select count(*)::int as n from purchasing.payable`)[0]!.n).toBe(0);
     expect((await h.call('POST', `/api/v1/purchasing/consignment/statements/${statementId}/approve`, { cookie: owner })).body.error.code).toBe('statement_approved');
     expect((await h.call('POST', '/api/v1/purchasing/consignment/statements', { cookie: owner, body: { supplierId: consignorId, period: '2026-10' } })).body.error.code).toBe(
       'statement_approved',

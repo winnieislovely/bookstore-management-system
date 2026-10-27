@@ -86,8 +86,13 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
     { method: 'post', path: '/api/v1/inventory/adjustments', access: 'inventory.adjust', summary: 'Adjustment with reason; approval over threshold', status: 201, body: inventory.AdjustmentSchema },
     async ({ ctx, body }) => inventory.adjust(ctx, body),
   );
-  defineRoute(app, { method: 'get', path: '/api/v1/inventory/counts', access: 'inventory.count', summary: 'Stock counts', query: z.object({ status: z.string().optional() }) }, async ({ ctx, query }) => ({
-    items: await inventory.listCounts(ctx, query.status),
+  defineRoute(app, { method: 'get', path: '/api/v1/inventory/counts', access: 'inventory.count', summary: 'Stock counts', query: z.object({ status: z.string().optional(), q: z.string().max(100).optional(), from: z.iso.datetime().optional(), to: z.iso.datetime().optional() }) }, async ({ ctx, query }) => ({
+    items: await inventory.listCounts(ctx, {
+      statuses: query.status ? query.status.split(',').filter(Boolean) : undefined,
+      q: query.q,
+      from: query.from ? new Date(query.from) : undefined,
+      to: query.to ? new Date(query.to) : undefined,
+    }),
   }));
   defineRoute(app, { method: 'post', path: '/api/v1/inventory/counts', access: 'inventory.count', summary: 'Start a stock count', status: 201, body: inventory.CreateCountSchema }, async ({ ctx, body }) =>
     inventory.createCount(ctx, body),
@@ -111,7 +116,7 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
   );
 
   // --- Purchasing -----------------------------------------------------------------------------
-  const header = { supplierId: true, supplierInvoiceNo: true, invoiceFileId: true, note: true, consignment: true, consignmentDiscountBp: true, consignmentDeadline: true, payableVnd: true } as const;
+  const header = { supplierId: true, supplierInvoiceNo: true, invoiceFileId: true, note: true, consignment: true, consignmentDiscountBp: true, consignmentDeadline: true } as const;
   const Header = purchasing.StockInBaseSchema.pick(header);
 
   defineRoute(
@@ -161,17 +166,6 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'post', path: '/api/v1/purchasing/suppliers', access: 'purchasing.manage', summary: 'Create a supplier', status: 201, body: purchasing.SupplierSchema }, async ({ ctx, body }) =>
     purchasing.createSupplier(ctx, body),
   );
-  defineRoute(
-    app,
-    { method: 'get', path: '/api/v1/purchasing/payables', access: 'purchasing.payables', summary: 'Payables with ageing', query: z.object({ supplier: z.uuid().optional() }) },
-    async ({ ctx, query }) => purchasing.listPayables(ctx, query.supplier),
-  );
-  defineRoute(
-    app,
-    { method: 'post', path: '/api/v1/purchasing/payables/:id/payments', access: 'purchasing.payables', summary: 'Record a payment', status: 201, params: IdParams, body: purchasing.PaymentSchema },
-    async ({ ctx, params, body }) => purchasing.payPayable(ctx, params.id, body),
-  );
-
   // --- Consignment ----------------------------------------------------------------------------
   defineRoute(
     app,

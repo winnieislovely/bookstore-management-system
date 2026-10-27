@@ -60,7 +60,7 @@ describe('master data', () => {
     supplierId = (
       await h.call('POST', '/api/v1/purchasing/suppliers', {
         cookie: warehouse,
-        body: { name: 'Fahasa', kind: 'distributor', tracksPayables: true, termsDays: 30, taxCode: '0300000001' },
+        body: { name: 'Fahasa', kind: 'distributor', taxCode: '0300000001' },
       })
     ).body.id;
     consignorId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: warehouse, body: { name: 'NXB Kim Đồng', kind: 'publisher', isConsignor: true } })).body.id;
@@ -82,7 +82,6 @@ describe('quick stock-in of a new product (FR-PUR-02, FR-PUR-04, UC-05)', () => 
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body.entryNo).toBe('SI-2026-00001');
     expect(r.body.lines[0]).toMatchObject({ createdProduct: true, marginFlag: false, avgCostVnd: 50000 });
-    expect(r.body.payableId).toBeTruthy(); // supplier tracks payables (FR-PUR-06)
     bookVariant = r.body.lines[0].variantId;
 
     const found = await h.call('GET', `/api/v1/catalog/lookup?code=9786041234567`, { cookie: cashier });
@@ -302,18 +301,25 @@ describe('blind stock count (FR-INV-06, UC-07)', () => {
     expect((await h.call('POST', `/api/v1/inventory/counts/${c.body.id}/cancel`, { cookie: warehouse })).status).toBe(204);
     expect((await h.call('GET', `/api/v1/inventory/counts/${c.body.id}`, { cookie: warehouse })).body.status).toBe('cancelled');
     expect((await h.call('POST', `/api/v1/inventory/counts/${c.body.id}/cancel`, { cookie: warehouse })).status).toBe(409);
+
+    // List search and filters (Design §13.8).
+    const docNo = (await h.call('GET', `/api/v1/inventory/counts/${c.body.id}`, { cookie: warehouse })).body.docNo as string;
+    const ids = async (qs: string) => ((await h.call('GET', `/api/v1/inventory/counts?${qs}`, { cookie: warehouse })).body.items as { id: string }[]).map((x) => x.id);
+    expect(await ids(`q=${docNo.toLowerCase()}`)).toEqual([c.body.id]);
+    expect(await ids('status=cancelled,approved')).toContain(c.body.id);
+    expect(await ids('status=open')).not.toContain(c.body.id);
+    expect(await ids(`from=${new Date(Date.now() + 86_400_000).toISOString()}`)).toEqual([]);
   });
 });
 
 describe('consignment stock-in (FR-PUR-09)', () => {
-  it('creates a lot, no payable and leaves the average cost unchanged', async () => {
+  it('creates a lot and leaves the average cost unchanged', async () => {
     const before = (await h.call('GET', `/api/v1/catalog/items/${bookItem}`, { cookie: warehouse })).body.variants[0].avgCostVnd;
     const r = await h.call('POST', '/api/v1/purchasing/stock-in/existing', {
       cookie: warehouse,
       body: { supplierId: consignorId, consignment: true, consignmentDiscountBp: 3000, line: { variantId: bookVariant, costVnd: 73500, sellingPriceVnd: 105000, qty: 20 } },
     });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
-    expect(r.body.payableId).toBeNull();
     const after = (await h.call('GET', `/api/v1/catalog/items/${bookItem}`, { cookie: warehouse })).body.variants[0];
     expect(after.avgCostVnd).toBe(before);
     expect(after.stock.onHand).toBe(25);
@@ -327,19 +333,10 @@ describe('consignment stock-in (FR-PUR-09)', () => {
   });
 });
 
-describe('payables (FR-PUR-06)', () => {
-  it('needs the payables permission, ages balances and refuses overpayment', async () => {
-    expect((await h.call('GET', '/api/v1/purchasing/payables', { cookie: warehouse })).status).toBe(403);
-    const list = await h.call('GET', '/api/v1/purchasing/payables', { cookie: owner });
-    const first = list.body.items.find((p: { amountVnd: number }) => p.amountVnd === 500000);
-    expect(first).toMatchObject({ balanceVnd: 500000, ageingBucket: 'current' });
-    const pay = await h.call('POST', `/api/v1/purchasing/payables/${first.id}/payments`, { cookie: owner, body: { amountVnd: 200000, method: 'transfer' } });
-    expect(pay.body).toEqual({ balanceVnd: 300000, status: 'open' });
-    const over = await h.call('POST', `/api/v1/purchasing/payables/${first.id}/payments`, { cookie: owner, body: { amountVnd: 400000, method: 'cash' } });
-    expect(over.body.error.code).toBe('overpayment');
-    h.clock.advance(45 * 86_400_000);
-    const aged = await h.call('GET', '/api/v1/purchasing/payables', { cookie: await h.login('lan', 'chu-cua-hang-2026') });
-    expect(aged.body.items.find((p: { id: string }) => p.id === first.id).ageingBucket).toBe('1-30');
+describe('no supplier payables (FR-PUR-06 removed)', () => {
+  it('writes no payable on stock-in and has no payables endpoint', async () => {
+    expect((await h.t.sql`select count(*)::int as n from purchasing.payable`)[0]!.n).toBe(0);
+    expect((await h.call('GET', '/api/v1/purchasing/payables', { cookie: owner })).status).toBe(404);
   });
 });
 

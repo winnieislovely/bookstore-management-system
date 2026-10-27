@@ -6,10 +6,9 @@ import * as audit from '../audit/index.js';
 import * as catalog from '../catalog/index.js';
 import * as inventory from '../inventory/index.js';
 import * as settings from '../settings/index.js';
-import * as orders from './orders.js';
 import { AppError, emit, errors, nextDocNo, requirePermission, type Ctx, type Tx } from '../platform/index.js';
 
-/** Purchasing, suppliers and payables (FR-PUR-01..06, FR-PUR-09, TDD §4.3). */
+/** Purchasing and suppliers (FR-PUR-01..05, FR-PUR-09, TDD §4.3); no payables (FR-PUR-06 removed). */
 
 const money = z.number().int().min(0);
 
@@ -21,8 +20,6 @@ export const SupplierSchema = z.object({
   taxCode: z.string().trim().min(1).nullable().optional(),
   kind: z.enum(['publisher', 'distributor', 'vendor', 'individual']),
   isConsignor: z.boolean().default(false),
-  tracksPayables: z.boolean().default(false),
-  termsDays: z.number().int().min(0).nullable().optional(),
   contacts: z.array(z.object({ name: z.string(), phone: z.string().optional(), email: z.string().optional() })).default([]),
   bank: z.object({ bankName: z.string(), accountNo: z.string(), accountName: z.string() }).nullable().optional(),
   note: z.string().trim().optional(),
@@ -43,14 +40,12 @@ export async function createSupplier(ctx: Ctx, input: z.input<typeof SupplierSch
         taxCode: data.taxCode ?? null,
         kind: data.kind,
         isConsignor: data.isConsignor,
-        tracksPayables: data.tracksPayables,
-        termsDays: data.termsDays ?? null,
         contacts: data.contacts,
         bankEnc: data.bank ? ctx.crypto.encrypt(JSON.stringify(data.bank)) : null,
         note: data.note ?? null,
       })
       .returning({ id: schema.supplier.id });
-    await audit.record(tx, ctx, { action: 'supplier.create', entity: 'supplier', entityId: row!.id, after: { name: data.name, tracksPayables: data.tracksPayables } });
+    await audit.record(tx, ctx, { action: 'supplier.create', entity: 'supplier', entityId: row!.id, after: { name: data.name } });
     return { id: row!.id };
   });
 }
@@ -101,8 +96,6 @@ export const ExistingLineSchema = z.object({
   sellingPriceVnd: money,
   qty: z.number().int().positive(),
   location: z.enum(['floor', 'back']).default('floor'),
-  /** Receiving against an optional supplier order (FR-PUR-07). */
-  orderLineId: z.uuid().optional(),
 });
 
 /**
@@ -131,8 +124,6 @@ export const StockInBaseSchema = z
     /** Consignment terms (FR-PUR-09): agreed discount and settlement/return deadline. */
     consignmentDiscountBp: z.number().int().min(0).max(10000).optional(),
     consignmentDeadline: z.iso.datetime().optional(),
-    /** For suppliers that track payables: amount owed; defaults to the total cost (FR-PUR-06). */
-    payableVnd: money.optional(),
     lines: z.array(z.discriminatedUnion('kind', [ExistingLineSchema, NewProductLineSchema])).min(1),
     source: z.enum(['manual', 'import']).default('manual'),
     importJobId: z.uuid().optional(),
@@ -154,8 +145,7 @@ export interface StockInLineResult {
 
 /**
  * Post a stock-in entry in the caller's transaction: one automatic `SI` entry number, products
- * created for new lines, moving-average cost, price history, margin flags, a payable or a
- * consignment lot, and the `stock_in.posted` event (TDD §4.3). Used by the form and by bulk import.
+ * created for new lines, moving-average cost, price history, margin flags, a consignment lot, and the `stock_in.posted` event (TDD §4.3). Used by the form and by bulk import.
  */
 export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts: { allowMissingImage?: boolean } = {}) {
   const actor = requirePermission(ctx, 'purchasing.manage');
@@ -220,7 +210,6 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
       if (!v) throw errors.notFound('Sản phẩm');
       // A bundle holds no stock of its own: stock its components instead (TDD §4.1).
       if (v.kind === 'bundle') throw new AppError(400, 'bundle_has_no_stock', 'Combo không có tồn kho riêng. Hãy nhập hàng cho từng sản phẩm trong combo.');
-      if (line.orderLineId) await orders.receiveLine(tx, line.orderLineId, v.id, line.qty);
       variantId = v.id;
       vatBp = v.vatBp;
       // A changed selling price is saved in the price history (FR-PUR-03).
@@ -250,7 +239,6 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
         newPriceVnd: priceChanged || createdProduct ? line.sellingPriceVnd : null,
         createdProduct,
         marginFlag,
-        orderLineId: line.kind === 'existing' ? (line.orderLineId ?? null) : null,
       })
       .returning({ id: schema.stockInLine.id });
     if (data.consignment) {
@@ -266,29 +254,14 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
     results.push({ variantId, createdProduct, priceChanged, marginFlag, avgCostVnd: applied.avgCostVnd });
   }
 
-  // Payables only for suppliers flagged "tracks payables"; others are treated as paid (FR-PUR-06).
-  // Consignment creates no payable until the statement is approved (FR-PUR-09, FR-PUR-11).
-  let payableId: string | null = null;
-  if (supplier?.tracksPayables && !data.consignment) {
-    const amount = data.payableVnd ?? totalCost;
-    if (amount > 0) {
-      const dueAt = supplier.termsDays != null ? new Date(now.getTime() + supplier.termsDays * 86_400_000) : null;
-      const [p] = await tx
-        .insert(schema.payable)
-        .values({ supplierId: supplier.id, source: 'stock_in', sourceId: entry!.id, amountVnd: amount, dueAt, createdAt: now })
-        .returning({ id: schema.payable.id });
-      payableId = p!.id;
-    }
-  }
-
   await emit(tx, 'stock_in.posted', { entryId: entry!.id, variantIds: results.map((r) => r.variantId) });
   await audit.record(tx, ctx, {
     action: 'stock_in.post',
     entity: 'stock_in_entry',
     entityId: entry!.id,
-    after: { entryNo, lines: data.lines.length, totalCostVnd: totalCost, consignment: data.consignment, payableId },
+    after: { entryNo, lines: data.lines.length, totalCostVnd: totalCost, consignment: data.consignment },
   });
-  return { id: entry!.id, entryNo, totalCostVnd: totalCost, payableId, lines: results };
+  return { id: entry!.id, entryNo, totalCostVnd: totalCost, lines: results };
 }
 
 export async function postStockIn(ctx: Ctx, input: StockInInput) {
@@ -334,76 +307,4 @@ export async function listStockIns(ctx: Ctx, input: z.input<typeof StockInQuery>
   return { items: rows, page: q.page };
 }
 
-// ---------------------------------------------------------------------------------------------
-// Payables (FR-PUR-06): visible only with `purchasing.payables`
-
-export async function listPayables(ctx: Ctx, supplierId?: string) {
-  requirePermission(ctx, 'purchasing.payables');
-  const p = schema.payable;
-  const now = ctx.clock.now();
-  const rows = await ctx.db
-    .select({
-      id: p.id,
-      supplierId: p.supplierId,
-      supplierName: schema.supplier.name,
-      source: p.source,
-      sourceId: p.sourceId,
-      amountVnd: p.amountVnd,
-      paidVnd: p.paidVnd,
-      dueAt: p.dueAt,
-      status: p.status,
-      createdAt: p.createdAt,
-    })
-    .from(p)
-    .innerJoin(schema.supplier, eq(schema.supplier.id, p.supplierId))
-    .where(supplierId ? eq(p.supplierId, supplierId) : undefined)
-    .orderBy(asc(p.dueAt), asc(p.createdAt));
-  const items = rows.map((r) => {
-    const balance = r.amountVnd - r.paidVnd;
-    const overdueDays = r.dueAt && balance > 0 ? Math.max(0, Math.floor((now.getTime() - r.dueAt.getTime()) / 86_400_000)) : 0;
-    const bucket = balance === 0 ? 'paid' : overdueDays === 0 ? 'current' : overdueDays <= 30 ? '1-30' : overdueDays <= 60 ? '31-60' : overdueDays <= 90 ? '61-90' : '90+';
-    return { ...r, balanceVnd: balance, overdueDays, ageingBucket: bucket };
-  });
-  return { items, totalBalanceVnd: items.reduce((a, r) => a + r.balanceVnd, 0) };
-}
-
-export const PaymentSchema = z.object({
-  amountVnd: z.number().int().positive(),
-  method: z.enum(['cash', 'transfer']),
-  paidAt: z.iso.datetime().optional(),
-  note: z.string().trim().max(300).optional(),
-});
-
-export async function payPayable(ctx: Ctx, payableId: string, input: z.input<typeof PaymentSchema>) {
-  const actor = requirePermission(ctx, 'purchasing.payables');
-  const data = PaymentSchema.parse(input);
-  return ctx.db.transaction(async (tx) => {
-    const p = schema.payable;
-    const [row] = await tx
-      .update(p)
-      .set({
-        paidVnd: sql`${p.paidVnd} + ${data.amountVnd}`,
-        status: sql`case when ${p.paidVnd} + ${data.amountVnd} >= ${p.amountVnd} then 'paid' else 'open' end`,
-      })
-      .where(and(eq(p.id, payableId), sql`${p.paidVnd} + ${data.amountVnd} <= ${p.amountVnd}`))
-      .returning();
-    if (!row) {
-      const [cur] = await tx.select().from(p).where(eq(p.id, payableId));
-      if (!cur) throw errors.notFound('Công nợ');
-      throw errors.conflict('overpayment', `Số tiền vượt quá số còn nợ (${cur.amountVnd - cur.paidVnd} ₫).`);
-    }
-    await tx.insert(schema.payablePayment).values({
-      payableId,
-      amountVnd: data.amountVnd,
-      method: data.method,
-      paidAt: data.paidAt ? new Date(data.paidAt) : ctx.clock.now(),
-      note: data.note ?? null,
-      createdBy: actor.userId,
-    });
-    await audit.record(tx, ctx, { action: 'payable.payment', entity: 'payable', entityId: payableId, after: { amountVnd: data.amountVnd, balanceVnd: row.amountVnd - row.paidVnd } });
-    return { balanceVnd: row.amountVnd - row.paidVnd, status: row.status };
-  });
-}
-
 export * from './consignment.js';
-export * from './orders.js';
