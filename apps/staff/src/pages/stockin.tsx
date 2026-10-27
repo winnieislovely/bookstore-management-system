@@ -1,15 +1,14 @@
 import { VAT_RATES_BP } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertTriangle, Download, ImagePlus, PackagePlus, Plus, Trash2, Upload } from 'lucide-react';
+import { ImagePlus, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
-import { DataTable, Pager, SelectField, TextArea, toast, useParam, type Column } from '../components/data';
+import { useNavigate } from 'react-router';
+import { SelectField, TextArea, toast } from '../components/data';
 import { hitTitle, ProductSearch } from '../components/product-search';
-import { Button, Field, InlineAlert, PageHeader, StatusChip } from '../components/ui';
+import { Button, Field, InlineAlert, StatusChip } from '../components/ui';
 import { get, post, upload } from '../lib/api';
-import { formatDateTime, formatNumber, formatVnd } from '../lib/format';
-import { can, useMe } from '../lib/session';
+import { formatNumber, formatVnd } from '../lib/format';
 import { Dialog } from '../pos/widgets';
 
 /**
@@ -71,78 +70,6 @@ type Line = ExistingLine | NewLine;
 const digits = (s: string) => Number(s.replace(/\D/g, '') || 0);
 const money = (s: string) => (s ? formatNumber(digits(s)) : '');
 
-interface EntryRow {
-  id: string;
-  entryNo: string;
-  supplierName: string | null;
-  supplierInvoiceNo: string | null;
-  consignment: boolean;
-  totalCostVnd: number;
-  source: string;
-  createdAt: string;
-  lines: number;
-  marginFlags: number;
-}
-
-export function StockInPage() {
-  const { data: me } = useMe();
-  const [params] = useSearchParams();
-  const [page, setPage] = useParam('page', '1');
-  const [form, setForm] = useState(!!params.get('order'));
-  const list = useQuery({ queryKey: ['stock-in', page], queryFn: () => get<{ items: EntryRow[] }>('/api/v1/purchasing/stock-in', { page: Number(page), limit: 40 }) });
-  const columns: Column<EntryRow>[] = [
-    { header: 'Số phiếu', cell: (r) => <span className="code">{r.entryNo}</span> },
-    { header: 'Ngày', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.createdAt) },
-    { header: 'Nhà cung cấp', cell: (r) => r.supplierName ?? '—' },
-    { header: 'Số HĐ NCC', cell: (r) => r.supplierInvoiceNo ?? '—' },
-    { header: 'Dòng', align: 'right', cell: (r) => formatNumber(r.lines) },
-    { header: 'Tổng giá nhập', align: 'right', cell: (r) => formatVnd(r.totalCostVnd) },
-    {
-      header: 'Ghi chú',
-      cell: (r) => (
-        <div className="flex flex-wrap gap-1">
-          {r.consignment && <StatusChip tone="accent">Ký gửi</StatusChip>}
-          {r.source === 'import' && <StatusChip tone="neutral">Từ Excel</StatusChip>}
-          {r.marginFlags > 0 && <StatusChip tone="warning" icon={AlertTriangle}>{r.marginFlags} dòng lãi thấp</StatusChip>}
-        </div>
-      ),
-    },
-  ];
-  return (
-    <>
-      <PageHeader
-        title="Nhập hàng"
-        actions={
-          <>
-            {can(me, 'catalog.import') && (
-              <>
-                <a className="inline-flex h-10 items-center gap-2 rounded-full px-[18px] text-sm font-medium text-navy-700 hover:bg-navy-50" href="/api/v1/admin/import/stock_in/template">
-                  <Download size={20} aria-hidden /> Tải file mẫu
-                </a>
-                <a className="inline-flex h-10 items-center gap-2 rounded-full border border-paper-500 px-[18px] text-sm font-medium hover:bg-navy-50" href="/import?kind=stock_in">
-                  <Upload size={20} aria-hidden /> Nhập từ Excel
-                </a>
-              </>
-            )}
-            <Button variant="primary" icon={Plus} onClick={() => setForm(true)}>
-              Tạo phiếu nhập
-            </Button>
-          </>
-        }
-      />
-      <DataTable
-        columns={columns}
-        rows={list.data?.items}
-        rowKey={(r) => r.id}
-        error={list.error}
-        onRetry={() => list.refetch()}
-        empty={{ icon: PackagePlus, title: 'Chưa có phiếu nhập', help: 'Quét mã sản phẩm để nhập thêm hàng, hoặc tạo sản phẩm mới ngay khi nhập.' }}
-      />
-      <Pager page={Number(page)} hasMore={(list.data?.items.length ?? 0) === 40} onPage={(p) => setPage(String(p))} />
-      {form && <StockInForm orderId={params.get('order')} onClose={() => setForm(false)} onPosted={() => list.refetch()} />}
-    </>
-  );
-}
 
 function newLine(code = ''): NewLine {
   const isbnLike = /^97[89]\d{10}$/.test(code);
@@ -170,7 +97,19 @@ function newLine(code = ''): NewLine {
   };
 }
 
-function StockInForm({ orderId, onClose, onPosted }: { orderId: string | null; onClose: () => void; onPosted: () => void }) {
+/** Products ticked on the Stock page, prefilled as existing lines. */
+export interface StockInPick {
+  variantId: string;
+  title: string;
+  sku: string;
+  priceVnd: number;
+}
+
+/**
+ * Stock-in form, opened from the Stock page (“Nhập thêm hàng”) with the ticked products, or to
+ * receive a supplier order (FR-PUR-01..07, Design §12.1, §12.4). Posts one stock-in entry.
+ */
+export function StockInForm({ orderId, initial = [], onClose, onPosted }: { orderId: string | null; initial?: StockInPick[]; onClose: () => void; onPosted: () => void }) {
   const navigate = useNavigate();
   const suppliers = useSuppliers();
   const categories = useQuery({ queryKey: ['categories'], queryFn: () => get<{ items: Named[] }>('/api/v1/catalog/categories') });
@@ -181,11 +120,14 @@ function StockInForm({ orderId, onClose, onPosted }: { orderId: string | null; o
   const [consignment, setConsignment] = useState(false);
   const [discount, setDiscount] = useState('');
   const [deadline, setDeadline] = useState('');
-  const [lines, setLines] = useState<Line[]>([]);
+  const [lines, setLines] = useState<Line[]>(() =>
+    initial.map((p) => ({ kind: 'existing', key: p.variantId, variantId: p.variantId, title: p.title, sku: p.sku, costVnd: '', sellingPriceVnd: String(p.priceVnd), qty: '1' })),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ entryNo: string; totalCostVnd: number; lines: { marginFlag: boolean; createdProduct: boolean; priceChanged: boolean }[] } | null>(null);
   const supplier = suppliers.data?.items.find((s) => s.id === supplierId);
+  const locked = initial.length > 0 || !!orderId;
 
   // Receiving a supplier order: prefill outstanding lines (FR-PUR-07).
   useEffect(() => {
@@ -284,7 +226,7 @@ function StockInForm({ orderId, onClose, onPosted }: { orderId: string | null; o
 
   return (
     <Dialog
-      title="Phiếu nhập hàng"
+      title="Nhập thêm hàng"
       size="lg"
       onClose={onClose}
       footer={
@@ -326,20 +268,26 @@ function StockInForm({ orderId, onClose, onPosted }: { orderId: string | null; o
           )}
         </div>
 
-        <ProductSearch
-          autoFocus
-          onPick={(h) =>
-            setLines((ls) => {
-              const same = ls.find((l) => l.kind === 'existing' && l.variantId === h.variantId);
-              if (same) return ls.map((l) => (l === same ? { ...l, qty: String(digits(l.qty) + 1) } : l));
-              return [...ls, { kind: 'existing', key: crypto.randomUUID(), variantId: h.variantId, title: hitTitle(h), sku: h.sku, costVnd: '', sellingPriceVnd: String(h.priceVnd), qty: '1' }];
-            })
-          }
-          onUnknownCode={(code) => setLines((ls) => [...ls, newLine(code)])}
-        />
-        <Button variant="tonal" size="sm" icon={Plus} className="self-start" onClick={() => setLines((ls) => [...ls, newLine()])}>
-          Sản phẩm mới
-        </Button>
+        {/* Opened with products ticked on the Stock page or from a supplier order, the lines are fixed:
+            no search and no new product here (Design §12.1); new products are created on the Products page. */}
+        {!locked && (
+          <>
+            <ProductSearch
+              autoFocus
+              onPick={(h) =>
+                setLines((ls) => {
+                  const same = ls.find((l) => l.kind === 'existing' && l.variantId === h.variantId);
+                  if (same) return ls.map((l) => (l === same ? { ...l, qty: String(digits(l.qty) + 1) } : l));
+                  return [...ls, { kind: 'existing', key: crypto.randomUUID(), variantId: h.variantId, title: hitTitle(h), sku: h.sku, costVnd: '', sellingPriceVnd: String(h.priceVnd), qty: '1' }];
+                })
+              }
+              onUnknownCode={(code) => setLines((ls) => [...ls, newLine(code)])}
+            />
+            <Button variant="tonal" size="sm" icon={Plus} className="self-start" onClick={() => setLines((ls) => [...ls, newLine()])}>
+              Sản phẩm mới
+            </Button>
+          </>
+        )}
 
         <ul className="flex flex-col gap-3">
           {lines.map((l) => (

@@ -148,8 +148,23 @@ export async function movements(ctx: Ctx, input: z.input<typeof MovementQuery>) 
   if (q.to) where.push(sql`${m.at} <= ${new Date(q.to)}`);
   if (q.cursor) where.push(lt(m.at, new Date(q.cursor)));
   const showCost = can(ctx.actor, 'catalog.view_cost');
-  const rows = await ctx.db.select().from(m).where(and(...where)).orderBy(desc(m.at), desc(m.id)).limit(q.limit + 1);
-  const page = rows.slice(0, q.limit).map(({ unitCostVnd, ...r }) => ({ ...r, ...(showCost && { unitCostVnd }) }));
+  // Source document number (stock-in entry, sale, return) and supplier, for the product's stock page (Design §12.1).
+  const rows = await ctx.db
+    .select({
+      m,
+      refDocNo: sql<string | null>`case ${m.refType}
+        when 'stock_in' then (select e.entry_no from purchasing.stock_in_entry e where e.id::text = ${m.refId}::text)
+        when 'sale' then (select s.doc_no from sales.sale s where s.id::text = ${m.refId}::text)
+        when 'sale_void' then (select s.doc_no from sales.sale s where s.id::text = ${m.refId}::text)
+        when 'sale_return' then (select r.doc_no from sales.sale_return r where r.id::text = ${m.refId}::text)
+        end`,
+      supplierName: sql<string | null>`case when ${m.refType} = 'stock_in' then (select sp.name from purchasing.stock_in_entry e join purchasing.supplier sp on sp.id = e.supplier_id where e.id::text = ${m.refId}::text) end`,
+    })
+    .from(m)
+    .where(and(...where))
+    .orderBy(desc(m.at), desc(m.id))
+    .limit(q.limit + 1);
+  const page = rows.slice(0, q.limit).map(({ m: { unitCostVnd, ...r }, refDocNo, supplierName }) => ({ ...r, refDocNo, supplierName, ...(showCost && { unitCostVnd }) }));
   return { items: page, nextCursor: rows.length > q.limit ? page[page.length - 1]!.at.toISOString() : null };
 }
 

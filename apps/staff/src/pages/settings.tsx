@@ -206,7 +206,6 @@ const MASTER: [string, string][] = [
   ['reason_code', 'Lý do điều chỉnh kho'],
   ['unit', 'Đơn vị tính'],
   ['payment_method', 'Phương thức thanh toán'],
-  ['location', 'Vị trí kho'],
   ['order_source', 'Nguồn đơn hàng'],
   ['holiday', 'Ngày lễ'],
 ];

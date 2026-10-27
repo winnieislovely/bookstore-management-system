@@ -3,7 +3,7 @@ import { clsx } from 'clsx';
 import { AlertOctagon, AlertTriangle, BookOpen, CalendarClock, EyeOff, ImageOff, Package, Plus, Printer, Search, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { DataTable, FilterMenu, Pager, SearchBox, SelectField, toast, useListParam, useParam, type Column } from '../components/data';
+import { DataTable, FilterMenu, Pager, SearchBox, SelectionBar, SelectField, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Field, PageHeader, StatusChip } from '../components/ui';
 import { get } from '../lib/api';
 import { formatDate, formatNumber, formatVnd } from '../lib/format';
@@ -177,47 +177,52 @@ export function ProductsPage() {
           </>
         }
       />
-      {selected.size > 0 ? (
-        <div className="mb-4 flex min-h-12 flex-wrap items-center gap-3 rounded-lg bg-navy-50 px-4 py-2 text-sm" role="region" aria-label="Thao tác hàng loạt">
-          <span className="font-medium text-navy-700 num">Đã chọn {formatNumber(selected.size)} sản phẩm</span>
-          <Button size="sm" variant="primary" icon={Printer} onClick={() => setDialog('labels')}>
-            In mã vạch
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => setSelected(new Map())}>
-            Bỏ chọn
-          </Button>
-        </div>
-      ) : (
-        <div className="mb-4 flex items-center gap-2">
-          <SearchBox value={q} onChange={setQ} placeholder={t('products.search')} />
-          <FilterMenu
-            groups={[
-              {
-                label: 'Tồn kho',
-                options: [
-                  { key: 'in_stock', label: t('stock.inStock') },
-                  { key: 'low', label: t('stock.low') },
-                  { key: 'out', label: t('stock.out') },
-                ],
-                values: stock,
-                onChange: setStock,
-              },
-              { label: 'Loại', options: KINDS, values: kind, onChange: setKind },
-              { label: 'Phân loại', options: categoryOptions(categories.data?.items ?? [], kind), values: category, onChange: setCategory },
-              {
-                label: 'Trạng thái',
-                options: [
-                  { key: 'active', label: 'Đang bán' },
-                  { key: 'hidden', label: 'Ẩn' },
-                  { key: 'discontinued', label: 'Ngừng bán' },
-                ],
-                values: status,
-                onChange: setStatus,
-              },
-              { label: 'Ảnh', options: [{ key: 'missing', label: t('item.missingImage') }], values: image, onChange: setImage },
-            ]}
-          />
-        </div>
+      <div className="mb-4 flex items-center gap-2">
+        <SearchBox value={q} onChange={setQ} placeholder={t('products.search')} />
+        <FilterMenu
+          groups={[
+            {
+              label: 'Tồn kho',
+              options: [
+                { key: 'in_stock', label: t('stock.inStock') },
+                { key: 'low', label: t('stock.low') },
+                { key: 'out', label: t('stock.out') },
+              ],
+              values: stock,
+              onChange: setStock,
+            },
+            { label: 'Loại', options: KINDS, values: kind, onChange: setKind },
+            { label: 'Phân loại', options: categoryOptions(categories.data?.items ?? [], kind), values: category, onChange: setCategory },
+            {
+              label: 'Trạng thái',
+              options: [
+                { key: 'active', label: 'Đang bán' },
+                { key: 'hidden', label: 'Ẩn' },
+                { key: 'discontinued', label: 'Ngừng bán' },
+              ],
+              values: status,
+              onChange: setStatus,
+            },
+            { label: 'Ảnh', options: [{ key: 'missing', label: t('item.missingImage') }], values: image, onChange: setImage },
+          ]}
+        />
+      </div>
+      {/* Bulk bar under the search row; search and filters stay usable (Design §10.6). */}
+      {selected.size > 0 && (
+        <SelectionBar
+          items={[...selected.values()].map((r) => ({ key: r.variantId, label: r.titleVi || r.title, code: r.sku }))}
+          onRemove={(key) => {
+            const next = new Map(selected);
+            next.delete(key);
+            setSelected(next);
+          }}
+          onClear={() => setSelected(new Map())}
+          actions={
+            <Button size="sm" variant="primary" icon={Printer} onClick={() => setDialog('labels')}>
+              In mã vạch
+            </Button>
+          }
+        />
       )}
       <DataTable
         columns={columns}

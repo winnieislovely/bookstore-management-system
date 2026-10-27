@@ -407,6 +407,9 @@ export const ListQuery = z.object({
   status: csvEnum(['active', 'hidden', 'discontinued']),
   /** Stock states of the product list filter (Design §12.1). */
   stock: csvEnum(['in_stock', 'low', 'out']),
+  /** Latest stock movement within [changedFrom, changedTo] (Stock list filter, Design §12.1). */
+  changedFrom: z.iso.datetime().optional(),
+  changedTo: z.iso.datetime().optional(),
   /** “Thiếu ảnh”: products without a photo, typically imported (FR-CAT-11). */
   image: z.enum(['missing']).optional(),
   page: z.coerce.number().int().min(1).default(1),
@@ -436,6 +439,11 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
     const states = { out: sql`${avail} <= 0`, low: sql`(${avail} > 0 and ${v.minStock} is not null and ${avail} <= ${v.minStock})`, in_stock: sql`${avail} > 0` };
     where.push(sql`(${sql.join(q.stock.map((x) => states[x]), sql` or `)})`);
   }
+  if (q.changedFrom || q.changedTo) {
+    const last = sql`(select max(m.at) from inventory.stock_movement m where m.variant_id = ${v.id})`;
+    if (q.changedFrom) where.push(sql`${last} >= ${q.changedFrom}::timestamptz`);
+    if (q.changedTo) where.push(sql`${last} <= ${q.changedTo}::timestamptz`);
+  }
   if (q.image === 'missing') where.push(sql`not exists (select 1 from catalog.item_image im where im.item_id = ${i.id})`);
   const filter = where.length ? and(...where) : undefined;
 
@@ -454,6 +462,8 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
       onHand: sql<number>`(case when ${i.kind} = 'bundle' then ${avail} else coalesce((select sum(s.on_hand) from inventory.stock_level s where s.variant_id = ${v.id}), 0)::int end)`,
       avgCostVnd: sql<number | null>`(select coalesce(max(s.avg_cost_vnd) filter (where s.location = 'floor'), max(s.avg_cost_vnd)) from inventory.stock_level s where s.variant_id = ${v.id})`,
       updatedAt: sql<string>`greatest(${i.updatedAt}, ${v.updatedAt})`,
+      /** Latest stock movement, for the Stock list (Design §12.1). */
+      lastMovementAt: sql<string | null>`(select max(m.at) from inventory.stock_movement m where m.variant_id = ${v.id})`,
       minStock: v.minStock,
       status: i.status,
       releaseDate: i.releaseDate,
@@ -469,9 +479,10 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
   const [total] = await ctx.db.select({ n: count() }).from(v).innerJoin(i, eq(i.id, v.itemId)).where(filter);
   // Cost is shown only with permission (FR-CAT-07, TDD §10.3).
   const showCost = can(ctx.actor, 'catalog.view_cost');
-  const items = rows.map(({ avgCostVnd, updatedAt, ...r }) => ({
+  const items = rows.map(({ avgCostVnd, updatedAt, lastMovementAt, ...r }) => ({
     ...r,
     updatedAt: new Date(updatedAt).toISOString(),
+    lastMovementAt: lastMovementAt ? new Date(lastMovementAt).toISOString() : null,
     ...(showCost && { avgCostVnd: avgCostVnd == null ? null : Number(avgCostVnd) }),
   }));
   return { items, total: total?.n ?? 0, page: q.page, limit: q.limit };

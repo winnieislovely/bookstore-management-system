@@ -629,3 +629,39 @@ export function TimeFilter({ value, onChange }: { value: string; onChange: (v: s
     </div>
   );
 }
+
+/**
+ * Bulk bar under the search/filter row (Design §10.6): count with an expand toggle, the bulk
+ * actions, “Bỏ chọn tất cả”; expanded, the selected rows (3 visible, the rest scroll), each with X.
+ */
+export function SelectionBar({ items, actions, onRemove, onClear }: { items: { key: string; label: string; code?: string }[]; actions: ReactNode; onRemove: (key: string) => void; onClear: () => void }) {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  return (
+    <div className="mb-4 rounded-lg bg-navy-50 px-4 py-2 text-sm" role="region" aria-label="Thao tác hàng loạt">
+      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-2">
+        <button type="button" aria-expanded={open} aria-controls={listId} onClick={() => setOpen(!open)} className="-ml-2 inline-flex h-10 items-center gap-1 rounded-full px-2 font-medium text-navy-700 hover:bg-navy-100">
+          <ChevronDown size={18} className={clsx('transition-transform', open && 'rotate-180')} aria-hidden />
+          <span className="num">Đã chọn {formatNumber(items.length)} sản phẩm</span>
+        </button>
+        {actions}
+        <Button size="sm" variant="ghost" className="ml-auto" onClick={onClear}>
+          Bỏ chọn tất cả
+        </Button>
+      </div>
+      {open && (
+        <ul id={listId} className="mt-2 mb-1 max-h-[132px] divide-y divide-paper-300 overflow-y-auto rounded-md border border-paper-300 bg-white">
+          {items.map((i) => (
+            <li key={i.key} className="flex h-11 items-center gap-3 pr-1 pl-3">
+              <span className="min-w-0 flex-1 truncate">{i.label}</span>
+              {i.code && <span className="code shrink-0 text-[13px] text-ink-500">{i.code}</span>}
+              <button type="button" className="inline-flex size-9 shrink-0 items-center justify-center rounded-full text-ink-500 hover:bg-navy-50" aria-label={`Bỏ chọn ${i.label}`} onClick={() => onRemove(i.key)}>
+                <X size={16} aria-hidden />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}

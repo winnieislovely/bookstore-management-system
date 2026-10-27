@@ -173,7 +173,8 @@ export function CountBadge({ count, tone = 'default' }: { count: number; tone?: 
 // Page header, empty, error and loading states (§6.3, §10.12)
 
 /** Page header (Design §6.3, §12.3). `menu` is the overflow ⋯ button: on the title row on phones, last of the actions on sm+. */
-export function PageHeader({ title, actions, breadcrumb, menu }: { title: string; actions?: ReactNode; breadcrumb?: ReactNode; menu?: ReactNode }) {
+/** `subtitle` is a short line under the title (e.g. a key figure). */
+export function PageHeader({ title, actions, breadcrumb, menu, subtitle }: { title: string; actions?: ReactNode; breadcrumb?: ReactNode; menu?: ReactNode; subtitle?: ReactNode }) {
   return (
     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div>
@@ -182,6 +183,7 @@ export function PageHeader({ title, actions, breadcrumb, menu }: { title: string
           <h1 className="min-w-0 text-[22px] leading-[30px] font-semibold text-navy-700 sm:text-[28px] sm:leading-9">{title}</h1>
           {menu && <div className="shrink-0 sm:hidden">{menu}</div>}
         </div>
+        {subtitle && <div className="mt-1 text-sm text-ink-500">{subtitle}</div>}
       </div>
       {(actions || menu) && (
         <div className={clsx('flex flex-wrap items-center gap-2', !actions && 'max-sm:hidden')}>

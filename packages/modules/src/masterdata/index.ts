@@ -30,9 +30,7 @@ const DEFAULTS: Record<MasterKind, [string, string][]> = {
     ['lost', 'Mất'],
     ['found', 'Tìm thấy'],
     ['correction', 'Điều chỉnh sai sót'],
-    ['expired', 'Hết hạn sử dụng'],
     ['gift', 'Tặng / khuyến mãi'],
-    ['import_rollback', 'Hoàn tác nhập dữ liệu'],
   ],
   payment_method: [
     ['cash', 'Tiền mặt'],

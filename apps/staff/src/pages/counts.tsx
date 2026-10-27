@@ -42,7 +42,7 @@ export function CountsPage() {
   const columns: Column<CountRow>[] = [
     { header: 'Số phiếu', cell: (r) => <span className="code">{r.docNo}</span> },
     { header: 'Ngày', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.createdAt) },
-    { header: 'Phạm vi', cell: (r) => `${SCOPE[r.scope.kind] ?? r.scope.kind} · ${r.location === 'back' ? 'Kho sau' : 'Quầy'}${r.blind ? ' · đếm mù' : ''}` },
+    { header: 'Phạm vi', cell: (r) => `${SCOPE[r.scope.kind] ?? r.scope.kind}${r.blind ? ' · đếm mù' : ''}` },
     { header: 'Người tạo', cell: (r) => r.createdBy ?? '—' },
     { header: 'Đã đếm', align: 'right', cell: (r) => `${formatNumber(r.counted)}/${formatNumber(r.lines)}` },
     { header: 'Trạng thái', cell: (r) => <Chip status={r.status} /> },
@@ -74,7 +74,6 @@ export function CountsPage() {
 function CreateCount({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   const [kind, setKind] = useState<'full' | 'category'>('full');
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
-  const [location, setLocation] = useState('floor');
   const [blind, setBlind] = useState(true);
   const categories = useQuery({ queryKey: ['categories'], queryFn: () => get<{ items: { id: string; i18n: { vi?: { name?: string }; en?: { name?: string } } }[] }>('/api/v1/catalog/categories'), enabled: kind === 'category' });
   return (
@@ -83,7 +82,7 @@ function CreateCount({ onClose, onCreated }: { onClose: () => void; onCreated: (
       confirm="Bắt đầu đếm"
       onClose={onClose}
       onConfirm={async () => {
-        const r = await post<{ id: string }>('/api/v1/inventory/counts', { scope: kind === 'full' ? { kind } : { kind, categoryIds }, location, blind });
+        const r = await post<{ id: string }>('/api/v1/inventory/counts', { scope: kind === 'full' ? { kind } : { kind, categoryIds }, blind });
         onCreated(r.id);
       }}
     >
@@ -103,10 +102,6 @@ function CreateCount({ onClose, onCreated }: { onClose: () => void; onCreated: (
           })}
         </div>
       )}
-      <SelectField label="Vị trí" value={location} onChange={(e) => setLocation(e.target.value)}>
-        <option value="floor">Quầy</option>
-        <option value="back">Kho sau</option>
-      </SelectField>
       <label className="inline-flex items-center gap-2 text-sm">
         <input type="checkbox" className="size-5" checked={blind} onChange={(e) => setBlind(e.target.checked)} />
         Đếm mù (người đếm không thấy số tồn trên hệ thống)

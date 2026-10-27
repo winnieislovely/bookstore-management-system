@@ -9,7 +9,6 @@ import {
   Handshake,
   LayoutDashboard,
   Monitor,
-  PackagePlus,
   Receipt,
   ScanBarcode,
   ScrollText,
@@ -58,8 +57,7 @@ export const NAV: NavGroup[] = [
     label: 'nav.group.catalog',
     items: [
       { path: '/products', label: 'nav.products', icon: BookOpen, anyOf: ['catalog.view'] },
-      { path: '/stock-in', label: 'nav.stockIn', icon: PackagePlus, anyOf: ['purchasing.manage'] },
-      { path: '/stock', label: 'nav.stock', icon: Boxes, anyOf: ['inventory.view'] },
+      { path: '/stock', label: 'nav.stock', icon: Boxes, anyOf: ['inventory.view', 'purchasing.manage'] },
       { path: '/counts', label: 'nav.counts', icon: ClipboardList, anyOf: ['inventory.count'] },
       { path: '/supplier-orders', label: 'nav.supplierOrders', icon: FileInput, anyOf: ['purchasing.manage'] },
       { path: '/suppliers', label: 'nav.suppliers', icon: Building2, anyOf: ['purchasing.manage'] },

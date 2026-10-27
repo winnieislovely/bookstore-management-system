@@ -277,7 +277,7 @@ export function SupplierOrderDetailPage() {
               </Button>
             )}
             {receivable && (
-              <Button variant="primary" icon={PackageCheck} onClick={() => navigate(`/stock-in?order=${x.id}`)}>
+              <Button variant="primary" icon={PackageCheck} onClick={() => navigate(`/stock?receive=${x.id}`)}>
                 Nhận hàng
               </Button>
             )}

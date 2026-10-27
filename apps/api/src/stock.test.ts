@@ -161,6 +161,16 @@ describe('product list and detail (FR-CAT-14, Design §12.1)', () => {
     const row = (await list('q=nguyen nhat anh')).items[0];
     expect(row).toMatchObject({ onHand: 16, avgCostVnd: Math.round((15 * 52000 + 110000) / 16) });
     expect(new Date(row.updatedAt).getTime()).not.toBeNaN();
+    expect(new Date(row.lastMovementAt).getTime()).not.toBeNaN();
+    // The product's stock page shows which stock-in entry (and supplier) each receipt came from.
+    const moves = (await h.call('GET', `/api/v1/inventory/movements?variant=${row.variantId}`, { cookie: warehouse })).body.items as { refType: string; refDocNo: string | null }[];
+    const receipt = moves.find((m) => m.refType === 'stock_in');
+    expect(receipt?.refDocNo).toBeTruthy();
+    // Filter by the time of the latest stock change.
+    const last = new Date(row.lastMovementAt).getTime();
+    const ids = async (qs: string) => (await list(qs)).items.map((r: { variantId: string }) => r.variantId);
+    expect(await ids(`changedFrom=${new Date(last - 1000).toISOString()}&changedTo=${new Date(last + 1000).toISOString()}`)).toContain(row.variantId);
+    expect(await ids(`changedFrom=${new Date(last + 1000).toISOString()}`)).not.toContain(row.variantId);
     expect((await list('q=nguyen nhat anh', cashier)).items[0]).not.toHaveProperty('avgCostVnd');
     expect((await list('kind=book')).items.every((r: { kind: string }) => r.kind === 'book')).toBe(true);
     expect((await list('kind=stationery,other')).items.map((r: { itemId: string }) => r.itemId)).not.toContain(bookItem);

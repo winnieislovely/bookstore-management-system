@@ -26,8 +26,7 @@ import { ReportsPage } from './pages/reports';
 import { SaleDetailPage, SalesPage } from './pages/sales';
 import { SettingsPage } from './pages/settings';
 import { ShiftDetailPage, ShiftsPage } from './pages/shifts';
-import { StockPage } from './pages/stock';
-import { StockInPage } from './pages/stockin';
+import { StockItemPage, StockPage } from './pages/stock';
 import { SupplierOrderDetailPage, SupplierOrdersPage } from './pages/supplierOrders';
 import { SuppliersPage } from './pages/suppliers';
 import { PosPage } from './pos/PosPage';
@@ -88,7 +87,6 @@ const BUILT: Record<string, ReactNode> = {
   '/shifts': <ShiftsPage />,
   '/customers': <CustomersPage />,
   '/promotions': <PromotionsPage />,
-  '/stock-in': <StockInPage />,
   '/stock': <StockPage />,
   '/counts': <CountsPage />,
   '/suppliers': <SuppliersPage />,
@@ -108,6 +106,9 @@ const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   { path: 'sales/:id', anyOf: ['sale.create'], element: <SaleDetailPage /> },
   { path: 'shifts/:id', anyOf: ['shift.view_all'], element: <ShiftDetailPage /> },
   { path: 'customers/:id', anyOf: ['customer.view'], element: <CustomerDetailPage /> },
+  // Stock-in lives on the Stock page now (Design §12.1); old links land there.
+  { path: 'stock-in', anyOf: ['inventory.view', 'purchasing.manage'], element: <Navigate to="/stock" replace /> },
+  { path: 'stock/:id', anyOf: ['inventory.view', 'purchasing.manage'], element: <StockItemPage /> },
   { path: 'products/new', anyOf: ['catalog.edit'], element: <ProductNewPage /> },
   { path: 'products/:id', anyOf: ['catalog.view'], element: <ProductDetailPage /> },
   { path: 'counts/:id', anyOf: ['inventory.count'], element: <CountDetailPage /> },
