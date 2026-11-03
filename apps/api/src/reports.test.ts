@@ -22,7 +22,7 @@ beforeAll(async () => {
   ({ owner, roles } = await h.setupOwner());
   manager = await h.staff(owner, 'quanly', roles.manager!, '112233');
   cashier = await h.staff(owner, 'thu', roles.cashier!);
-  // A role that sees reports but not profit, cost or consignment settlement.
+  // A role that sees reports but not profit or cost.
   const viewerRole = await h.call('POST', '/api/v1/admin/roles', { cookie: owner, body: { name: 'Xem báo cáo', permissions: ['report.view'] } });
   viewer = await h.staff(owner, 'xem', viewerRole.body.id);
 
@@ -111,10 +111,7 @@ describe('sales report (FR-RPT-02)', () => {
     expect(r.rows[0]).not.toHaveProperty('costVnd');
   });
 
-  it('groups by payment method and by customer', async () => {
-    const pay = (await get(`/api/v1/reports/sales?${range}&groupBy=payment`, manager)).body;
-    expect(rowOf(pay.rows, 'cash')).toMatchObject({ orders: 1, grossVnd: 211000, returnsVnd: 100000, netVnd: 111000 });
-    expect(rowOf(pay.rows, 'card')).toMatchObject({ grossVnd: 22000 });
+  it('groups by customer', async () => {
     const cust = (await get(`/api/v1/reports/sales?${range}&groupBy=customer`, manager)).body;
     expect(rowOf(cust.rows, 'Khách A')).toMatchObject({ grossVnd: 211000, returnsVnd: 100000 });
     expect(rowOf(cust.rows, 'Khách lẻ')).toMatchObject({ grossVnd: 22000 });
@@ -123,7 +120,8 @@ describe('sales report (FR-RPT-02)', () => {
   it('enforces the date range rules', async () => {
     expect((await get('/api/v1/reports/sales?from=2025-01-01&to=2026-10-25', manager)).body.error.code).toBe('range_too_long');
     expect((await get('/api/v1/reports/sales?groupBy=day', manager)).status).toBe(400);
-    expect((await get(`/api/v1/reports/sales?${range}&groupBy=cashier`, manager)).status).toBe(400);
+    // Removed groupings (FR-RPT-02): cashier, category, payment method.
+    for (const g of ['cashier', 'category', 'payment']) expect((await get(`/api/v1/reports/sales?${range}&groupBy=${g}`, manager)).status).toBe(400);
     const empty = (await get('/api/v1/reports/sales?from=2026-10-24&to=2026-10-24', manager)).body;
     expect(empty.rows).toEqual([]);
   });
@@ -141,7 +139,7 @@ describe('tax and audit reports (FR-RPT-04)', () => {
   it('e-invoice register and shift reconciliation', async () => {
     const inv = (await get(`/api/v1/reports/tax?${range}&view=einvoices`, manager)).body;
     expect(inv.rows).toHaveLength(3);
-    expect(inv.rows.map((r: { status: string }) => r.status).sort()).toEqual(['cancelled', 'pending', 'pending']);
+    expect(inv.rows.map((r: { status: string }) => r.status).sort()).toEqual(['Chờ xuất', 'Chờ xuất', 'Đã hủy']);
     const shifts = (await get(`/api/v1/reports/tax?${range}&view=shifts`, manager)).body;
     expect(shifts.rows[0]).toMatchObject({ cashier: 'thu', register: 'Q1', floatVnd: 500000 });
   });
@@ -153,18 +151,25 @@ describe('inventory and purchasing reports (FR-RPT-03, FR-RPT-05)', () => {
     expect(rowBy(asManager.rows, 'BOOK')).toMatchObject({ onHand: 9, available: 9, avgCostVnd: 50000, valueVnd: 450000 });
     const asViewer = (await get('/api/v1/reports/inventory?view=stock', viewer)).body;
     expect(rowBy(asViewer.rows, 'BOOK')).not.toHaveProperty('valueVnd');
-    const slow = (await get('/api/v1/reports/inventory?view=slow&days=30', manager)).body;
-    expect(slow.rows.map((r: { sku: string }) => r.sku)).toEqual(['NEVER-SOLD']);
+    // Slow movers are a Stock-list filter now (FR-INV-10): in stock and unsold for 30 days.
+    const slow = (await get('/api/v1/catalog/items?unsoldDays=30', manager)).body;
+    expect(slow.items.map((r: { sku: string }) => r.sku)).toEqual(['NEVER-SOLD']);
+    expect((await get('/api/v1/catalog/items?unsoldDays=45', manager)).status).toBe(400);
+    expect((await get('/api/v1/reports/inventory?view=slow', manager)).status).toBe(400);
     const mv = (await get(`/api/v1/reports/inventory?view=movements&${range}`, manager)).body;
-    expect(mv.rows.find((r: { type: string }) => r.type === 'sale')).toMatchObject({ qtyOut: 6, qtyIn: 0 });
+    // Movement types show in Vietnamese, as on the stock screen.
+    expect(mv.rows.find((r: { type: string }) => r.type === 'Bán hàng')).toMatchObject({ qtyOut: 6, qtyIn: 0 });
     // The void and the return both put stock back as customer returns.
-    expect(mv.rows.find((r: { type: string }) => r.type === 'customer_return')).toMatchObject({ qtyIn: 2 });
+    expect(mv.rows.find((r: { type: string }) => r.type === 'Khách trả')).toMatchObject({ qtyIn: 2 });
   });
 
   it('stock-ins by supplier; there is no payables view', async () => {
     const si = (await get(`/api/v1/reports/purchasing?view=stock_ins&${range}`, manager)).body;
     expect(si.rows[0]).toMatchObject({ supplier: 'Fahasa', entries: 3, units: 64, costVnd: 10 * 50000 + 50 * 5000 + 4 * 10000 });
     expect((await get('/api/v1/reports/purchasing?view=payables', manager)).status).toBe(400);
+    // Repeats of the Kiểm kho and Ký gửi screens are gone (FR-RPT-03, FR-RPT-05).
+    expect((await get(`/api/v1/reports/purchasing?view=consignment&${range}`, manager)).status).toBe(400);
+    for (const view of ['counts', 'consignment']) expect((await get(`/api/v1/reports/inventory?view=${view}&${range}`, manager)).status).toBe(400);
   });
 });
 

@@ -267,6 +267,8 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
         qtyReceived: line.qty,
         discountBp: data.consignmentDiscountBp ?? 0,
         deadlineAt: data.consignmentDeadline ? new Date(data.consignmentDeadline) : null,
+        // Store clock, like the stock-in entry and sales: statements compare them by period.
+        createdAt: now,
       });
     }
     results.push({ variantId, createdProduct, priceChanged, marginFlag, avgCostVnd: applied.avgCostVnd });

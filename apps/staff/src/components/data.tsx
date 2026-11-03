@@ -550,12 +550,10 @@ export function ApprovalPrompt({ action, subject, reason, onToken, onClose }: { 
 // ---------------------------------------------------------------------------------------------
 // Time filter for lists (Design §12.1): one URL param `time` = preset key or `YYYY-MM-DD..YYYY-MM-DD`; store-day bounds.
 
+// Tất cả, 7 ngày qua, 30 ngày qua, Tùy chọn only (Design §10.9).
 const TIME_PRESETS = [
-  { key: 'today', label: 'Hôm nay' },
   { key: '7d', label: '7 ngày qua' },
   { key: '30d', label: '30 ngày qua' },
-  { key: 'thisMonth', label: 'Tháng này' },
-  { key: 'lastMonth', label: 'Tháng trước' },
 ] as const;
 const storeToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
@@ -564,14 +562,8 @@ const dayEnd = (day: string) => new Date(`${day}T23:59:59.999+07:00`).toISOStrin
 
 export function timeDays(time: string): [string, string] | null {
   const today = storeToday();
-  if (time === 'today') return [today, today];
   if (time === '7d') return [addDays(today, -6), today];
   if (time === '30d') return [addDays(today, -29), today];
-  if (time === 'thisMonth') return [`${today.slice(0, 8)}01`, today];
-  if (time === 'lastMonth') {
-    const last = addDays(`${today.slice(0, 8)}01`, -1);
-    return [`${last.slice(0, 8)}01`, last];
-  }
   const m = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(time);
   return m ? [m[1]!, m[2]!] : null;
 }

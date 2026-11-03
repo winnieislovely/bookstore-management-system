@@ -43,8 +43,8 @@ const CHANNEL_COLOR: Record<string, string> = {
 // ---------------------------------------------------------------------------------------------
 // Date ranges in store time (Design §12.5): presets plus a custom range, max 366 days (TDD §4.11).
 
-type Preset = '7d' | '30d' | 'thisMonth' | 'lastMonth' | '90d' | 'thisYear' | 'custom';
-const PRESETS: Preset[] = ['7d', '30d', 'thisMonth', 'lastMonth', '90d', 'thisYear', 'custom'];
+type Preset = '7d' | '30d' | 'custom';
+const PRESETS: Preset[] = ['7d', '30d', 'custom'];
 interface RangeState {
   preset: Preset;
   from: string;
@@ -64,16 +64,6 @@ function presetRange(preset: Preset, custom: { from: string; to: string }): { fr
       return { from: addDays(today, -6), to: today };
     case '30d':
       return { from: addDays(today, -29), to: today };
-    case '90d':
-      return { from: addDays(today, -89), to: today };
-    case 'thisMonth':
-      return { from: `${today.slice(0, 8)}01`, to: today };
-    case 'lastMonth': {
-      const lastDay = addDays(`${today.slice(0, 8)}01`, -1);
-      return { from: `${lastDay.slice(0, 8)}01`, to: lastDay };
-    }
-    case 'thisYear':
-      return { from: `${today.slice(0, 4)}-01-01`, to: today };
     case 'custom':
       return custom;
   }
@@ -85,7 +75,9 @@ function useRange(card: string, initial: Preset): [RangeState, (r: RangeState) =
   const [state, setState] = useState<RangeState>(() => {
     try {
       const saved = sessionStorage.getItem(key);
-      if (saved) return JSON.parse(saved) as RangeState;
+      const parsed = saved ? (JSON.parse(saved) as RangeState) : null;
+      // A preset saved before the list was trimmed falls back to the default.
+      if (parsed && PRESETS.includes(parsed.preset)) return parsed;
     } catch {
       /* storage unavailable: fall back to the default */
     }
@@ -339,7 +331,7 @@ function ChannelBars({ data }: { data: SalesRow[] }) {
 }
 
 function ChannelCard() {
-  const [range, setRange] = useRange('channel', 'thisMonth');
+  const [range, setRange] = useRange('channel', '30d');
   const err = rangeError(range);
   const q = useQuery({ ...salesQuery('channel', range), enabled: !err });
   return (

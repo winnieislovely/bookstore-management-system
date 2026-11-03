@@ -50,7 +50,6 @@ export const NAV: NavGroup[] = [
       { path: '/sales', label: 'nav.sales', icon: Receipt, anyOf: ['sale.create', 'sale.view_all'], badge: 'einvoicesFailed' },
       { path: '/customers', label: 'nav.customers', icon: Users, anyOf: ['customer.view'] },
       { path: '/promotions', label: 'nav.promotions', icon: BadgePercent, anyOf: ['promotion.manage'] },
-      { path: '/shifts', label: 'nav.shifts', icon: Wallet, anyOf: ['shift.view_all'] },
     ],
   },
   {
@@ -73,6 +72,7 @@ export const NAV: NavGroup[] = [
   {
     label: 'nav.group.reports',
     items: [
+      { path: '/shifts', label: 'nav.shifts', icon: Wallet, anyOf: ['shift.view_all'] },
       { path: '/reports/sales', label: 'nav.reportsSales', icon: TrendingUp, anyOf: ['report.view'] },
       { path: '/reports/inventory', label: 'nav.reportsInventory', icon: Boxes, anyOf: ['report.view'] },
       { path: '/reports/tax', label: 'nav.reportsTax', icon: Landmark, anyOf: ['report.view'] },

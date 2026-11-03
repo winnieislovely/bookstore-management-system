@@ -81,15 +81,17 @@ export function StockPage() {
   const [q, setQ] = useParam('q');
   const [state, setState] = useListParam('stock');
   const [changed, setChanged] = useParam('changed');
+  const [unsold, setUnsold] = useParam('unsold');
   const changedRange = timeRange(changed);
   const [page, setPage] = useParam('page', '1');
   const [selected, setSelected] = useState<Map<string, StockRow>>(new Map());
-  const [dialog, setDialog] = useState<null | 'in' | 'adjust'>(null);
-  const query = { q: q || undefined, stock: state.join(',') || undefined, changedFrom: changedRange.from, changedTo: changedRange.to, page: Number(page), limit: 40 };
+  // 'in': ticked products; 'search': empty form from the header button, products added one at a time.
+  const [dialog, setDialog] = useState<null | 'in' | 'search' | 'adjust'>(null);
+  const query = { q: q || undefined, stock: state.join(',') || undefined, changedFrom: changedRange.from, changedTo: changedRange.to, unsoldDays: unsold || undefined, page: Number(page), limit: 40 };
   const list = useQuery({ queryKey: ['stock-list', query], queryFn: () => get<{ items: StockRow[]; total: number }>('/api/v1/catalog/items', query) });
   const value = useQuery({ queryKey: ['valuation'], queryFn: () => get<{ totalVnd: number }>('/api/v1/inventory/valuation'), enabled: can(me, 'catalog.view_cost') });
   const showCost = list.data?.items.some((r) => 'avgCostVnd' in r) ?? false;
-  const filtered = !!(q || state.length || changed);
+  const filtered = !!(q || state.length || changed || unsold);
   const refresh = () => {
     void list.refetch();
     void value.refetch();
@@ -130,7 +132,17 @@ export function StockPage() {
 
   return (
     <>
-      <PageHeader title="Tồn kho" subtitle={value.data ? <span className="num">Giá trị tồn kho: <span className="font-semibold text-ink-900">{formatVnd(value.data.totalVnd)}</span></span> : undefined} />
+      <PageHeader
+        title="Tồn kho"
+        subtitle={value.data ? <span className="num">Giá trị tồn kho: <span className="font-semibold text-ink-900">{formatVnd(value.data.totalVnd)}</span></span> : undefined}
+        actions={
+          can(me, 'purchasing.manage') && (
+            <Button variant="primary" icon={PackagePlus} onClick={() => setDialog('search')}>
+              Nhập thêm hàng
+            </Button>
+          )
+        }
+      />
       <div className="mb-4 flex items-center gap-2">
         <SearchBox value={q} onChange={setQ} placeholder={t('products.search')} />
         <FilterMenu
@@ -147,6 +159,18 @@ export function StockPage() {
             },
             // Time of the latest stock change (Design §12.1).
             { kind: 'custom', label: 'Thay đổi gần nhất', summary: timeLabel(changed), active: !!changed, onClear: () => setChanged(''), content: <TimeFilter value={changed} onChange={setChanged} /> },
+            // Slow movers: in stock, no sale in that time (FR-INV-10, Design §12.1).
+            {
+              kind: 'single',
+              label: 'Chưa bán trong',
+              options: [
+                { key: '30', label: '30 ngày' },
+                { key: '60', label: '60 ngày' },
+                { key: '90', label: '90 ngày' },
+              ],
+              value: unsold,
+              onChange: setUnsold,
+            },
           ]}
         />
       </div>
@@ -198,6 +222,7 @@ export function StockPage() {
           }}
         />
       )}
+      {dialog === 'search' && <StockInForm onClose={() => setDialog(null)} onPosted={refresh} />}
       {dialog === 'adjust' && (
         <BulkAdjustDialog
           picks={picks.map((r) => ({ variantId: r.variantId, title: nameOfRow(r), sku: r.sku }))}

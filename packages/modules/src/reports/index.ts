@@ -106,7 +106,7 @@ export async function dashboard(ctx: Ctx) {
 // Sales (FR-RPT-02)
 
 export const SalesReportSchema = RangeSchema.extend({
-  groupBy: z.enum(['day', 'month', 'channel', 'category', 'item', 'payment', 'customer']).default('day'),
+  groupBy: z.enum(['day', 'month', 'channel', 'item', 'customer']).default('day'),
 });
 
 const SALES_GROUPS = {
@@ -120,10 +120,6 @@ const SALES_GROUPS = {
   },
 } as const;
 
-/** A line's primary category: the first by sort order (an item may sit in several). */
-const PRIMARY_CATEGORY = sql`(select c.i18n -> 'en' ->> 'name' from catalog.item_category ic join catalog.category c on c.id = ic.category_id
-  where ic.item_id = v.item_id order by c.sort, c.slug limit 1)`;
-
 export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>): Promise<Table> {
   const actor = requirePermission(ctx, 'report.view');
   const q = SalesReportSchema.parse(input);
@@ -131,37 +127,10 @@ export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>):
   const profit = can(actor, 'report.profit');
   const inRange = sql`s.status = 'completed' and s.sold_at >= ${tsParam(start)} and s.sold_at < ${tsParam(end)}`;
   const returnsInRange = sql`r.created_at >= ${tsParam(start)} and r.created_at < ${tsParam(end)}`;
-  let rows: Record<string, unknown>[];
-
-  if (q.groupBy === 'payment') {
-    const res = await ctx.db.execute<{ key: string; orders: number; gross: string; returns: string }>(sql`
-      with pay as (select p.method as key, count(distinct s.id)::int as orders, sum(p.amount_vnd) as gross
-                   from sales.sale_payment p join sales.sale s on s.id = p.sale_id where ${inRange} group by p.method),
-           ref as (select r.refund_method as key, sum(r.refund_vnd) as returns from sales.sale_return r where ${returnsInRange} group by r.refund_method)
-      select coalesce(pay.key, ref.key) as key, coalesce(pay.orders, 0) as orders, coalesce(pay.gross, 0) as gross, coalesce(ref.returns, 0) as returns
-      from pay full join ref on ref.key = pay.key order by gross desc`);
-    rows = res.map((r) => ({ key: r.key, orders: r.orders, grossVnd: n(r.gross), returnsVnd: n(r.returns), netVnd: n(r.gross) - n(r.returns) }));
-    return {
-      title: 'Doanh thu theo phương thức thanh toán',
-      from: q.from,
-      to: q.to,
-      columns: [
-        { key: 'key', label: 'Phương thức', type: 'text' },
-        { key: 'orders', label: 'Số đơn', type: 'int' },
-        { key: 'grossVnd', label: 'Đã thu', type: 'vnd' },
-        { key: 'returnsVnd', label: 'Đã hoàn', type: 'vnd' },
-        { key: 'netVnd', label: 'Thực thu', type: 'vnd' },
-      ],
-      rows,
-      totals: sumRows(rows, ['orders', 'grossVnd', 'returnsVnd', 'netVnd']),
-    };
-  }
-
-  // Line-level for item/category; sale-level keys otherwise. Returns are attributed by return date.
+  // Line-level for items; sale-level keys otherwise. Returns are attributed by return date.
   // Items key on SKU; the name is looked up after the join so SKU and name stay separate columns.
-  const lineKey: SQL =
-    q.groupBy === 'item' ? sql`v.sku` : q.groupBy === 'category' ? sql`coalesce(${PRIMARY_CATEGORY}, '—')` : SALES_GROUPS[q.groupBy].key;
-  const returnKey: SQL = q.groupBy === 'item' || q.groupBy === 'category' ? lineKey : SALES_GROUPS[q.groupBy].rkey;
+  const lineKey: SQL = q.groupBy === 'item' ? sql`v.sku` : SALES_GROUPS[q.groupBy].key;
+  const returnKey: SQL = q.groupBy === 'item' ? lineKey : SALES_GROUPS[q.groupBy].rkey;
   const res = await ctx.db.execute<{ key: string; title: string | null; orders: number; units: number; gross: string; discount: string; vat: string; cost: string; returns: string }>(sql`
     with sold as (
       select ${lineKey} as key, count(distinct s.id)::int as orders, sum(l.qty)::int as units, sum(l.total_vnd) as gross,
@@ -182,7 +151,7 @@ export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>):
            coalesce(sold.cost, 0) as cost, coalesce(ret.returns, 0) as returns
     from sold full join ret on ret.key = sold.key
     order by ${q.groupBy === 'day' || q.groupBy === 'month' ? sql`1` : sql`gross desc`}`);
-  rows = res.map((r) => {
+  const rows = res.map((r) => {
     const gross = n(r.gross);
     const row: Record<string, unknown> = {
       key: r.key,
@@ -206,7 +175,7 @@ export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>):
   // Orders are distinct sales; summing per-line groups would double count, so total them directly.
   const [ord] = await ctx.db.execute<{ orders: number }>(sql`select count(*)::int as orders from sales.sale s where ${inRange}`);
   totals.orders = ord!.orders;
-  const label = q.groupBy === 'item' ? 'Sản phẩm' : q.groupBy === 'category' ? 'Danh mục' : SALES_GROUPS[q.groupBy].label;
+  const label = q.groupBy === 'item' ? 'Sản phẩm' : SALES_GROUPS[q.groupBy].label;
   return {
     title: `Doanh thu theo ${label.toLowerCase()}`,
     from: q.from,
@@ -241,18 +210,30 @@ export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>):
 // Inventory (FR-RPT-03, FR-INV-08, FR-INV-10)
 
 export const InventoryReportSchema = z.object({
-  view: z.enum(['stock', 'movements', 'slow', 'counts', 'consignment']),
+  view: z.enum(['stock', 'movements']),
   from: z.iso.date().optional(),
   to: z.iso.date().optional(),
-  /** Slow-moving: days since the last sale (default 90). */
-  days: z.coerce.number().int().min(1).max(3650).default(90),
 });
+
+/** Vietnamese movement types, as on the stock screen; the report and its Excel export show these. */
+const MOVEMENT_LABEL: Record<string, string> = {
+  stock_in: 'Nhập hàng',
+  sale: 'Bán hàng',
+  customer_return: 'Khách trả',
+  consignment_receipt: 'Nhận ký gửi',
+  consignment_return: 'Trả ký gửi',
+  adjustment: 'Điều chỉnh',
+  count: 'Kiểm kho',
+  write_off: 'Hủy hàng',
+  bundle_use: 'Xuất cho combo',
+  library_transfer: 'Chuyển thư viện',
+};
 
 export async function inventory(ctx: Ctx, input: z.input<typeof InventoryReportSchema>): Promise<Table> {
   const actor = requirePermission(ctx, 'report.view');
   const q = InventoryReportSchema.parse(input);
   const cost = can(actor, 'catalog.view_cost');
-  const needRange = q.view === 'movements' || q.view === 'counts';
+  const needRange = q.view === 'movements';
   if (needRange && (!q.from || !q.to)) throw new AppError(400, 'range_required', 'Cần chọn khoảng thời gian.');
   const range = needRange ? storeRange(q.from!, q.to!) : null;
 
@@ -297,7 +278,7 @@ export async function inventory(ctx: Ctx, input: z.input<typeof InventoryReportS
       select type, coalesce(sum(qty_delta) filter (where qty_delta > 0), 0)::int as qty_in,
              coalesce(-sum(qty_delta) filter (where qty_delta < 0), 0)::int as qty_out, count(*)::int as lines
       from inventory.stock_movement where at >= ${tsParam(range!.start)} and at < ${tsParam(range!.end)} group by type order by type`);
-    const rows = res.map((r) => ({ type: r.type, lines: r.lines, qtyIn: r.qty_in, qtyOut: r.qty_out }));
+    const rows = res.map((r) => ({ type: MOVEMENT_LABEL[r.type] ?? r.type, lines: r.lines, qtyIn: r.qty_in, qtyOut: r.qty_out }));
     return {
       title: 'Xuất nhập tồn theo loại phát sinh',
       from: q.from!,
@@ -313,106 +294,14 @@ export async function inventory(ctx: Ctx, input: z.input<typeof InventoryReportS
     };
   }
 
-  if (q.view === 'slow') {
-    const since = new Date(ctx.clock.now().getTime() - q.days * 86_400_000);
-    const res = await ctx.db.execute<{ sku: string; title: string; on_hand: number; last_sale: Date | null; value: string }>(sql`
-      select v.sku, i.i18n -> 'en' ->> 'title' as title, sum(s.on_hand)::int as on_hand, max(s.last_sale_at) as last_sale,
-             coalesce(sum(greatest(s.on_hand, 0) * s.avg_cost_vnd), 0) as value
-      from inventory.stock_level s join catalog.item_variant v on v.id = s.variant_id join catalog.item i on i.id = v.item_id
-      group by v.id, i.id having sum(s.on_hand) > 0 and (max(s.last_sale_at) is null or max(s.last_sale_at) < ${tsParam(since)})
-      order by max(s.last_sale_at) nulls first`);
-    const now = ctx.clock.now().getTime();
-    const rows = res.map((r) => ({
-      sku: r.sku,
-      title: r.title,
-      onHand: r.on_hand,
-      lastSaleAt: r.last_sale,
-      daysSinceSale: r.last_sale ? Math.floor((now - new Date(r.last_sale).getTime()) / 86_400_000) : null,
-      ...(cost && { valueVnd: n(r.value) }),
-    }));
-    return {
-      title: `Hàng chậm bán (không bán trong ${q.days} ngày)`,
-      from: null,
-      to: null,
-      columns: [
-        { key: 'sku', label: 'SKU', type: 'text' },
-        { key: 'title', label: 'Tên sản phẩm', type: 'text' },
-        { key: 'onHand', label: 'Tồn', type: 'int' },
-        { key: 'lastSaleAt', label: 'Bán lần cuối', type: 'datetime' },
-        { key: 'daysSinceSale', label: 'Số ngày chưa bán', type: 'int' },
-        ...(cost ? [{ key: 'valueVnd', label: 'Giá trị tồn', type: 'vnd' as const }] : []),
-      ],
-      rows,
-    };
-  }
-
-  if (q.view === 'counts') {
-    const res = await ctx.db.execute<{ doc_no: string; approved_at: Date; sku: string; title: string; expected: number; counted: number; avg: string }>(sql`
-      select c.doc_no, c.approved_at, v.sku, i.i18n -> 'en' ->> 'title' as title, l.expected, l.counted,
-             coalesce((select max(avg_cost_vnd) from inventory.stock_level s where s.variant_id = l.variant_id), 0) as avg
-      from inventory.stock_count c join inventory.stock_count_line l on l.count_id = c.id
-      join catalog.item_variant v on v.id = l.variant_id join catalog.item i on i.id = v.item_id
-      where c.status = 'approved' and c.approved_at >= ${tsParam(range!.start)} and c.approved_at < ${tsParam(range!.end)}
-        and l.counted is not null and l.counted <> l.expected
-      order by c.approved_at, v.sku`);
-    const rows = res.map((r) => ({
-      docNo: r.doc_no,
-      approvedAt: r.approved_at,
-      sku: r.sku,
-      title: r.title,
-      expected: r.expected,
-      counted: r.counted,
-      variance: r.counted - r.expected,
-      ...(cost && { varianceValueVnd: (r.counted - r.expected) * n(r.avg) }),
-    }));
-    return {
-      title: 'Chênh lệch kiểm kho',
-      from: q.from!,
-      to: q.to!,
-      columns: [
-        { key: 'docNo', label: 'Phiếu', type: 'text' },
-        { key: 'approvedAt', label: 'Ngày duyệt', type: 'datetime' },
-        { key: 'sku', label: 'SKU', type: 'text' },
-        { key: 'title', label: 'Tên sản phẩm', type: 'text' },
-        { key: 'expected', label: 'Sổ sách', type: 'int' },
-        { key: 'counted', label: 'Thực tế', type: 'int' },
-        { key: 'variance', label: 'Chênh lệch', type: 'int' },
-        ...(cost ? [{ key: 'varianceValueVnd', label: 'Giá trị chênh lệch', type: 'vnd' as const }] : []),
-      ],
-      rows,
-      totals: sumRows(rows, ['variance', ...(cost ? ['varianceValueVnd'] : [])]),
-    };
-  }
-
-  // consignment stock
-  const res = await ctx.db.execute<{ supplier: string; sku: string; title: string; received: number; sold: number; returned: number; remaining: number; discount_bp: number }>(sql`
-    select s.name as supplier, v.sku, i.i18n -> 'en' ->> 'title' as title, sum(l.qty_received)::int as received, sum(l.qty_sold)::int as sold,
-           sum(l.qty_returned)::int as returned, sum(l.qty_received - l.qty_sold - l.qty_returned)::int as remaining, max(l.discount_bp) as discount_bp
-    from purchasing.consignment_lot l join purchasing.supplier s on s.id = l.supplier_id
-    join catalog.item_variant v on v.id = l.variant_id join catalog.item i on i.id = v.item_id
-    group by s.id, v.id, i.id order by s.name, v.sku`);
-  const rows = res.map((r) => ({ supplier: r.supplier, sku: r.sku, title: r.title, received: r.received, sold: r.sold, returned: r.returned, remaining: r.remaining, discountBp: r.discount_bp }));
-  return {
-    title: 'Hàng ký gửi',
-    from: null,
-    to: null,
-    columns: [
-      { key: 'supplier', label: 'Nhà cung cấp', type: 'text' },
-      { key: 'sku', label: 'SKU', type: 'text' },
-      { key: 'title', label: 'Tên sản phẩm', type: 'text' },
-      { key: 'received', label: 'Nhận', type: 'int' },
-      { key: 'sold', label: 'Đã bán', type: 'int' },
-      { key: 'returned', label: 'Đã trả', type: 'int' },
-      { key: 'remaining', label: 'Còn lại', type: 'int' },
-      { key: 'discountBp', label: 'Chiết khấu', type: 'percent' },
-    ],
-    rows,
-    totals: sumRows(rows, ['received', 'sold', 'returned', 'remaining']),
-  };
+  throw new AppError(400, 'unknown_view', 'Báo cáo không tồn tại.');
 }
 
 // =============================================================================================
 // Tax and audit (FR-RPT-04)
+
+/** Vietnamese e-invoice states, as on the sales screen; the register and its Excel export show these. */
+const EINVOICE_LABEL: Record<string, string> = { pending: 'Chờ xuất', sent: 'Đã gửi', issued: 'Đã xuất', failed: 'Lỗi', cancelled: 'Đã hủy', adjusted: 'Điều chỉnh' };
 
 export const TaxReportSchema = RangeSchema.extend({ view: z.enum(['vat', 'einvoices', 'shifts']) });
 
@@ -462,7 +351,7 @@ export async function tax(ctx: Ctx, input: z.input<typeof TaxReportSchema>): Pro
       docNo: r.doc_no,
       soldAt: r.sold_at,
       invoiceNo: r.invoice_no,
-      status: r.status,
+      status: EINVOICE_LABEL[r.status] ?? r.status,
       buyer: r.buyer?.name ?? 'Khách lẻ',
       buyerTaxCode: r.buyer?.taxCode ?? null,
       totalVnd: n(r.total),
@@ -529,7 +418,7 @@ export async function tax(ctx: Ctx, input: z.input<typeof TaxReportSchema>): Pro
 // Purchasing (FR-RPT-05)
 
 export const PurchasingReportSchema = z.object({
-  view: z.enum(['stock_ins', 'consignment']),
+  view: z.enum(['stock_ins']),
   from: z.iso.date().optional(),
   to: z.iso.date().optional(),
 });
@@ -538,34 +427,8 @@ export async function purchasingReport(ctx: Ctx, input: z.input<typeof Purchasin
   const actor = requirePermission(ctx, 'report.view');
   const q = PurchasingReportSchema.parse(input);
 
-  if (q.view === 'consignment') {
-    // Consignment settlement stays behind its own permission (FR-PUR-11).
-    if (!can(actor, 'purchasing.payables')) throw errors.forbidden('purchasing.payables');
-  }
   if (!q.from || !q.to) throw new AppError(400, 'range_required', 'Cần chọn khoảng thời gian.');
   const { start, end } = storeRange(q.from, q.to);
-  if (q.view === 'consignment') {
-    const res = await ctx.db.execute<{ doc_no: string; supplier: string; period: string; amount: string; status: string }>(sql`
-      select st.doc_no, s.name as supplier, st.period, st.amount_due_vnd as amount, st.status
-      from purchasing.consignment_statement st join purchasing.supplier s on s.id = st.supplier_id
-      where st.created_at >= ${tsParam(start)} and st.created_at < ${tsParam(end)} order by st.period, s.name`);
-    const rows = res.map((r) => ({ docNo: r.doc_no, supplier: r.supplier, period: r.period, amountDueVnd: n(r.amount), status: r.status }));
-    return {
-      title: 'Quyết toán hàng ký gửi',
-      from: q.from,
-      to: q.to,
-      columns: [
-        { key: 'docNo', label: 'Số bảng kê', type: 'text' },
-        { key: 'supplier', label: 'Nhà cung cấp', type: 'text' },
-        { key: 'period', label: 'Kỳ', type: 'text' },
-        { key: 'amountDueVnd', label: 'Phải trả', type: 'vnd' },
-        { key: 'status', label: 'Trạng thái', type: 'text' },
-      ],
-      rows,
-      totals: sumRows(rows, ['amountDueVnd']),
-    };
-  }
-
   const res = await ctx.db.execute<{ supplier: string; entries: number; units: number; cost: string }>(sql`
     select coalesce(s.name, '(Không ghi nhà cung cấp)') as supplier, count(distinct e.id)::int as entries, sum(l.qty)::int as units, sum(l.qty * l.unit_cost_vnd) as cost
     from purchasing.stock_in_entry e join purchasing.stock_in_line l on l.entry_id = e.id left join purchasing.supplier s on s.id = e.supplier_id

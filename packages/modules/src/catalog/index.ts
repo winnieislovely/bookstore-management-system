@@ -410,6 +410,8 @@ export const ListQuery = z.object({
   /** Latest stock movement within [changedFrom, changedTo] (Stock list filter, Design §12.1). */
   changedFrom: z.iso.datetime().optional(),
   changedTo: z.iso.datetime().optional(),
+  /** Slow movers: in stock, no sale in this many days, never-sold included (FR-INV-10). */
+  unsoldDays: z.coerce.number().pipe(z.union([z.literal(30), z.literal(60), z.literal(90)])).optional(),
   /** “Thiếu ảnh”: products without a photo, typically imported (FR-CAT-11). */
   image: z.enum(['missing']).optional(),
   page: z.coerce.number().int().min(1).default(1),
@@ -443,6 +445,11 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
     const last = sql`(select max(m.at) from inventory.stock_movement m where m.variant_id = ${v.id})`;
     if (q.changedFrom) where.push(sql`${last} >= ${q.changedFrom}::timestamptz`);
     if (q.changedTo) where.push(sql`${last} <= ${q.changedTo}::timestamptz`);
+  }
+  if (q.unsoldDays) {
+    const since = new Date(ctx.clock.now().getTime() - q.unsoldDays * 86_400_000);
+    where.push(sql`exists (select 1 from inventory.stock_level s where s.variant_id = ${v.id} group by s.variant_id
+      having sum(s.on_hand) > 0 and (max(s.last_sale_at) is null or max(s.last_sale_at) < ${since.toISOString()}::timestamptz))`);
   }
   if (q.image === 'missing') where.push(sql`not exists (select 1 from catalog.item_image im where im.item_id = ${i.id})`);
   const filter = where.length ? and(...where) : undefined;
