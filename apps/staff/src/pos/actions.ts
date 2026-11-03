@@ -142,6 +142,8 @@ export interface SaleInput {
   payments: Payment[];
   priced: PriceCartResult;
   items: Map<string, CachedItem>;
+  /** Collecting a pre-order (FR-POS-09): needs the server. */
+  preorderId?: string | null;
 }
 
 export interface SaleOutcome {
@@ -161,6 +163,7 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
     const s = await getShift();
     if (s) await saveShift({ ...s, cashSalesVnd: s.cashSalesVnd + cashVnd });
   };
+  if (input.preorderId && !input.shift.serverId) throw new ApiError(0, 'network_error', 'Cần kết nối mạng để nhận hàng đặt trước.');
   if (input.shift.serverId) {
     try {
       const approvals = Object.fromEntries(input.approvals.filter((a) => a.token).map((a) => [a.action, a.token!]));
@@ -176,6 +179,7 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
           redeemPoints: input.redeemPoints,
           approvals,
           payments: input.payments.map((p) => (p.method === 'cash' ? { method: 'cash', amountVnd: p.amountVnd, tenderedVnd: p.tenderedVnd } : p)),
+          ...(input.preorderId && { preorderId: input.preorderId }),
         }),
       }).catch(() => {
         throw new ApiError(0, 'network_error', '');
@@ -185,6 +189,7 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
       await tallyCash();
       return { docNo: body.docNo, saleId: body.id, totalVnd: body.totalVnd, changeVnd, pointsEarned: body.pointsEarned, offline: false, printSlip: body.printSlip };
     } catch (e) {
+      if (input.preorderId && isNetworkError(e)) throw new ApiError(0, 'network_error', 'Cần kết nối mạng để nhận hàng đặt trước.');
       if (!isNetworkError(e) || !(await deviceInfo())) throw e;
     }
   }

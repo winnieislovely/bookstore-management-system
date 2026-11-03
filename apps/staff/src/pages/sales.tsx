@@ -12,7 +12,7 @@ import { Dialog } from '../pos/widgets';
 
 /** Sales list and record (FR-POS-12..17, Design §12.1, §12.3, §11.2 E-invoice). */
 
-export const METHOD_LABEL: Record<string, string> = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', card: 'Thẻ' };
+export const METHOD_LABEL: Record<string, string> = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', card: 'Thẻ', deposit: 'Tiền cọc đặt trước' };
 
 const EINVOICE: Record<string, { tone: Tone; label: string; icon?: typeof Clock }> = {
   pending: { tone: 'neutral', label: 'Chờ xuất', icon: Clock },

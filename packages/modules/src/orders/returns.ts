@@ -6,7 +6,7 @@ import * as audit from '../audit/index.js';
 import * as customers from '../customers/index.js';
 import * as sales from '../sales/index.js';
 import { AppError, emit, errors, requirePermission, type Ctx } from '../platform/index.js';
-import { amountPaid, transition } from './index.js';
+import { transition } from './index.js';
 
 /**
  * Returns of online orders (FR-ORD-17, TDD §4.5): requested by the customer or staff, approved,
@@ -121,7 +121,7 @@ export async function receiveReturn(ctx: Ctx, id: string, input: z.input<typeof 
     if (!r || r.status !== 'approved' || o.status !== 'return_approved') throw errors.conflict('no_approved_return', `Đơn ${o.docNo} chưa có yêu cầu trả hàng đã duyệt.`);
     const lines = await tx.select().from(schema.orderLine).where(eq(schema.orderLine.orderId, id));
     // An order that never reached Done was never paid by COD: nothing to refund then.
-    const paidVnd = amountPaid(o);
+    const paidVnd = o.paidAt ? o.totalVnd : 0;
     if (data.refundVnd > paidVnd) throw new AppError(422, 'refund_exceeds_paid', `Số tiền hoàn tối đa là ${paidVnd} ₫.`);
     const returned = r.lines.map((rl) => {
       const line = lines.find((l) => l.id === rl.orderLineId)!;

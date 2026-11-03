@@ -201,7 +201,7 @@ describe('menu badges (FR-ADM-08)', () => {
     expect((await get('/api/v1/me/badges', manager)).body).toEqual({ einvoicesFailed: 0, ordersNeedingAction: 0, holdsOverdue: 0, contactTasksOverdue: 0 });
     await h.t.sql`update sales.einvoice_job set status = 'failed' where status = 'pending'`;
     expect((await get('/api/v1/me/badges', manager)).body).toMatchObject({ einvoicesFailed: 2 });
-    expect((await get('/api/v1/me/badges', cashier)).body).toEqual({});
+    expect((await get('/api/v1/me/badges', cashier)).body).toEqual({ holdsOverdue: 0 });
   });
 });
 

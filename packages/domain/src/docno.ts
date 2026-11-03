@@ -12,7 +12,6 @@ export const DOC_SERIES = {
   CST: 'KG',
   ORD: 'DH',
   PRE: 'DT',
-  SPO: 'DR',
 } as const;
 export type DocSeries = keyof typeof DOC_SERIES;
 

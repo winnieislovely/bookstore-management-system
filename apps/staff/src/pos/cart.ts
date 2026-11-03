@@ -27,6 +27,16 @@ export interface CartCustomer {
   pointsBalance: number;
 }
 
+/** A pre-order recalled into the cart (FR-POS-09): its line keeps the agreed price and quantity; the deposit counts as paid. */
+export interface CartPreorder {
+  id: string;
+  docNo: string;
+  variantId: string;
+  qty: number;
+  unitPriceVnd: number;
+  depositVnd: number;
+}
+
 /** Supervisor approvals for this cart: an online token or an offline approver id (FR-ADM-09). */
 export interface CartApproval {
   action: 'discount_over_limit' | 'price_override';
@@ -41,6 +51,7 @@ interface CartState {
   couponCode: string;
   redeemPoints: number;
   approvals: CartApproval[];
+  preorder: CartPreorder | null;
   /** Last added line, for the 600 ms highlight (Design §7.4). */
   flashLineId: string | null;
   add: (variantId: string, qty?: number) => void;
@@ -52,8 +63,12 @@ interface CartState {
   setRedeem: (points: number) => void;
   addApproval: (a: CartApproval) => void;
   load: (s: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints'>) => void;
+  /** Start a new cart from a pre-order (FR-POS-09). */
+  loadPreorder: (p: CartPreorder, customer: CartCustomer) => void;
   clear: () => void;
 }
+
+export const preorderLineId = (p: Pick<CartPreorder, 'id'>) => `pre-${p.id.slice(-6)}`;
 
 export const useCart = create<CartState>((set) => ({
   lines: [],
@@ -61,10 +76,12 @@ export const useCart = create<CartState>((set) => ({
   couponCode: '',
   redeemPoints: 0,
   approvals: [],
+  preorder: null,
   flashLineId: null,
   add: (variantId, qty = 1) =>
     set((s) => {
-      const existing = s.lines.find((l) => l.variantId === variantId && !l.priceOverrideVnd && !l.manualDiscount);
+      // A pre-order line keeps its quantity: more copies of the same item go on a line of their own.
+      const existing = s.lines.find((l) => l.variantId === variantId && !l.priceOverrideVnd && !l.manualDiscount && !(s.preorder && l.lineId === preorderLineId(s.preorder)));
       if (existing) return { lines: s.lines.map((l) => (l === existing ? { ...l, qty: l.qty + qty } : l)), flashLineId: existing.lineId };
       const lineId = crypto.randomUUID().slice(0, 8);
       return { lines: [...s.lines, { lineId, variantId, qty }], flashLineId: lineId };
@@ -76,8 +93,9 @@ export const useCart = create<CartState>((set) => ({
   setCoupon: (couponCode) => set({ couponCode }),
   setRedeem: (redeemPoints) => set({ redeemPoints }),
   addApproval: (a) => set((s) => ({ approvals: [...s.approvals.filter((x) => x.action !== a.action), a] })),
-  load: (c) => set({ ...c, approvals: [], flashLineId: null }),
-  clear: () => set({ lines: [], customer: null, couponCode: '', redeemPoints: 0, approvals: [], flashLineId: null }),
+  load: (c) => set({ ...c, approvals: [], preorder: null, flashLineId: null }),
+  loadPreorder: (p, customer) => set({ lines: [{ lineId: `pre-${p.id.slice(-6)}`, variantId: p.variantId, qty: p.qty }], customer, couponCode: '', redeemPoints: 0, approvals: [], preorder: p, flashLineId: null }),
+  clear: () => set({ lines: [], customer: null, couponCode: '', redeemPoints: 0, approvals: [], preorder: null, flashLineId: null }),
 }));
 
 // ---------------------------------------------------------------------------------------------
@@ -136,7 +154,7 @@ export interface PricedCart {
   items: Map<string, CachedItem>;
 }
 
-export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints'>, grants: { discountUnlimited: boolean; priceOverride: boolean }): Promise<PricedCart | null> {
+export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints' | 'preorder'>, grants: { discountUnlimited: boolean; priceOverride: boolean }): Promise<PricedCart | null> {
   const settings = await kvGet<PosSettings>('settings');
   if (!settings || !cart.lines.length) return null;
   const items = new Map((await db.items.bulkGet(cart.lines.map((l) => l.variantId))).filter((i): i is CachedItem => !!i).map((i) => [i.variantId, i]));
@@ -155,7 +173,8 @@ export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 
         publisherId: i.publisherId,
         brandId: i.brandId,
         qty: l.qty,
-        unitPriceVnd: vnd(i.priceVnd),
+        // The pre-order's agreed price, as the server prices it (FR-POS-09).
+        unitPriceVnd: vnd(cart.preorder?.variantId === l.variantId ? cart.preorder.unitPriceVnd : i.priceVnd),
         vatBp: i.vatBp,
         priceOverrideVnd: l.priceOverrideVnd == null ? null : vnd(l.priceOverrideVnd),
         manualDiscount: l.manualDiscount ?? null,

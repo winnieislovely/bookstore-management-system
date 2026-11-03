@@ -77,16 +77,19 @@ function newRef(): string {
 
 export function PaymentSheet({
   priced,
+  depositVnd = 0,
   online,
   onPay,
   onClose,
 }: {
   priced: PriceCartResult;
+  /** A collected pre-order's deposit, already paid (FR-POS-09). */
+  depositVnd?: number;
   online: boolean;
   onPay: (payments: Payment[]) => Promise<void>;
   onClose: () => void;
 }) {
-  const total = priced.totalVnd;
+  const total = priced.totalVnd - depositVnd;
   const [payments, setPayments] = useState<Payment[]>([]);
   const paid = payments.reduce((a, p) => a + p.amountVnd, 0);
   const remaining = total - paid;
@@ -150,6 +153,11 @@ export function PaymentSheet({
         <div className="text-center">
           <p className="text-[13px] text-ink-500">{payments.length ? 'Còn phải trả' : 'Số tiền phải trả'}</p>
           <p className="text-[28px] leading-9 font-bold whitespace-nowrap num">{formatVnd(remaining)}</p>
+          {depositVnd > 0 && (
+            <p className="text-sm text-ink-700 num">
+              Tổng {formatVnd(priced.totalVnd)} · Đã đặt cọc {formatVnd(depositVnd)}
+            </p>
+          )}
           {payments.length > 0 && (
             <ul className="mt-2 text-sm text-ink-700">
               {payments.map((p, i) => (

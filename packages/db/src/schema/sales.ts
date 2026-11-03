@@ -172,8 +172,11 @@ export const saleLine = sales.table(
   ],
 );
 
-/** Tenders: cash, bank transfer (printed QR + reference), card and store credit (FR-CRM-10). Points are not a tender. */
-export const PAYMENT_METHODS = ['cash', 'transfer', 'card', 'store_credit'] as const;
+/**
+ * Tenders: cash, bank transfer (printed QR + reference), card and store credit (FR-CRM-10, no longer
+ * written); `deposit` is a pre-order deposit counted as paid when it is collected (FR-POS-09). Points are not a tender.
+ */
+export const PAYMENT_METHODS = ['cash', 'transfer', 'card', 'store_credit', 'deposit'] as const;
 
 export const salePayment = sales.table(
   'sale_payment',

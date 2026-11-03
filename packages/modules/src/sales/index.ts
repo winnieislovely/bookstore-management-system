@@ -335,9 +335,14 @@ async function loadVariants(tx: Tx, ids: string[]): Promise<Map<string, VariantI
   );
 }
 
-async function priceForCart(tx: Tx, ctx: Ctx, cart: z.infer<typeof CartSchema>) {
+/** `agreed`: unit prices fixed earlier, a collected pre-order's agreed price (FR-POS-09). */
+async function priceForCart(tx: Tx, ctx: Ctx, cart: z.infer<typeof CartSchema>, agreed?: ReadonlyMap<string, number>) {
   const actor = requirePermission(ctx, 'sale.create');
   const variants = await loadVariants(tx, [...new Set(cart.lines.map((l) => l.variantId))]);
+  for (const [variantId, priceVnd] of agreed ?? []) {
+    const v = variants.get(variantId);
+    if (v) v.priceVnd = priceVnd;
+  }
   const lines: CartLineInput[] = cart.lines.map((l) => {
     const v = variants.get(l.variantId);
     if (!v) throw errors.notFound('Sản phẩm');
@@ -429,6 +434,8 @@ export const CompleteSaleSchema = CartSchema.extend({
     .default({}),
   /** The customer asks for the e-invoice now (FR-POS-16). */
   einvoiceRequest: BuyerSchema.optional(),
+  /** Collecting a pre-order: its line at the agreed price, the deposit counted as paid (FR-POS-09). */
+  preorderId: z.uuid().optional(),
 });
 export type CompleteSaleInput = z.input<typeof CompleteSaleSchema>;
 
@@ -520,20 +527,37 @@ export async function allocateConsignment(tx: Tx, saleLineId: string, variantId:
   }
 }
 
+/**
+ * A pre-order recalled into the cart (FR-POS-09): Arrived or Contacted, its customer on the sale and
+ * exactly its variant and quantity on one line.
+ */
+async function preorderToCollect(tx: Tx, data: z.infer<typeof CompleteSaleSchema>) {
+  const [p] = await tx.select().from(schema.preorder).where(eq(schema.preorder.id, data.preorderId!)).for('update');
+  if (!p) throw errors.notFound('Phiếu đặt trước');
+  if (p.status !== 'arrived' && p.status !== 'contacted') throw errors.conflict('preorder_not_ready', `Phiếu đặt trước ${p.docNo} chưa có hàng hoặc đã xử lý xong.`);
+  if (data.customerId !== p.customerId) throw new AppError(422, 'preorder_customer', `Phiếu ${p.docNo} là của khách khác.`);
+  const lines = data.lines.filter((l) => l.variantId === p.variantId);
+  if (lines.length !== 1 || lines[0]!.qty !== p.qty || lines[0]!.priceOverrideVnd != null) {
+    throw new AppError(422, 'preorder_line', `Giỏ hàng cần đúng ${p.qty} sản phẩm của phiếu ${p.docNo}, theo giá đã thỏa thuận.`);
+  }
+  return p;
+}
+
 export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempotencyKey?: string) {
   const actor = requirePermission(ctx, 'sale.create');
   const data = CompleteSaleSchema.parse(input);
   return idempotent(ctx, idempotencyKey, data, async (tx) => {
     const shift = await openShiftRow(tx, data.shiftId);
     const cfg = await settings.snapshot(ctx, tx);
-    const { result: priced, variants } = await priceForCart(tx, ctx, data);
+    const pre = data.preorderId ? await preorderToCollect(tx, data) : null;
+    const { result: priced, variants } = await priceForCart(tx, ctx, data, pre ? new Map([[pre.variantId, pre.unitPriceVnd]]) : undefined);
     if (priced.issues.length) {
       throw new AppError(422, 'pricing_issue', 'Không áp dụng được mã giảm giá hoặc điểm. Hãy kiểm tra lại rồi thử lại.', priced.issues);
     }
     const approvedBy = await useApprovals(tx, ctx, priced, data.approvals);
 
-    // Payments: sum equals the total, unless this is a deposit sale (TDD §4.4).
-    const paid = data.payments.reduce((a, p) => a + p.amountVnd, 0);
+    // Payments: sum equals the total, unless this is a deposit sale (TDD §4.4). A pre-order deposit counts as paid.
+    const paid = data.payments.reduce((a, p) => a + p.amountVnd, 0) + (pre?.depositVnd ?? 0);
     if (data.isDeposit ? paid <= 0 || paid > priced.totalVnd : paid !== priced.totalVnd) {
       throw new AppError(422, 'payment_mismatch', `Tổng thanh toán ${paid} ₫ chưa khớp với số phải trả ${priced.totalVnd} ₫.`, { paidVnd: paid, totalVnd: priced.totalVnd });
     }
@@ -570,6 +594,8 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
       .returning({ id: schema.sale.id });
     const saleId = sale!.id;
 
+    // The pre-order's held copies become this sale's (TDD §4.5).
+    if (pre) await inventory.endReservations(tx, ctx, 'preorder', pre.id, 'converted');
     const lineNotes = new Map(data.lines.map((l) => [l.lineId, l]));
     for (const [i, l] of priced.lines.entries()) {
       const v = variants.get(l.variantId)!;
@@ -609,6 +635,15 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
         confirmedBy: p.method === 'transfer' ? actor.userId : null,
         confirmedAt: p.method === 'transfer' ? now : null,
       });
+    }
+
+    if (pre) {
+      if (pre.depositVnd > 0) await tx.insert(schema.salePayment).values({ saleId, method: 'deposit', amountVnd: pre.depositVnd, ref: pre.docNo });
+      await tx.update(schema.preorder).set({ status: 'collected', saleId }).where(eq(schema.preorder.id, pre.id));
+      await tx
+        .update(schema.contactTask)
+        .set({ status: 'contacted', contactedAt: now, contactedBy: actor.userId })
+        .where(and(eq(schema.contactTask.refType, 'preorder'), eq(schema.contactTask.refId, pre.id), eq(schema.contactTask.status, 'open')));
     }
 
     // Loyalty: redeemed points are a discount; points are credited on payment completion (BR-19).

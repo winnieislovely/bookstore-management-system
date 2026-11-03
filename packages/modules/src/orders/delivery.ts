@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { CarrierAdapter, ShipmentStatusResult } from '../integrations/ghn.js';
 import { CarrierError } from '../integrations/ghn.js';
 import { AppError, errors, requirePermission, type Ctx, type Tx } from '../platform/index.js';
-import { amountDue, deliveredTx, handToCarrierTx } from './index.js';
+import { deliveredTx, handToCarrierTx } from './index.js';
 import { carrierReturnTx } from './returns.js';
 
 /**
@@ -105,7 +105,7 @@ export async function createGhnShipment(ctx: Ctx, carrier: CarrierAdapter, id: s
     created = await carrier.createShipment({
       clientOrderCode: o.docNo,
       to: { name: o.recipient.name, phone: o.recipient.phone.replace(/^\+84/, '0'), address: [o.address.line, o.address.wardName, o.address.provinceName].filter(Boolean).join(', '), wardCode: o.address.wardCode, districtId },
-      codVnd: o.paymentMethod === 'cod' ? amountDue(o) : 0,
+      codVnd: o.paymentMethod === 'cod' ? o.totalVnd : 0,
       insuranceVnd: 0,
       weightG: lines.reduce((a, r) => a + r.weightG * r.l.qty, 0),
       items: lines.map((r) => ({ name: r.l.description, code: r.sku, qty: r.l.qty, priceVnd: r.l.unitPriceVnd, weightG: r.weightG })),

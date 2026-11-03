@@ -90,16 +90,6 @@ export const PREORDER: Transitions<'reserved' | 'ordered' | 'arrived' | 'contact
   cancelled: [],
 };
 
-/** SRS B.5 / FR-ORD-15 – special order; Ordered and Arrived are set by hand. */
-export const SPECIAL_ORDER: Transitions<'requested' | 'ordered' | 'arrived' | 'contacted' | 'collected' | 'cancelled'> = {
-  requested: ['ordered', 'arrived', 'cancelled'],
-  ordered: ['arrived', 'cancelled'],
-  arrived: ['contacted', 'collected', 'cancelled'],
-  contacted: ['collected', 'cancelled'],
-  collected: [],
-  cancelled: [],
-};
-
 /** How a deposit is taken at the counter (FR-ORD-14). */
 export const DEPOSIT_METHODS = ['cash', 'transfer', 'card'] as const;
 export type DepositMethod = (typeof DEPOSIT_METHODS)[number];

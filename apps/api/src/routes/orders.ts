@@ -85,28 +85,15 @@ export function orderRoutes(app: OpenAPIHono<AppEnv>, carrier: CarrierAdapter, w
     },
   );
 
-  // --- Pre-orders and special orders (FR-ORD-14..16) and the to-notify worklist (FR-ORD-18) ---
-  for (const [kind, base] of [
-    ['preorder', '/api/v1/preorders'],
-    ['special_order', '/api/v1/special-orders'],
-  ] as const) {
-    defineRoute(app, { method: 'post', path: `${base}/:id/ordered`, access: 'online.manage', summary: 'Mark ordered from the supplier', params: IdParams }, async ({ ctx, params }) => orders.markOrdered(ctx, kind, params.id));
-    defineRoute(app, { method: 'post', path: `${base}/:id/cancel`, access: 'online.manage', summary: 'Cancel; refund or keep the deposit', params: IdParams, body: orders.CancelHoldSchema }, async ({ ctx, params, body }) =>
-      orders.cancelHold(ctx, kind, params.id, body),
-    );
-    defineRoute(app, { method: 'post', path: `${base}/:id/collect`, access: 'online.manage', summary: 'Collect: create the online order less the deposit', status: 201, params: IdParams, body: orders.CollectSchema }, async ({ ctx, params, body }) =>
-      orders.collect(ctx, kind, params.id, body),
-    );
-  }
-  defineRoute(app, { method: 'get', path: '/api/v1/preorders', access: 'online.manage', summary: 'Pre-orders', query: orders.HoldsQuery }, async ({ ctx, query }) => ({ items: await orders.listPreorders(ctx, query) }));
-  defineRoute(app, { method: 'post', path: '/api/v1/preorders', access: 'online.manage', summary: 'Take a pre-order with a deposit', status: 201, body: orders.CreatePreorderSchema }, async ({ ctx, body }) => orders.createPreorder(ctx, body));
-  defineRoute(app, { method: 'get', path: '/api/v1/special-orders', access: 'online.manage', summary: 'Special orders', query: orders.HoldsQuery }, async ({ ctx, query }) => ({ items: await orders.listSpecialOrders(ctx, query) }));
-  defineRoute(app, { method: 'post', path: '/api/v1/special-orders', access: 'online.manage', summary: 'Record a special order with a deposit', status: 201, body: orders.CreateSpecialOrderSchema }, async ({ ctx, body }) =>
-    orders.createSpecialOrder(ctx, body),
+  // --- Pre-orders at the POS (FR-POS-09, FR-ORD-14..16); collecting is POST /api/v1/pos/sales with preorderId ---
+  defineRoute(app, { method: 'get', path: '/api/v1/preorders', access: 'sale.create', summary: 'Pre-orders', query: orders.HoldsQuery }, async ({ ctx, query }) => ({ items: await orders.listPreorders(ctx, query) }));
+  defineRoute(app, { method: 'post', path: '/api/v1/preorders', access: 'sale.create', summary: 'Take a pre-order with a deposit', status: 201, body: orders.CreatePreorderSchema }, async ({ ctx, body }) => orders.createPreorder(ctx, body));
+  defineRoute(app, { method: 'post', path: '/api/v1/preorders/:id/ordered', access: 'sale.create', summary: 'Mark ordered from the supplier', params: IdParams }, async ({ ctx, params }) => orders.markOrdered(ctx, params.id));
+  defineRoute(app, { method: 'post', path: '/api/v1/preorders/:id/cancel', access: 'sale.create', summary: 'Cancel; refund or keep the deposit', params: IdParams, body: orders.CancelHoldSchema }, async ({ ctx, params, body }) =>
+    orders.cancelPreorder(ctx, params.id, body),
   );
-  defineRoute(app, { method: 'post', path: '/api/v1/special-orders/:id/arrived', access: 'online.manage', summary: 'Arrived: link the product and hold the copies', params: IdParams, body: orders.ArrivedSchema }, async ({ ctx, params, body }) =>
-    orders.specialOrderArrived(ctx, params.id, body),
-  );
+
+  // --- To-notify worklist (FR-ORD-18) ---------------------------------------------------------
   defineRoute(app, { method: 'get', path: '/api/v1/contact-tasks', access: 'contact_task.manage', summary: 'To-notify worklist', query: orders.TasksQuery }, async ({ ctx, query }) => ({ items: await orders.listTasks(ctx, query) }));
   defineRoute(app, { method: 'post', path: '/api/v1/contact-tasks/:id/contacted', access: 'contact_task.manage', summary: 'Mark contacted', params: IdParams, body: orders.ContactNoteSchema }, async ({ ctx, params, body }) =>
     orders.markContacted(ctx, params.id, body),

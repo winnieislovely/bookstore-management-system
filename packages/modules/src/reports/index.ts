@@ -523,10 +523,10 @@ export async function badges(ctx: Ctx) {
   if (can(ctx.actor, 'online.manage')) {
     const [r] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.web_order where status in ('new', 'pending_review', 'return_requested')`);
     out.ordersNeedingAction = r!.n;
-    // Pre-orders and special orders past the holding period (FR-ORD-16).
-    const [h] = await ctx.db.execute<{ n: number }>(sql`
-      select ((select count(*) from orders.preorder where status = 'contacted' and expires_at < ${tsParam(ctx.clock.now())})
-            + (select count(*) from orders.special_order where status = 'contacted' and expires_at < ${tsParam(ctx.clock.now())}))::int as n`);
+  }
+  // Pre-orders past the holding period, on the POS “Đặt trước” button (FR-ORD-16).
+  if (can(ctx.actor, 'sale.create')) {
+    const [h] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.preorder where status = 'contacted' and expires_at < ${tsParam(ctx.clock.now())}`);
     out.holdsOverdue = h!.n;
   }
   // Overdue to-notify tasks on “Cần liên hệ” (UC-19), not a dashboard tile (FR-RPT-01).

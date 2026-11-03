@@ -2,7 +2,6 @@ import {
   CHANNEL_KINDS,
   DEPOSIT_METHODS,
   PREORDER,
-  SPECIAL_ORDER,
   DELIVERY_MODES,
   ORDER_PAYMENT_METHODS,
   ORDER_SOURCES,
@@ -17,7 +16,7 @@ import { boolean, check, index, integer, jsonb, pgSchema, text, uniqueIndex, uui
 import { itemVariant } from './catalog.js';
 import { customer } from './crm.js';
 import { appUser } from './platform.js';
-import { shift } from './sales.js';
+import { sale, shift } from './sales.js';
 import { allInList, createdAt, id, inList, ts, updatedAt, version, vndCol } from './_common.js';
 
 /** Online and social orders, delivery (TDD §4.5, §5.3 “Orders and delivery”). */
@@ -96,8 +95,6 @@ export const webOrder = orders.table(
     shippingVnd: vndCol().notNull().default(0),
     totalVnd: vndCol().notNull(),
     vatVnd: vndCol().notNull(),
-    /** Paid ahead on a pre-order or special order (FR-ORD-14): COD and transfer collect the rest. */
-    depositVnd: vndCol().notNull().default(0),
     pointsRedeemed: integer().notNull().default(0),
     pointsDiscountVnd: vndCol().notNull().default(0),
     pointsEarned: integer().notNull().default(0),
@@ -132,7 +129,6 @@ export const webOrder = orders.table(
     check('web_order_reasons_ck', allInList(t.reviewReasons, REVIEW_REASONS)),
     check('web_order_amounts_ck', sql`${t.totalVnd} >= 0 and ${t.discountVnd} >= 0 and ${t.subtotalVnd} >= 0 and ${t.shippingVnd} >= 0`),
     check('web_order_ship_address_ck', sql`${t.delivery} = 'pickup' or ${t.address} is not null`),
-    check('web_order_deposit_ck', sql`${t.depositVnd} >= 0 and ${t.depositVnd} <= ${t.totalVnd}`),
   ],
 );
 
@@ -262,7 +258,7 @@ export const returnRequest = orders.table(
   ],
 );
 
-export const CONTACT_REASONS = ['preorder_arrived', 'special_order_arrived', 'pickup_ready', 'library_hold', 'waitlist_offer', 'event_cancelled'] as const;
+export const CONTACT_REASONS = ['preorder_arrived', 'pickup_ready', 'library_hold', 'waitlist_offer', 'event_cancelled'] as const;
 
 /** To-notify worklist (FR-ORD-18): created by other modules, closed by staff. */
 export const contactTask = orders.table(
@@ -322,7 +318,8 @@ export const preorder = orders.table(
     allocatedAt: ts(),
     contactedAt: ts(),
     expiresAt: ts(),
-    orderId: uuid().references(() => webOrder.id),
+    /** The counter sale that collected it (FR-POS-09). */
+    saleId: uuid().references(() => sale.id),
     note: text(),
     cancelReason: text(),
     overdueNotifiedAt: ts(),
@@ -337,43 +334,5 @@ export const preorder = orders.table(
     check('preorder_source_ck', inList(t.source, ORDER_SOURCES)),
     check('preorder_deposit_method_ck', sql`${t.depositMethod} is null or ${inList(t.depositMethod, DEPOSIT_METHODS)}`),
     check('preorder_outcome_ck', sql`${t.depositOutcome} is null or ${inList(t.depositOutcome, ['refunded', 'forfeited'])}`),
-  ],
-);
-
-export const specialOrder = orders.table(
-  'special_order',
-  {
-    id: id(),
-    docNo: text().notNull().unique(),
-    source: text().notNull(),
-    customerId: uuid()
-      .notNull()
-      .references(() => customer.id),
-    requestedTitle: text().notNull(),
-    isbn: text(),
-    qty: integer().notNull().default(1),
-    quoteVnd: vndCol().notNull(),
-    ...depositColumns(),
-    status: text().notNull().default('requested'),
-    /** The catalogue product the title was stocked in as, set at Arrived. */
-    variantId: uuid().references(() => itemVariant.id),
-    orderedAt: ts(),
-    arrivedAt: ts(),
-    contactedAt: ts(),
-    expiresAt: ts(),
-    orderId: uuid().references(() => webOrder.id),
-    note: text(),
-    cancelReason: text(),
-    overdueNotifiedAt: ts(),
-    createdBy: uuid().references(() => appUser.id),
-    createdAt: createdAt(),
-  },
-  (t) => [
-    index('special_order_status_idx').on(t.status),
-    check('special_order_status_ck', inList(t.status, statesOf(SPECIAL_ORDER))),
-    check('special_order_qty_ck', sql`${t.qty} > 0`),
-    check('special_order_source_ck', inList(t.source, ORDER_SOURCES)),
-    check('special_order_deposit_method_ck', sql`${t.depositMethod} is null or ${inList(t.depositMethod, DEPOSIT_METHODS)}`),
-    check('special_order_outcome_ck', sql`${t.depositOutcome} is null or ${inList(t.depositOutcome, ['refunded', 'forfeited'])}`),
   ],
 );

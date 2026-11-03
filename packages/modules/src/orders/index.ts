@@ -216,7 +216,7 @@ async function loadVariants(tx: Tx, ids: string[]): Promise<Map<string, VariantI
  * Price an order like a counter sale, with the channel of its source (TDD §4.5): promotions for
  * that channel, tier discount, coupon, points, line discounts within the role limit, shipping.
  */
-async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSchema>, agreedPrices?: ReadonlyMap<string, number>) {
+async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSchema>) {
   const variants = await loadVariants(tx, [...new Set(data.lines.map((l) => l.variantId))]);
   const lines: CartLineInput[] = data.lines.map((l, i) => {
     const v = variants.get(l.variantId);
@@ -232,8 +232,7 @@ async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSch
       qty: l.qty,
       unitPriceVnd: vnd(v.priceVnd),
       vatBp: v.vatBp,
-      // A pre-order or special order keeps the price agreed when it was taken (FR-ORD-14/15).
-      priceOverrideVnd: agreedPrices?.has(v.id) ? vnd(agreedPrices.get(v.id)!) : null,
+      priceOverrideVnd: null,
       manualDiscount: l.manualDiscount ? (l.manualDiscount.kind === 'percent' ? l.manualDiscount : { kind: 'amount', vnd: vnd(l.manualDiscount.vnd) }) : null,
     };
   });
@@ -255,7 +254,7 @@ async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSch
       minRedeemPoints: cfg['loyalty.min_redeem_points'],
       categoryMaxDiscountBp: {},
     },
-    grants: { discountUnlimited: can(ctx.actor, 'sale.discount_unlimited'), priceOverride: agreedPrices !== undefined },
+    grants: { discountUnlimited: can(ctx.actor, 'sale.discount_unlimited'), priceOverride: false },
   });
   return { result, variants, cfg };
 }
@@ -335,19 +334,6 @@ async function reserveMissing(tx: Tx, ctx: Ctx, orderId: string): Promise<boolea
 export interface CreateOrderOptions {
   /** Staff member keying the order; null for website checkout (R2b). */
   createdBy: string | null;
-  /** Collecting a pre-order or special order: agreed unit price per variant and the deposit already paid. */
-  agreedPrices?: ReadonlyMap<string, number>;
-  depositVnd?: number;
-}
-
-/** What the customer still owes: the total less a pre-order deposit. */
-export function amountDue(o: { totalVnd: number; depositVnd: number }): number {
-  return Math.max(0, o.totalVnd - o.depositVnd);
-}
-
-/** What the customer has paid so far, for refunds. */
-export function amountPaid(o: { totalVnd: number; depositVnd: number; paidAt: Date | null }): number {
-  return o.paidAt ? o.totalVnd : o.depositVnd;
 }
 
 /** The order service shared by staff entry and the website checkout (release R2b). */
@@ -363,9 +349,7 @@ export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof Creat
     if (!ch) throw errors.notFound('Kênh bán');
   }
   const customerId = await resolveCustomer(tx, ctx, data, phoneE164);
-  const { result: priced, variants, cfg } = await priceOrder(tx, ctx, { ...data, customerId }, opts.agreedPrices);
-  const depositVnd = Math.min(opts.depositVnd ?? 0, priced.totalVnd);
-  const prepaid = depositVnd >= priced.totalVnd;
+  const { result: priced, variants, cfg } = await priceOrder(tx, ctx, { ...data, customerId });
   if (priced.issues.length) throw new AppError(422, 'pricing_issue', 'Không áp dụng được mã giảm giá hoặc điểm. Hãy kiểm tra lại rồi thử lại.', priced.issues);
   if (priced.approvalsRequired.length) {
     const token = data.approvals.discount_over_limit;
@@ -390,14 +374,12 @@ export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof Creat
       address: data.delivery === 'ship' ? (address ?? { provinceId: data.address?.provinceId ?? 0, provinceName: '', wardCode: data.address?.wardCode ?? '', wardName: '', line: data.address?.line ?? '' }) : null,
       status: 'new',
       paymentMethod: data.paymentMethod,
-      paymentRef: data.paymentMethod === 'transfer' && !prepaid ? await newPaymentRef(tx) : null,
+      paymentRef: data.paymentMethod === 'transfer' ? await newPaymentRef(tx) : null,
       subtotalVnd: priced.subtotalVnd,
       discountVnd: priced.discountVnd,
       shippingVnd: priced.shippingVnd - priced.shippingDiscountVnd,
       totalVnd: priced.totalVnd,
       vatVnd: priced.vatVnd,
-      depositVnd,
-      paidAt: prepaid ? now : null,
       pointsRedeemed: priced.redeemPoints,
       pointsDiscountVnd: priced.redeemValueVnd,
       // Points to credit when the order is Done (BR-19, BR-29).
@@ -432,7 +414,7 @@ export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof Creat
     delivery: data.delivery,
     addressResolvable: address !== null && address.line.trim() !== '',
     paymentMethod: data.paymentMethod,
-    paid: prepaid,
+    paid: false,
     totalVnd: priced.totalVnd,
     failedDeliveries: await failedDeliveries(tx, phoneE164),
     settings: { highValueVnd: cfg['order.review_high_value_vnd'], failedDeliveries: cfg['order.review_failed_deliveries'] },
@@ -673,7 +655,7 @@ async function cancelTx(tx: Tx, ctx: Ctx, o: OrderRow, reason: string) {
   await transition(tx, ctx, o, 'cancelled', reason, { cancelledAt: ctx.clock.now(), cancelReason: reason, reviewReasons: [] });
   await audit.record(tx, ctx, { action: 'order.cancel', entity: REF, entityId: o.id, after: { reason } });
   // A paid transfer is refunded outside the system (no payment gateway, SRS §2.6).
-  return { id: o.id, status: o.status, refundDueVnd: amountPaid(o) };
+  return { id: o.id, status: o.status, refundDueVnd: o.paidAt ? o.totalVnd : 0 };
 }
 
 export async function cancel(ctx: Ctx, id: string, input: z.input<typeof CancelSchema>) {
@@ -696,8 +678,8 @@ export async function confirmPayment(ctx: Ctx, id: string, input: z.input<typeof
     if (o.paymentMethod !== 'transfer') throw errors.conflict('not_transfer', `Đơn ${o.docNo} thanh toán khi nhận hàng (COD), không cần xác nhận chuyển khoản.`);
     if (o.paidAt) throw errors.conflict('already_paid', `Đơn ${o.docNo} đã được xác nhận chuyển khoản.`);
     if (o.status === 'cancelled') throw errors.conflict('order_cancelled', `Đơn ${o.docNo} đã hủy. Hãy hoàn tiền cho khách ngoài hệ thống.`);
-    if (data.amountVnd !== amountDue(o)) {
-      throw new AppError(422, 'amount_mismatch', `Số tiền nhận ${data.amountVnd} ₫ chưa khớp với số khách cần trả ${amountDue(o)} ₫.`, { amountVnd: data.amountVnd, dueVnd: amountDue(o) });
+    if (data.amountVnd !== o.totalVnd) {
+      throw new AppError(422, 'amount_mismatch', `Số tiền nhận ${data.amountVnd} ₫ chưa khớp với tổng đơn ${o.totalVnd} ₫.`, { amountVnd: data.amountVnd, totalVnd: o.totalVnd });
     }
     const now = ctx.clock.now();
     const reasons = (o.reviewReasons as ReviewReason[]).filter((r) => r !== 'unpaid_transfer');
@@ -791,7 +773,7 @@ export async function handToCarrierTx(tx: Tx, ctx: Ctx, o: OrderRow, s: { carrie
       carrier: s.carrier,
       trackingNo: s.trackingNo,
       feeVnd: s.feeVnd,
-      codVnd: o.paymentMethod === 'cod' ? amountDue(o) : 0,
+      codVnd: o.paymentMethod === 'cod' ? o.totalVnd : 0,
       status: 'created',
       carrierStatus: s.carrierStatus ?? null,
       statusAt: now,
