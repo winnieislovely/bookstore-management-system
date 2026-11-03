@@ -176,6 +176,7 @@ export function OrdersPage() {
 interface Line {
   hit: ProductHit;
   qty: number;
+  discountOn: boolean;
   discountVnd: number | null;
 }
 interface Quote {
@@ -220,8 +221,6 @@ export function OrderNewPage() {
   const [f, setF] = useState({
     source: 'facebook',
     channelId: '',
-    contactHandle: '',
-    sourceRef: '',
     phone: '',
     name: '',
     delivery: 'ship' as 'ship' | 'pickup',
@@ -262,6 +261,18 @@ export function OrderNewPage() {
     }),
     [f.source, f.delivery, f.shippingVnd, f.couponCode, lines, match.data],
   );
+  // GHN fee recalculated whenever the ward or the items change, unless staff typed a fee (FR-ORD-10).
+  const [feeManual, setFeeManual] = useState(false);
+  const feeKey = useDebounced(f.delivery === 'ship' && f.wardCode && lines.length ? JSON.stringify({ wardCode: f.wardCode, lines: lines.map((l) => ({ variantId: l.hit.variantId, qty: l.qty })) }) : '', 400);
+  const fee = useQuery({
+    queryKey: ['shipping-quote', feeKey],
+    enabled: !!feeKey && !feeManual,
+    queryFn: () => post<{ feeVnd: number }>('/api/v1/orders/shipping-quote', JSON.parse(feeKey)),
+    retry: false,
+  });
+  useEffect(() => {
+    if (fee.data && !feeManual) setF((x) => ({ ...x, shippingVnd: fee.data.feeVnd }));
+  }, [fee.data, feeManual]);
   const quoteKey = useDebounced(JSON.stringify(body), 300);
   const quote = useQuery({
     queryKey: ['order-quote', quoteKey],
@@ -273,7 +284,7 @@ export function OrderNewPage() {
   const add = (h: ProductHit) =>
     setLines((ls) => {
       const i = ls.findIndex((l) => l.hit.variantId === h.variantId);
-      if (i < 0) return [...ls, { hit: h, qty: 1, discountVnd: null }];
+      if (i < 0) return [...ls, { hit: h, qty: 1, discountOn: false, discountVnd: null }];
       return ls.map((l, j) => (j === i ? { ...l, qty: l.qty + 1 } : l));
     });
 
@@ -288,8 +299,6 @@ export function OrderNewPage() {
         body: {
           ...body,
           channelId: f.channelId || null,
-          contactHandle: f.contactHandle.trim() || null,
-          sourceRef: f.sourceRef.trim() || null,
           recipient: { name: f.name.trim(), phone: f.phone.trim() },
           delivery: f.delivery,
           address: f.delivery === 'ship' ? { ...(f.provinceId !== null && { provinceId: f.provinceId }), ...(f.wardCode && { wardCode: f.wardCode }), line: f.line.trim() } : null,
@@ -321,6 +330,54 @@ export function OrderNewPage() {
       />
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex min-w-0 flex-col gap-6">
+          {/* Products first (Design §12.4); each line: name, price, stock on their own lines, discount behind a toggle. */}
+          <Card title="Sản phẩm">
+            <ProductSearch onPick={add} placeholder="Nhập SKU / tên sản phẩm" scanIcon={false} />
+            {lines.length > 0 && (
+              <ul className="mt-4 divide-y divide-paper-300">
+                {lines.map((l, i) => {
+                  const update = (patch: Partial<Line>) => setLines(lines.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+                  return (
+                    <li key={l.hit.variantId} className="flex flex-col gap-3 py-3 text-sm">
+                      <div className="flex items-start gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium">{hitTitle(l.hit)}</p>
+                          <p className="text-ink-700 num">{formatVnd(l.hit.priceVnd)}</p>
+                          <p className="text-[13px] text-ink-500">Tồn: {formatNumber(l.hit.available)}</p>
+                        </div>
+                        <input
+                          aria-label={`Số lượng ${hitTitle(l.hit)}`}
+                          inputMode="numeric"
+                          className="h-10 w-16 rounded-md border border-paper-500 text-center num"
+                          value={l.qty}
+                          onChange={(e) => update({ qty: Math.max(1, Number(e.target.value.replace(/D/g, '')) || 1) })}
+                        />
+                        <Button variant="ghost" icon={Trash2} aria-label={`Xóa ${hitTitle(l.hit)}`} onClick={() => setLines(lines.filter((_, j) => j !== i))} />
+                      </div>
+                      <label className="inline-flex w-fit cursor-pointer items-center gap-2">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={l.discountOn}
+                          onClick={() => update({ discountOn: !l.discountOn, discountVnd: l.discountOn ? null : l.discountVnd })}
+                          className={clsx('relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors', l.discountOn ? 'bg-navy-700' : 'bg-ink-300')}
+                        >
+                          <span className={clsx('inline-block size-4 rounded-full bg-white shadow-sm transition-transform', l.discountOn ? 'translate-x-[18px]' : 'translate-x-0.5')} />
+                        </button>
+                        Giảm giá
+                      </label>
+                      {l.discountOn && (
+                        <div className="max-w-60">
+                          <MoneyInput label="Giảm mỗi sản phẩm" value={l.discountVnd} onChange={(v) => update({ discountVnd: v })} />
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Card>
+
           <Card title="Nguồn đơn">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <SelectField label="Kênh" required value={f.source} onChange={(e) => setF({ ...f, source: e.target.value, channelId: '' })}>
@@ -342,8 +399,6 @@ export function OrderNewPage() {
               ) : (
                 <div className="max-sm:hidden" />
               )}
-              <Field label="Tài khoản chat của khách" value={f.contactHandle} onChange={set('contactHandle')} helper="Lưu vào hồ sơ khách hàng." />
-              <Field label="Liên kết hội thoại" value={f.sourceRef} onChange={set('sourceRef')} />
             </div>
           </Card>
 
@@ -408,38 +463,6 @@ export function OrderNewPage() {
             {f.delivery === 'pickup' && <p className="text-sm text-ink-700">Khách nhận tại cửa hàng bằng mã nhận hàng khi đơn đã sẵn sàng.</p>}
           </Card>
 
-          <Card title="Sản phẩm">
-            <ProductSearch onPick={add} placeholder="Nhập SKU / tên sản phẩm" />
-            {lines.length > 0 && (
-              <ul className="mt-4 divide-y divide-paper-300">
-                {lines.map((l, i) => (
-                  <li key={l.hit.variantId} className="flex flex-wrap items-center gap-3 py-3 text-sm">
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-medium">{hitTitle(l.hit)}</span>
-                      <span className="code text-[13px] text-ink-500">{l.hit.sku}</span>
-                      <span className="ml-2 text-[13px] text-ink-500">
-                        {formatVnd(l.hit.priceVnd)} · Có thể bán {formatNumber(l.hit.available)}
-                      </span>
-                    </span>
-                    <input
-                      aria-label="Số lượng"
-                      inputMode="numeric"
-                      className="h-10 w-16 rounded-md border border-paper-500 text-center num"
-                      value={l.qty}
-                      onChange={(e) => {
-                        const n = Math.max(1, Number(e.target.value.replace(/\D/g, '')) || 1);
-                        setLines(lines.map((x, j) => (j === i ? { ...x, qty: n } : x)));
-                      }}
-                    />
-                    <span className="w-36">
-                      <MoneyInput label="Giảm mỗi SP" value={l.discountVnd} onChange={(v) => setLines(lines.map((x, j) => (j === i ? { ...x, discountVnd: v } : x)))} />
-                    </span>
-                    <Button variant="ghost" icon={Trash2} aria-label={`Xóa ${hitTitle(l.hit)}`} onClick={() => setLines(lines.filter((_, j) => j !== i))} />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
         </div>
 
         <div className="flex flex-col gap-6">
@@ -466,23 +489,30 @@ export function OrderNewPage() {
             <div className="flex flex-col gap-4">
               {f.delivery === 'ship' && (
                 <div className="flex flex-col gap-2">
-                  <MoneyInput label="Phí giao hàng" value={f.shippingVnd} onChange={(v) => setF({ ...f, shippingVnd: v })} />
-                  <Button
-                    variant="tonal"
-                    size="sm"
-                    icon={Calculator}
-                    disabled={!f.wardCode || !lines.length}
-                    onClick={async () => {
-                      try {
-                        const r = await post<{ feeVnd: number }>('/api/v1/orders/shipping-quote', { wardCode: f.wardCode, lines: lines.map((l) => ({ variantId: l.hit.variantId, qty: l.qty })) });
-                        setF((x) => ({ ...x, shippingVnd: r.feeVnd }));
-                      } catch (e) {
-                        toast.error((e as Error).message);
-                      }
+                  <MoneyInput
+                    label="Phí giao hàng"
+                    value={f.shippingVnd}
+                    onChange={(v) => {
+                      setFeeManual(true);
+                      setF({ ...f, shippingVnd: v });
                     }}
-                  >
-                    Tính phí GHN
-                  </Button>
+                  />
+                  <p className="text-[13px] text-ink-500" aria-live="polite">
+                    {feeManual
+                      ? 'Phí nhập tay.'
+                      : !feeKey
+                        ? 'Tự tính theo GHN khi đã chọn phường/xã và sản phẩm.'
+                        : fee.isFetching
+                          ? 'Đang tính phí GHN…'
+                          : fee.isError
+                            ? (fee.error as Error).message
+                            : 'Phí GHN, tự cập nhật khi đổi địa chỉ hoặc sản phẩm.'}
+                  </p>
+                  {feeManual && feeKey && (
+                    <Button variant="tonal" size="sm" icon={Calculator} onClick={() => setFeeManual(false)}>
+                      Tính lại theo GHN
+                    </Button>
+                  )}
                 </div>
               )}
               <Field label="Mã giảm giá" value={f.couponCode} onChange={set('couponCode')} className="code" />
