@@ -1,3 +1,4 @@
+import { ORDER_SOURCE } from '../components/order-ui';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { Check, ListFilter } from 'lucide-react';
@@ -29,7 +30,7 @@ interface SalesRow {
   grossVnd: number;
 }
 
-const CHANNEL_LABEL: Record<string, string> = { counter: 'Tại quầy', website: 'Website', facebook: 'Facebook', zalo: 'Zalo', instagram: 'Instagram', tiktok: 'TikTok' };
+const CHANNEL_LABEL: Record<string, string> = { counter: 'Tại quầy', ...ORDER_SOURCE };
 /** Fixed channel colours for charts only (Design §4.7). */
 const CHANNEL_COLOR: Record<string, string> = {
   counter: 'var(--color-navy-700)',

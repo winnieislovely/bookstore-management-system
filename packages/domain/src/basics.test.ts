@@ -95,7 +95,10 @@ describe('payment reference (TDD §8.4, printed QR)', () => {
 describe('state machines', () => {
   it('follows SRS B.1', () => {
     expect(canTransition(WEB_ORDER, 'new', 'confirmed')).toBe(true);
-    expect(canTransition(WEB_ORDER, 'packing', 'cancelled')).toBe(false);
+    // A store-pickup order is handed over from packing, or cancelled when never collected (SRS B.1, 3 Nov 2026).
+    expect(canTransition(WEB_ORDER, 'packing', 'done')).toBe(true);
+    expect(canTransition(WEB_ORDER, 'packing', 'cancelled')).toBe(true);
+    expect(canTransition(WEB_ORDER, 'shipping', 'cancelled')).toBe(false);
   });
 });
 

@@ -59,9 +59,9 @@ function sumRows(rows: Record<string, unknown>[], keys: string[]): Record<string
 async function salesTotals(ctx: Ctx, start: Date, end: Date) {
   const [r] = await ctx.db.execute<{ gross: string; orders: number; returns: string }>(sql`
     select
-      coalesce((select sum(total_vnd) from sales.sale where status = 'completed' and sold_at >= ${tsParam(start)} and sold_at < ${tsParam(end)}), 0) as gross,
-      (select count(*)::int from sales.sale where status = 'completed' and sold_at >= ${tsParam(start)} and sold_at < ${tsParam(end)}) as orders,
-      coalesce((select sum(refund_vnd) from sales.sale_return where created_at >= ${tsParam(start)} and created_at < ${tsParam(end)}), 0) as returns`);
+      coalesce((select sum(total_vnd) from reports.sale_doc where sold_at >= ${tsParam(start)} and sold_at < ${tsParam(end)}), 0) as gross,
+      (select count(*)::int from reports.sale_doc where sold_at >= ${tsParam(start)} and sold_at < ${tsParam(end)}) as orders,
+      coalesce((select sum(refund_vnd) from reports.return_line where returned_at >= ${tsParam(start)} and returned_at < ${tsParam(end)}), 0) as returns`);
   const gross = n(r!.gross);
   const orders = r!.orders;
   const returns = n(r!.returns);
@@ -78,9 +78,9 @@ export async function dashboard(ctx: Ctx) {
   const month = storeRange(`${today.slice(0, 8)}01`, today);
   const bestsellers = await ctx.db.execute<{ variant_id: string; sku: string; title: string; units: number; gross: string }>(sql`
     select l.variant_id, v.sku, i.i18n -> 'en' ->> 'title' as title, sum(l.qty)::int as units, sum(l.total_vnd) as gross
-    from sales.sale_line l join sales.sale s on s.id = l.sale_id
+    from reports.sale_line l
     join catalog.item_variant v on v.id = l.variant_id join catalog.item i on i.id = v.item_id
-    where s.status = 'completed' and s.sold_at >= ${tsParam(month.start)} and s.sold_at < ${tsParam(month.end)}
+    where l.sold_at >= ${tsParam(month.start)} and l.sold_at < ${tsParam(month.end)}
     group by l.variant_id, v.sku, i.id order by units desc, gross desc limit 10`);
   const lowStock = can(actor, 'inventory.view')
     ? await ctx.db.execute<{ variant_id: string; sku: string; title: string; available: number; min_stock: number }>(sql`
@@ -110,13 +110,14 @@ export const SalesReportSchema = RangeSchema.extend({
 });
 
 const SALES_GROUPS = {
-  day: { label: 'Ngày', key: sql`to_char(s.sold_at at time zone ${TZ}, 'YYYY-MM-DD')`, rkey: sql`to_char(r.created_at at time zone ${TZ}, 'YYYY-MM-DD')` },
-  month: { label: 'Tháng', key: sql`to_char(s.sold_at at time zone ${TZ}, 'YYYY-MM')`, rkey: sql`to_char(r.created_at at time zone ${TZ}, 'YYYY-MM')` },
-  channel: { label: 'Kênh', key: sql`s.channel`, rkey: sql`s.channel` },
+  day: { label: 'Ngày', key: sql`to_char(l.sold_at at time zone ${TZ}, 'YYYY-MM-DD')`, rkey: sql`to_char(r.returned_at at time zone ${TZ}, 'YYYY-MM-DD')` },
+  month: { label: 'Tháng', key: sql`to_char(l.sold_at at time zone ${TZ}, 'YYYY-MM')`, rkey: sql`to_char(r.returned_at at time zone ${TZ}, 'YYYY-MM')` },
+  // Counter sales and online orders by source (FR-SOC-02, BR-29).
+  channel: { label: 'Kênh', key: sql`l.channel`, rkey: sql`r.channel` },
   customer: {
     label: 'Khách hàng',
-    key: sql`coalesce((select c.name from crm.customer c where c.id = s.customer_id), 'Khách lẻ')`,
-    rkey: sql`coalesce((select c.name from crm.customer c where c.id = s.customer_id), 'Khách lẻ')`,
+    key: sql`coalesce((select c.name from crm.customer c where c.id = l.customer_id), 'Khách lẻ')`,
+    rkey: sql`coalesce((select c.name from crm.customer c where c.id = r.customer_id), 'Khách lẻ')`,
   },
 } as const;
 
@@ -125,24 +126,23 @@ export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>):
   const q = SalesReportSchema.parse(input);
   const { start, end } = storeRange(q.from, q.to);
   const profit = can(actor, 'report.profit');
-  const inRange = sql`s.status = 'completed' and s.sold_at >= ${tsParam(start)} and s.sold_at < ${tsParam(end)}`;
-  const returnsInRange = sql`r.created_at >= ${tsParam(start)} and r.created_at < ${tsParam(end)}`;
+  const inRange = sql`l.sold_at >= ${tsParam(start)} and l.sold_at < ${tsParam(end)}`;
+  const returnsInRange = sql`r.returned_at >= ${tsParam(start)} and r.returned_at < ${tsParam(end)}`;
   // Line-level for items; sale-level keys otherwise. Returns are attributed by return date.
   // Items key on SKU; the name is looked up after the join so SKU and name stay separate columns.
   const lineKey: SQL = q.groupBy === 'item' ? sql`v.sku` : SALES_GROUPS[q.groupBy].key;
   const returnKey: SQL = q.groupBy === 'item' ? lineKey : SALES_GROUPS[q.groupBy].rkey;
   const res = await ctx.db.execute<{ key: string; title: string | null; orders: number; units: number; gross: string; discount: string; vat: string; cost: string; returns: string }>(sql`
     with sold as (
-      select ${lineKey} as key, count(distinct s.id)::int as orders, sum(l.qty)::int as units, sum(l.total_vnd) as gross,
+      select ${lineKey} as key, count(distinct l.doc_id)::int as orders, sum(l.qty)::int as units, sum(l.total_vnd) as gross,
              sum(l.discount_vnd) as discount, sum(l.vat_vnd) as vat, sum(l.cost_vnd) as cost
-      from sales.sale_line l join sales.sale s on s.id = l.sale_id
+      from reports.sale_line l
       left join catalog.item_variant v on v.id = l.variant_id left join catalog.item i on i.id = v.item_id
       where ${inRange} group by 1),
     ret as (
-      select ${returnKey} as key, sum(rl.refund_vnd) as returns
-      from sales.sale_return_line rl join sales.sale_return r on r.id = rl.return_id
-      join sales.sale s on s.id = r.sale_id join sales.sale_line l on l.id = rl.sale_line_id
-      left join catalog.item_variant v on v.id = l.variant_id left join catalog.item i on i.id = v.item_id
+      select ${returnKey} as key, sum(r.refund_vnd) as returns
+      from reports.return_line r
+      left join catalog.item_variant v on v.id = r.variant_id left join catalog.item i on i.id = v.item_id
       where ${returnsInRange} group by 1)
     select coalesce(sold.key, ret.key) as key,
            ${q.groupBy === 'item' ? sql`(select i2.i18n -> 'en' ->> 'title' from catalog.item_variant v2 join catalog.item i2 on i2.id = v2.item_id where v2.sku = coalesce(sold.key, ret.key))` : sql`null`} as title,
@@ -173,7 +173,7 @@ export async function sales(ctx: Ctx, input: z.input<typeof SalesReportSchema>):
   const sumKeys = ['units', 'grossVnd', 'discountVnd', 'vatVnd', 'returnsVnd', 'netVnd', ...(profit ? ['costVnd', 'marginVnd'] : [])];
   const totals = sumRows(rows, sumKeys);
   // Orders are distinct sales; summing per-line groups would double count, so total them directly.
-  const [ord] = await ctx.db.execute<{ orders: number }>(sql`select count(*)::int as orders from sales.sale s where ${inRange}`);
+  const [ord] = await ctx.db.execute<{ orders: number }>(sql`select count(*)::int as orders from reports.sale_doc l where ${inRange}`);
   totals.orders = ord!.orders;
   const label = q.groupBy === 'item' ? 'Sản phẩm' : SALES_GROUPS[q.groupBy].label;
   return {
@@ -314,11 +314,11 @@ export async function tax(ctx: Ctx, input: z.input<typeof TaxReportSchema>): Pro
     // Output VAT by rate; returns reduce it by the VAT contained in the refund.
     const res = await ctx.db.execute<{ vat_bp: number; gross: string; vat: string; ret_gross: string; ret_vat: string }>(sql`
       with sold as (select l.vat_bp, sum(l.total_vnd) as gross, sum(l.vat_vnd) as vat
-                    from sales.sale_line l join sales.sale s on s.id = l.sale_id
-                    where s.status = 'completed' and s.sold_at >= ${tsParam(start)} and s.sold_at < ${tsParam(end)} group by l.vat_bp),
-           ret as (select l.vat_bp, sum(rl.refund_vnd) as gross, sum(round(rl.refund_vnd::numeric * l.vat_bp / (10000 + l.vat_bp))) as vat
-                   from sales.sale_return_line rl join sales.sale_return r on r.id = rl.return_id join sales.sale_line l on l.id = rl.sale_line_id
-                   where r.created_at >= ${tsParam(start)} and r.created_at < ${tsParam(end)} group by l.vat_bp)
+                    from reports.sale_line l
+                    where l.sold_at >= ${tsParam(start)} and l.sold_at < ${tsParam(end)} group by l.vat_bp),
+           ret as (select r.vat_bp, sum(r.refund_vnd) as gross, sum(round(r.refund_vnd::numeric * r.vat_bp / (10000 + r.vat_bp))) as vat
+                   from reports.return_line r
+                   where r.returned_at >= ${tsParam(start)} and r.returned_at < ${tsParam(end)} group by r.vat_bp)
       select coalesce(sold.vat_bp, ret.vat_bp) as vat_bp, coalesce(sold.gross, 0) as gross, coalesce(sold.vat, 0) as vat,
              coalesce(ret.gross, 0) as ret_gross, coalesce(ret.vat, 0) as ret_vat
       from sold full join ret on ret.vat_bp = sold.vat_bp order by 1`);
@@ -345,7 +345,9 @@ export async function tax(ctx: Ctx, input: z.input<typeof TaxReportSchema>): Pro
   if (q.view === 'einvoices') {
     const res = await ctx.db.execute<{ doc_no: string; sold_at: Date; total: string; vat: string; status: string; invoice_no: string | null; buyer: { name?: string; taxCode?: string } | null }>(sql`
       select s.doc_no, s.sold_at, s.total_vnd as total, s.vat_vnd as vat, j.status, j.invoice_no, j.buyer
-      from sales.einvoice_job j join sales.sale s on s.id = j.sale_id
+      from sales.einvoice_job j
+      join (select id, doc_no, sold_at, total_vnd, vat_vnd from sales.sale
+            union all select id, doc_no, done_at, total_vnd, vat_vnd from orders.web_order where done_at is not null) s on s.id = coalesce(j.sale_id, j.order_id)
       where s.sold_at >= ${tsParam(start)} and s.sold_at < ${tsParam(end)} order by s.sold_at`);
     const rows = res.map((r) => ({
       docNo: r.doc_no,
@@ -509,13 +511,28 @@ export async function download(ctx: Ctx, token: string): Promise<{ bytes: Uint8A
 // =============================================================================================
 // Menu count badges (FR-ADM-08, TDD §4.12)
 
-/** Per-menu counts, each only with the matching permission. Orders and to-notify tasks arrive in R2. */
+/** Per-menu counts, each only with the matching permission. */
 export async function badges(ctx: Ctx) {
   if (!ctx.actor) throw errors.unauthenticated();
   const out: Record<string, number> = {};
   if (can(ctx.actor, 'einvoice.manage')) {
     const [r] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from sales.einvoice_job where status = 'failed'`);
     out.einvoicesFailed = r!.n;
+  }
+  // Orders needing action on “Giao hàng” (Design §12.9, FR-ORD-05).
+  if (can(ctx.actor, 'online.manage')) {
+    const [r] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.web_order where status in ('new', 'pending_review', 'return_requested')`);
+    out.ordersNeedingAction = r!.n;
+    // Pre-orders and special orders past the holding period (FR-ORD-16).
+    const [h] = await ctx.db.execute<{ n: number }>(sql`
+      select ((select count(*) from orders.preorder where status = 'contacted' and expires_at < ${tsParam(ctx.clock.now())})
+            + (select count(*) from orders.special_order where status = 'contacted' and expires_at < ${tsParam(ctx.clock.now())}))::int as n`);
+    out.holdsOverdue = h!.n;
+  }
+  // Overdue to-notify tasks on “Cần liên hệ” (UC-19), not a dashboard tile (FR-RPT-01).
+  if (can(ctx.actor, 'contact_task.manage')) {
+    const [r] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.contact_task where status = 'open' and due_at < ${tsParam(ctx.clock.now())}`);
+    out.contactTasksOverdue = r!.n;
   }
   return out;
 }

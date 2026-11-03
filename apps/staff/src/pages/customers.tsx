@@ -1,3 +1,4 @@
+import { ORDER_SOURCE } from '../components/order-ui';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Download, GitMerge, MoreHorizontal, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { useState } from 'react';
@@ -221,7 +222,7 @@ function CustomerForm({ customer, onClose, onSaved }: { customer?: Customer; onC
 }
 
 interface Purchases {
-  items: { id: string; docNo: string; soldAt: string; channel: string; status: string; totalVnd: number; returnsVnd: number; pointsEarned: number }[];
+  items: { id: string; kind: 'sale' | 'order'; docNo: string; soldAt: string; channel: string; status: string; totalVnd: number; returnsVnd: number; pointsEarned: number }[];
   totals: { orders: number; grossVnd: number; returnsVnd: number; netVnd: number };
 }
 
@@ -288,14 +289,26 @@ export function CustomerDetailPage() {
               columns={[
                 { header: 'Mã đơn', cell: (r) => <span className="code">{r.docNo}</span> },
                 { header: 'Thời gian', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.soldAt) },
-                { header: 'Trạng thái', cell: (r) => (r.status === 'voided' ? <StatusChip tone="neutral">Đã hủy</StatusChip> : <StatusChip tone="success">Hoàn tất</StatusChip>) },
+                // Counter or the online source (FR-CRM-03); text only, no colour dot (Design §10.5).
+                { header: 'Kênh', cell: (r) => (r.kind === 'sale' ? 'Tại quầy' : (ORDER_SOURCE[r.channel] ?? r.channel)) },
+                {
+                  header: 'Trạng thái',
+                  cell: (r) =>
+                    r.status === 'voided' || r.status === 'cancelled' ? (
+                      <StatusChip tone="neutral">Đã hủy</StatusChip>
+                    ) : r.status === 'open' ? (
+                      <StatusChip tone="info">Đang xử lý</StatusChip>
+                    ) : (
+                      <StatusChip tone="success">Hoàn tất</StatusChip>
+                    ),
+                },
                 { header: 'Tổng', align: 'right', cell: (r) => formatVnd(r.totalVnd) },
                 { header: 'Đã trả', align: 'right', cell: (r) => (r.returnsVnd ? formatVnd(r.returnsVnd) : '') },
                 { header: 'Điểm', align: 'right', cell: (r) => (r.pointsEarned ? `+${formatNumber(r.pointsEarned)}` : '') },
               ]}
               rows={purchases.data?.items}
               rowKey={(r) => r.id}
-              onRow={(r) => navigate(`/sales/${r.id}`)}
+              onRow={(r) => navigate(r.kind === 'order' ? `/orders/${r.id}` : `/sales/${r.id}`)}
               error={purchases.error}
               minWidth={560}
               empty={{ icon: Users, title: 'Chưa có đơn mua' }}

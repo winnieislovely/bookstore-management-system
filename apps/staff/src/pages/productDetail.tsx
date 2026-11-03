@@ -1,7 +1,7 @@
 import { VAT_RATES_BP } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ArrowLeft, Globe, History, ImageOff, ImagePlus, Package, Pencil, Printer, Trash2 } from 'lucide-react';
+import { ArrowLeft, Globe, History, ImageOff, ImagePlus, Package, Pencil, Printer, Share2, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { ConfirmDialog, Facts, SelectField, TextArea, toast } from '../components/data';
@@ -12,6 +12,7 @@ import { formatDate, formatDateTime, formatNumber, formatVnd } from '../lib/form
 import { printHtml } from '../lib/print';
 import { can, useMe } from '../lib/session';
 import { Dialog } from '../pos/widgets';
+import { ShareCardDialog } from './holds';
 
 /**
  * Product detail (FR-CAT-01..15, Design §12.3): ISBN and publication channels live here, not in
@@ -64,7 +65,7 @@ export function ProductDetailPage() {
   const { data: me } = useMe();
   const edit = can(me, 'catalog.edit');
   const q = useQuery({ queryKey: ['item', id], queryFn: () => get<Item>(`/api/v1/catalog/items/${id}`) });
-  const [dialog, setDialog] = useState<null | { kind: 'info' } | { kind: 'price'; v: Variant } | { kind: 'history'; v: Variant } | { kind: 'variant'; v: Variant } | { kind: 'labels' } | { kind: 'bundle'; v: Variant } | { kind: 'image-delete'; imageId: string }>(null);
+  const [dialog, setDialog] = useState<null | { kind: 'info' } | { kind: 'price'; v: Variant } | { kind: 'history'; v: Variant } | { kind: 'variant'; v: Variant } | { kind: 'labels' } | { kind: 'share' } | { kind: 'bundle'; v: Variant } | { kind: 'image-delete'; imageId: string }>(null);
   const [uploading, setUploading] = useState(false);
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
   if (!q.data) return <Skeleton className="h-64" />;
@@ -82,9 +83,17 @@ export function ProductDetailPage() {
         }
         title={title}
         actions={
-          <Button variant="secondary" icon={Printer} onClick={() => setDialog({ kind: 'labels' })}>
-            In nhãn
-          </Button>
+          <>
+            {/* Copy-ready card for chats and posts (FR-SOC-04). */}
+            {can(me, 'online.manage') && x.variants[0] && (
+              <Button variant="secondary" icon={Share2} onClick={() => setDialog({ kind: 'share' })}>
+                Chia sẻ
+              </Button>
+            )}
+            <Button variant="secondary" icon={Printer} onClick={() => setDialog({ kind: 'labels' })}>
+              In nhãn
+            </Button>
+          </>
         }
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -273,6 +282,7 @@ export function ProductDetailPage() {
       {dialog?.kind === 'history' && <PriceHistory v={dialog.v} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'variant' && <VariantForm v={dialog.v} onClose={() => setDialog(null)} onSaved={refresh} />}
       {dialog?.kind === 'labels' && <LabelsDialog item={x} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'share' && x.variants[0] && <ShareCardDialog variantId={x.variants[0].id} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'bundle' && <BundleForm v={dialog.v} current={x.components.filter((c) => c.bundleVariantId === dialog.v.id)} onClose={() => setDialog(null)} onSaved={refresh} />}
       {dialog?.kind === 'image-delete' && (
         <ConfirmDialog

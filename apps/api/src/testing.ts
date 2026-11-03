@@ -1,4 +1,5 @@
 import { LocalDiskStorage } from '@bookstore/modules/files';
+import { MockCarrierAdapter } from '@bookstore/modules/integrations/ghn';
 import { createFieldCrypto, type Ctx } from '@bookstore/modules/platform';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,6 +18,8 @@ export interface Harness {
   t: TestDb;
   app: ReturnType<typeof createApp>;
   clock: FakeClock;
+  /** GHN stand-in: tests move shipments along through its status map. */
+  carrier: MockCarrierAdapter;
   /** A service context for calling modules directly (no actor). */
   ctx: () => Ctx;
   call: (method: string, path: string, opts?: { body?: unknown; cookie?: string | null; csrf?: boolean }) => Promise<Res>;
@@ -31,14 +34,16 @@ export interface Harness {
 export type Res = { status: number; body: any; cookie: string | null };
 
 export const OWNER_PW = 'chu-cua-hang-2026';
+export const WEBHOOK_SECRET = 'ghn-webhook-secret-for-tests';
 
 export async function startHarness(): Promise<Harness> {
   const t = await startTestDb();
   const clock = new FakeClock();
-  const config = loadConfig({ FIELD_ENCRYPTION_KEY: randomBytes(32).toString('base64'), APP_ORIGIN: ORIGIN, NODE_ENV: 'test' });
+  const config = loadConfig({ FIELD_ENCRYPTION_KEY: randomBytes(32).toString('base64'), APP_ORIGIN: ORIGIN, NODE_ENV: 'test', GHN_WEBHOOK_SECRET: WEBHOOK_SECRET });
   const crypto = createFieldCrypto(config.FIELD_ENCRYPTION_KEY);
   const storage = new LocalDiskStorage(mkdtempSync(join(tmpdir(), 'bms-files-')));
-  const app = createApp({ db: t.db, clock, crypto, storage, config, log: pino({ level: 'silent' }) });
+  const carrier = new MockCarrierAdapter();
+  const app = createApp({ db: t.db, clock, crypto, storage, config, log: pino({ level: 'silent' }), carrier });
 
   const call: Harness['call'] = async (method, path, opts = {}) => {
     const headers: Record<string, string> = { origin: ORIGIN };
@@ -61,6 +66,7 @@ export async function startHarness(): Promise<Harness> {
     t,
     app,
     clock,
+    carrier,
     ctx: () => ({ db: t.db, clock, crypto, actor: null, requestId: randomUUID(), ip: null }),
     call,
     login,

@@ -1,6 +1,8 @@
 import {
   BadgePercent,
   BookOpen,
+  CalendarClock,
+  PhoneCall,
   Boxes,
   Building2,
   ClipboardList,
@@ -11,6 +13,7 @@ import {
   Receipt,
   ScanBarcode,
   ScrollText,
+  Truck,
   Settings,
   ShieldCheck,
   TrendingUp,
@@ -24,7 +27,7 @@ import type { MessageKey } from './lib/i18n';
 
 /**
  * Navigation map (SRS Appendix C, Design Appendix A). Items appear only with permission (FR-ADM-03).
- * Groups for later releases (Orders & delivery, Events, Library, Website, HR) join with them.
+ * Groups for later releases (Events, Library, Website, HR) join with them.
  */
 export interface NavItem {
   path: string;
@@ -47,6 +50,9 @@ export const NAV: NavGroup[] = [
     label: 'nav.group.store',
     items: [
       { path: '/pos', label: 'nav.selling', icon: ScanBarcode, anyOf: ['sale.create'] },
+      { path: '/orders', label: 'nav.orders', icon: Truck, anyOf: ['online.manage'], badge: 'ordersNeedingAction' },
+      { path: '/preorders', label: 'nav.preorders', icon: CalendarClock, anyOf: ['online.manage'], badge: 'holdsOverdue' },
+      { path: '/contact-tasks', label: 'nav.contactTasks', icon: PhoneCall, anyOf: ['contact_task.manage'], badge: 'contactTasksOverdue' },
       { path: '/sales', label: 'nav.sales', icon: Receipt, anyOf: ['sale.create', 'sale.view_all'], badge: 'einvoicesFailed' },
       { path: '/customers', label: 'nav.customers', icon: Users, anyOf: ['customer.view'] },
       { path: '/promotions', label: 'nav.promotions', icon: BadgePercent, anyOf: ['promotion.manage'] },

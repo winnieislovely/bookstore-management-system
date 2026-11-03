@@ -32,7 +32,7 @@ export const SUPPLIER_ORDER: Transitions<'draft' | 'sent' | 'partially_received'
   cancelled: [],
 };
 
-/** SRS B.1 – online / social order (release R2). */
+/** SRS B.1 – online / social order (release R2a). A store-pickup order goes from packing to done at handover. */
 export const WEB_ORDER: Transitions<
   | 'new'
   | 'pending_review'
@@ -48,7 +48,7 @@ export const WEB_ORDER: Transitions<
   new: ['pending_review', 'confirmed', 'cancelled'],
   pending_review: ['confirmed', 'cancelled'],
   confirmed: ['packing', 'cancelled'],
-  packing: ['shipping'],
+  packing: ['shipping', 'done', 'cancelled'],
   shipping: ['done', 'return_requested'],
   done: ['return_requested'],
   return_requested: ['return_approved', 'done'],

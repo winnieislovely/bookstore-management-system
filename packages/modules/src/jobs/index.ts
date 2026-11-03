@@ -23,7 +23,10 @@ function backoff(attempts: number, now: Date): Date {
   return new Date(now.getTime() + minutes * 60_000);
 }
 
-async function invoiceRequest(tx: Tx, saleId: string, buyer: IssueRequest['buyer']): Promise<IssueRequest> {
+/** The invoice of a counter sale or of an online order that is Done (BR-24, BR-29). */
+async function invoiceRequest(tx: Tx, job: { saleId: string | null; orderId: string | null }, buyer: IssueRequest['buyer']): Promise<IssueRequest> {
+  if (job.orderId) return orderInvoiceRequest(tx, job.orderId, buyer);
+  const saleId = job.saleId!;
   const [sale] = await tx.select().from(schema.sale).where(eq(schema.sale.id, saleId));
   const lines = await tx.select().from(schema.saleLine).where(eq(schema.saleLine.saleId, saleId)).orderBy(asc(schema.saleLine.lineNo));
   return {
@@ -44,6 +47,15 @@ async function invoiceRequest(tx: Tx, saleId: string, buyer: IssueRequest['buyer
   };
 }
 
+async function orderInvoiceRequest(tx: Tx, orderId: string, buyer: IssueRequest['buyer']): Promise<IssueRequest> {
+  const [o] = await tx.select().from(schema.webOrder).where(eq(schema.webOrder.id, orderId));
+  const lines = await tx.select().from(schema.orderLine).where(eq(schema.orderLine.orderId, orderId)).orderBy(asc(schema.orderLine.lineNo));
+  const items = lines.map((l) => ({ description: l.description, qty: l.qty, unitPriceVnd: l.unitPriceVnd, discountVnd: l.discountVnd, totalVnd: l.totalVnd, vatBp: l.vatBp, vatVnd: l.vatVnd }));
+  // The shipping fee charged to the customer is its own line, so the invoice equals the order total.
+  if (o!.shippingVnd > 0) items.push({ description: 'Phí giao hàng', qty: 1, unitPriceVnd: o!.shippingVnd, discountVnd: 0, totalVnd: o!.shippingVnd, vatBp: 0, vatVnd: 0 });
+  return { reference: o!.docNo, issuedAt: o!.doneAt ?? o!.createdAt, buyer, lines: items, totalVnd: o!.totalVnd, vatVnd: o!.vatVnd };
+}
+
 export interface EinvoiceRunResult {
   issued: number;
   emailed: number;
@@ -57,18 +69,18 @@ export async function processEinvoices(ctx: Ctx, adapter: EInvoiceAdapter, limit
   const now = ctx.clock.now();
   const j = schema.einvoiceJob;
   const due = await ctx.db.execute<{ id: string }>(sql`
-    select j.id from sales.einvoice_job j join sales.sale s on s.id = j.sale_id
+    select j.id from sales.einvoice_job j left join sales.sale s on s.id = j.sale_id
     where (j.status = 'pending' and coalesce(j.next_attempt_at, now()) <= ${tsParam(now)})
        or (j.status = 'failed' and j.attempts < ${EINVOICE_MAX_AUTO_ATTEMPTS} and j.next_attempt_at <= ${tsParam(now)})
-       or (j.status = 'issued' and (j.reissue_requested or s.status = 'voided' or (j.email_requested and j.email_status is null)))
+       or (j.status = 'issued' and (j.reissue_requested or s.status is not distinct from 'voided' or (j.email_requested and j.email_status is null)))
     order by j.created_at limit ${limit}`);
 
   for (const { id } of due) {
     await ctx.db.transaction(async (tx) => {
       // Another worker may hold it; skip rather than wait.
       const [job] = await tx.select().from(j).where(eq(j.id, id)).for('update', { skipLocked: true });
-      if (!job?.saleId) return;
-      const [sale] = await tx.select({ status: schema.sale.status }).from(schema.sale).where(eq(schema.sale.id, job.saleId));
+      if (!job || (!job.saleId && !job.orderId)) return;
+      const [sale] = job.saleId ? await tx.select({ status: schema.sale.status }).from(schema.sale).where(eq(schema.sale.id, job.saleId)) : [];
       const buyer = (job.buyer as IssueRequest['buyer']) ?? null;
       try {
         if (job.status === 'issued' && sale?.status === 'voided') {
@@ -78,13 +90,13 @@ export async function processEinvoices(ctx: Ctx, adapter: EInvoiceAdapter, limit
           return;
         }
         if (job.status === 'issued' && job.reissueRequested) {
-          const r = await adapter.replace(job.providerRef!, await invoiceRequest(tx, job.saleId, buyer));
+          const r = await adapter.replace(job.providerRef!, await invoiceRequest(tx, job, buyer));
           await tx.update(j).set({ providerRef: r.providerRef, invoiceNo: r.invoiceNo, reissueRequested: false, emailStatus: null, updatedAt: now }).where(eq(j.id, id));
           job.providerRef = r.providerRef;
           out.reissued++;
         } else if (job.status !== 'issued') {
           await tx.update(j).set({ status: 'sent', attempts: job.attempts + 1, updatedAt: now }).where(eq(j.id, id));
-          const r = await adapter.issue(await invoiceRequest(tx, job.saleId, buyer));
+          const r = await adapter.issue(await invoiceRequest(tx, job, buyer));
           await tx.update(j).set({ status: 'issued', providerRef: r.providerRef, invoiceNo: r.invoiceNo, error: null, nextAttemptAt: null, updatedAt: now }).where(eq(j.id, id));
           job.providerRef = r.providerRef;
           out.issued++;
@@ -105,8 +117,10 @@ export async function processEinvoices(ctx: Ctx, adapter: EInvoiceAdapter, limit
           await tx.update(j).set({ status: 'failed', attempts, error: message, nextAttemptAt: backoff(attempts, now), updatedAt: now }).where(eq(j.id, id));
           // Failures surface as an in-app notification and badge, not a dashboard tile (FR-RPT-01, FR-ADM-08).
           if (job.status !== 'failed') {
-            const [s] = await tx.select({ docNo: schema.sale.docNo }).from(schema.sale).where(eq(schema.sale.id, job.saleId));
-            await notifications.notifyHolders(tx, 'einvoice.manage', 'einvoice.failed', { saleId: job.saleId, docNo: s?.docNo, error: message });
+            const [s] = job.saleId
+              ? await tx.select({ docNo: schema.sale.docNo }).from(schema.sale).where(eq(schema.sale.id, job.saleId))
+              : await tx.select({ docNo: schema.webOrder.docNo }).from(schema.webOrder).where(eq(schema.webOrder.id, job.orderId!));
+            await notifications.notifyHolders(tx, 'einvoice.manage', 'einvoice.failed', { saleId: job.saleId, orderId: job.orderId, docNo: s?.docNo, error: message });
           }
         }
         out.failed++;
@@ -152,8 +166,8 @@ export async function recalcTiers(ctx: Ctx): Promise<number> {
   if (!tiers.length) return 0;
   const spend = await ctx.db.execute<{ id: string; tier_id: string | null; spend: string }>(sql`
     select c.id, c.tier_id,
-      coalesce((select sum(s.total_vnd) from sales.sale s where s.customer_id = c.id and s.status = 'completed' and not s.is_deposit and s.sold_at >= ${tsParam(since)}), 0)
-      - coalesce((select sum(r.refund_vnd) from sales.sale_return r join sales.sale s on s.id = r.sale_id where s.customer_id = c.id and r.created_at >= ${tsParam(since)}), 0) as spend
+      coalesce((select sum(s.total_vnd) from reports.sale_doc s where s.customer_id = c.id and not s.is_deposit and s.sold_at >= ${tsParam(since)}), 0)
+      - coalesce((select sum(r.refund_vnd) from reports.return_line r where r.customer_id = c.id and r.returned_at >= ${tsParam(since)}), 0) as spend
     from crm.customer c where c.anonymised_at is null`);
   let changed = 0;
   for (const c of spend) {

@@ -18,6 +18,12 @@ const Env = z.object({
   LOG_LEVEL: z.string().default('info'),
   /** Local-disk file storage for development; production uses S3-compatible storage (TDD §4.12). */
   STORAGE_DIR: z.string().default('./data/files'),
+  /** GHN carrier (TDD §8.2, §12.3); without a token the mock carrier is used. */
+  GHN_TOKEN: z.string().optional(),
+  GHN_SHOP_ID: z.coerce.number().int().optional(),
+  GHN_ENV: z.enum(['sandbox', 'live']).default('sandbox'),
+  /** Shared secret in the webhook URL registered with GHN (`/webhooks/ghn?token=…`). */
+  GHN_WEBHOOK_SECRET: z.string().min(16).optional(),
 });
 export type Config = z.infer<typeof Env>;
 

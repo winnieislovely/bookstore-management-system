@@ -1,5 +1,6 @@
 import type { Db } from '@bookstore/db';
 import type { StorageAdapter } from '@bookstore/modules/files';
+import type { CarrierAdapter } from '@bookstore/modules/integrations/ghn';
 import type { Clock, Ctx, FieldCrypto } from '@bookstore/modules/platform';
 import type { Logger } from 'pino';
 import type { Config } from '../config.js';
@@ -12,6 +13,8 @@ export interface Deps {
   storage: StorageAdapter;
   config: Config;
   log: Logger;
+  /** GHN (TDD §8.2); defaults from the configuration. */
+  carrier?: CarrierAdapter;
 }
 
 export interface SessionState {

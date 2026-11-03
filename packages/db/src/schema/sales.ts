@@ -277,6 +277,7 @@ export const einvoiceJob = sales.table(
   },
   (t) => [
     uniqueIndex('einvoice_job_sale_uq').on(t.saleId).where(sql`${t.saleId} is not null`),
+    uniqueIndex('einvoice_job_order_uq').on(t.orderId).where(sql`${t.orderId} is not null`),
     index('einvoice_job_status_idx').on(t.status, t.nextAttemptAt),
     check('einvoice_job_status_ck', inList(t.status, statesOf(EINVOICE))),
   ],

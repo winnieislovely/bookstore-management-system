@@ -501,3 +501,68 @@ export async function restoreAverageCost(tx: Tx, variantId: string, location: Lo
   const before = Math.round((cur.onHand * cur.avgCostVnd - qty * unitCostVnd) / (cur.onHand - qty));
   if (before >= 0) await tx.update(sl).set({ avgCostVnd: before }).where(and(eq(sl.variantId, variantId), eq(sl.location, location)));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Reservations (FR-ORD-09, BR-03): available = on hand − reserved
+
+/** Stock-holding units of a variant: a bundle's components, otherwise the variant itself (FR-CAT-12). */
+export async function stockUnits(tx: Tx, variantId: string, qty: number): Promise<{ variantId: string; qty: number }[]> {
+  const components = await tx.select().from(schema.bundleComponent).where(eq(schema.bundleComponent.bundleVariantId, variantId));
+  return components.length ? components.map((c) => ({ variantId: c.componentVariantId, qty: c.qty * qty })) : [{ variantId, qty }];
+}
+
+/**
+ * Reserve `qty` units for a document in one atomic conditional statement per stock unit, so two
+ * orders cannot hold the same copy. All or nothing: returns false (and reserves nothing) when any
+ * unit lacks available stock.
+ */
+export async function reserve(tx: Tx, ctx: Ctx, refType: string, refId: string, variantId: string, qty: number, expiresAt: Date | null = null): Promise<boolean> {
+  const units = (await stockUnits(tx, variantId, qty)).sort((a, b) => a.variantId.localeCompare(b.variantId));
+  const sl = schema.stockLevel;
+  return tx
+    .transaction(async (sp) => {
+      for (const u of units) {
+        await sp.insert(sl).values({ variantId: u.variantId, location: 'floor' }).onConflictDoNothing();
+        const [ok] = await sp
+          .update(sl)
+          .set({ reserved: sql`${sl.reserved} + ${u.qty}`, updatedAt: ctx.clock.now() })
+          .where(and(eq(sl.variantId, u.variantId), eq(sl.location, 'floor'), sql`${sl.onHand} - ${sl.reserved} >= ${u.qty}`))
+          .returning({ variantId: sl.variantId });
+        if (!ok) throw new InsufficientStock(u.variantId, 0, u.qty);
+        await sp
+          .insert(schema.stockReservation)
+          .values({ refType, refId, variantId: u.variantId, qty: u.qty, status: 'active', expiresAt, createdAt: ctx.clock.now() })
+          .onConflictDoUpdate({
+            target: [schema.stockReservation.refType, schema.stockReservation.refId, schema.stockReservation.variantId],
+            set: { qty: sql`case when ${schema.stockReservation.status} = 'active' then ${schema.stockReservation.qty} + ${u.qty} else ${u.qty} end`, status: 'active', expiresAt },
+          });
+      }
+      await emit(sp, 'stock.changed', { variantIds: units.map((u) => u.variantId) });
+      return true;
+    })
+    .catch((e: unknown) => {
+      if (e instanceof InsufficientStock) return false;
+      throw e;
+    });
+}
+
+/**
+ * End the active reservations of a document: `released` gives the stock back (cancel), `converted`
+ * means the units are about to leave with an outbound movement (handover).
+ */
+export async function endReservations(tx: Tx, ctx: Ctx, refType: string, refId: string, status: 'released' | 'converted' | 'expired' = 'released'): Promise<number> {
+  const r = schema.stockReservation;
+  const rows = await tx
+    .update(r)
+    .set({ status })
+    .where(and(eq(r.refType, refType), eq(r.refId, refId), eq(r.status, 'active')))
+    .returning({ variantId: r.variantId, qty: r.qty });
+  for (const row of rows.sort((a, b) => a.variantId.localeCompare(b.variantId))) {
+    await tx
+      .update(schema.stockLevel)
+      .set({ reserved: sql`greatest(${schema.stockLevel.reserved} - ${row.qty}, 0)`, updatedAt: ctx.clock.now() })
+      .where(and(eq(schema.stockLevel.variantId, row.variantId), eq(schema.stockLevel.location, 'floor')));
+  }
+  if (rows.length) await emit(tx, 'stock.changed', { variantIds: rows.map((x) => x.variantId) });
+  return rows.length;
+}

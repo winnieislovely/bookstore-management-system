@@ -139,7 +139,7 @@ interface Sale {
 }
 
 /** An open shift of the current user, needed to pay out a refund (FR-POS-13/14). */
-function useOpenShift() {
+export function useOpenShift() {
   return useQuery({
     queryKey: ['open-shift'],
     queryFn: async () => {

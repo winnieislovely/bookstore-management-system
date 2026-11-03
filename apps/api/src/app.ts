@@ -1,3 +1,4 @@
+import { createCarrier } from '@bookstore/modules/integrations/ghn';
 import { ping } from '@bookstore/modules/platform';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { AppEnv, Deps } from './http/context.js';
@@ -7,6 +8,7 @@ import { authRoutes } from './routes/auth.js';
 import { importRoutes } from './routes/imports.js';
 import { moreRoutes, purchasingExtraRoutes, rollbackRoutes } from './routes/more.js';
 import { offlineRoutes } from './routes/offline.js';
+import { orderRoutes } from './routes/orders.js';
 import { posRoutes } from './routes/pos.js';
 import { reportRoutes } from './routes/reports.js';
 import { stockRoutes } from './routes/stock.js';
@@ -27,6 +29,7 @@ export function createApp(deps: Deps): OpenAPIHono<AppEnv> {
   // Device endpoints: staff session plus the device signature, which also stops cross-site requests (TDD §7.2).
   app.use('/pos/*', limitBody);
   app.use('/pos/*', session);
+  app.use('/webhooks/*', limitBody);
 
   authRoutes(app, deps);
   adminRoutes(app);
@@ -38,6 +41,7 @@ export function createApp(deps: Deps): OpenAPIHono<AppEnv> {
   moreRoutes(app);
   purchasingExtraRoutes(app);
   rollbackRoutes(app);
+  orderRoutes(app, deps.carrier ?? createCarrier(deps.config), deps.config.GHN_WEBHOOK_SECRET);
 
   app.openAPIRegistry.registerComponent('securitySchemes', 'session', { type: 'apiKey', in: 'cookie', name: '__Host-bms_sid' });
   app.doc31('/api/v1/openapi.json', { openapi: '3.1.0', info: { title: 'Bookstore Management System – staff API', version: '1.0.0' } });

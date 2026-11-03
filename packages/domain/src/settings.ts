@@ -45,11 +45,15 @@ export const SETTINGS = {
 
   // Orders, events, pre-orders, library (later releases; defaults registered now)
   'order.transfer_timeout_h': { schema: int(1, 720), default: 24 },
+  /** Review flags (BR-30): 0 turns the flag off. */
+  'order.review_high_value_vnd': { schema: int(0), default: 2000000 },
+  'order.review_failed_deliveries': { schema: int(0, 100), default: 2 },
   'event.hold_minutes': { schema: int(1, 1440), default: 60 },
   'event.waitlist_pay_hours': { schema: int(1, 168), default: 12 },
   'event.refund_cutoff_h': { schema: int(0, 720), default: 48 },
   'preorder.deposit_pct': { schema: int(0, 100), default: 30 },
   'preorder.hold_days': { schema: int(1, 90), default: 7 },
+  'contact_task.due_hours': { schema: int(1, 720), default: 24 },
   'library.loan_days': { schema: int(1, 365), default: 14 },
   'library.renewals': { schema: int(0, 20), default: 2 },
   'library.renewal_days': { schema: int(1, 365), default: 7 },
@@ -66,6 +70,8 @@ export const SETTINGS = {
   'web.stock_display': { schema: z.enum(['exact', 'few_left', 'in_out', 'hidden']), default: 'exact' },
   'web.stock_low_threshold': { schema: int(1, 1000), default: 5 },
   'web.bestseller_refresh_minutes': { schema: int(5, 1440), default: 60 },
+  /** Product page on the website, with {slug}; used by the share card (FR-SOC-04). */
+  'web.product_url': { schema: z.string().max(300), default: '' },
 
   // Integrations (secrets: write-only, masked, encrypted at rest – NFR-SEC-04)
   'einvoice.misa_username': { schema: z.string(), default: '', secret: true },

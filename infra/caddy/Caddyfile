@@ -9,7 +9,7 @@
 		-Server
 	}
 
-	@backend path /api/* /pos/v1/* /healthz
+	@backend path /api/* /pos/v1/* /webhooks/* /healthz
 	handle @backend {
 		reverse_proxy api:3000
 	}

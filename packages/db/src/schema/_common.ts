@@ -13,14 +13,23 @@ export const createdAt = () => ts().notNull().defaultNow();
 export const updatedAt = () => ts().notNull().defaultNow();
 export const version = () => integer().notNull().default(1);
 
-/** `CHECK (col IN (...))` generated from the same constant as the TypeScript type (TDD §5.1). */
-export function inList(column: AnyColumn | SQL, values: readonly string[]): SQL {
-  return sql`${column} in (${sql.join(
-    // Constant enum values from our own code, quoted and escaped – never user input.
+/** Constant enum values from our own code, quoted and escaped – never user input. */
+function quoted(values: readonly string[]): SQL {
+  return sql.join(
     // eslint-disable-next-line no-restricted-properties
     values.map((v) => sql.raw(`'${v.replace(/'/g, "''")}'`)),
     sql`, `,
-  )})`;
+  );
+}
+
+/** `CHECK (col IN (...))` generated from the same constant as the TypeScript type (TDD §5.1). */
+export function inList(column: AnyColumn | SQL, values: readonly string[]): SQL {
+  return sql`${column} in (${quoted(values)})`;
+}
+
+/** `CHECK (array_col <@ array[...])`: every element is one of the constant values. */
+export function allInList(column: AnyColumn | SQL, values: readonly string[]): SQL {
+  return sql`${column} <@ array[${quoted(values)}]::text[]`;
 }
 
 /** Bilingual website text (FR-WEB-22): English required, Vietnamese optional. */

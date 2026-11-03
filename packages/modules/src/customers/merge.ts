@@ -81,14 +81,23 @@ export async function merge(ctx: Ctx, targetId: string, sourceId: string) {
 // ---------------------------------------------------------------------------------------------
 // Purchase history (FR-CRM-03) and personal-data export (FR-CRM-08)
 
+/** Counter sales and online orders (R2a); an online order is a completed purchase once Done (BR-29). */
 async function purchaseRows(tx: Tx, customerId: string) {
-  return tx.execute<{ id: string; doc_no: string; sold_at: Date; channel: string; total_vnd: string; status: string; returns_vnd: string; points_earned: number }>(sql`
-    select s.id, s.doc_no, s.sold_at, s.channel, s.total_vnd, s.status, s.points_earned,
-           coalesce((select sum(r.refund_vnd) from sales.sale_return r where r.sale_id = s.id), 0) as returns_vnd
-    from sales.sale s where s.customer_id = ${customerId}::uuid order by s.sold_at desc, s.id desc`);
+  return tx.execute<{ id: string; kind: 'sale' | 'order'; doc_no: string; sold_at: Date; channel: string; total_vnd: string; status: string; returns_vnd: string; points_earned: number }>(sql`
+    select * from (
+      select s.id, 'sale' as kind, s.doc_no, s.sold_at, s.channel, s.total_vnd, s.status, s.points_earned,
+             coalesce((select sum(r.refund_vnd) from sales.sale_return r where r.sale_id = s.id), 0) as returns_vnd
+      from sales.sale s where s.customer_id = ${customerId}::uuid
+      union all
+      select o.id, 'order', o.doc_no, coalesce(o.done_at, o.created_at), o.source, o.total_vnd,
+             case when o.done_at is not null then 'completed' when o.status = 'cancelled' then 'cancelled' else 'open' end,
+             case when o.done_at is not null then o.points_earned else 0 end,
+             coalesce((select sum(r.refund_vnd) from orders.return_request r where r.order_id = o.id and r.status = 'received'), 0)
+      from orders.web_order o where o.customer_id = ${customerId}::uuid
+    ) p order by p.sold_at desc, p.id desc`);
 }
 
-/** Purchases across channels with totals; online orders, events and library join in R2–R4. */
+/** Purchases across channels with totals; events and library payments join in R3/R4. */
 export async function purchases(ctx: Ctx, customerId: string) {
   requirePermission(ctx, 'customer.view');
   const [c] = await ctx.db.select({ id: schema.customer.id }).from(schema.customer).where(eq(schema.customer.id, customerId));
@@ -96,6 +105,7 @@ export async function purchases(ctx: Ctx, customerId: string) {
   const rows = await purchaseRows(ctx.db, customerId);
   const items = rows.map((r) => ({
     id: r.id,
+    kind: r.kind,
     docNo: r.doc_no,
     soldAt: r.sold_at,
     channel: r.channel,

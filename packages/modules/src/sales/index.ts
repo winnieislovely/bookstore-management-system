@@ -441,7 +441,7 @@ function requestHash(body: unknown): string {
  * key with a different body is a 409. The key row is written in the business transaction, so a
  * concurrent duplicate fails on the primary key and then returns the stored result.
  */
-async function idempotent<T>(ctx: Ctx, key: string | undefined, body: unknown, run: (tx: Tx) => Promise<T>): Promise<T> {
+export async function idempotent<T>(ctx: Ctx, key: string | undefined, body: unknown, run: (tx: Tx) => Promise<T>): Promise<T> {
   if (!key) return ctx.db.transaction(run);
   const hash = requestHash(body);
   const stored = async () => {
@@ -490,17 +490,17 @@ async function useApprovals(tx: Tx, ctx: Ctx, priced: PriceCartResult, tokens: {
 }
 
 /** Deduct stock for a goods line; bundles deduct their components (FR-CAT-12, `bundle_use`). */
-export async function deductStock(tx: Tx, ctx: Ctx, saleId: string, variantId: string, qty: number, allowNegative: boolean): Promise<number> {
+export async function deductStock(tx: Tx, ctx: Ctx, saleId: string, variantId: string, qty: number, allowNegative: boolean, refType = 'sale'): Promise<number> {
   const components = await tx.select().from(schema.bundleComponent).where(eq(schema.bundleComponent.bundleVariantId, variantId)).orderBy(asc(schema.bundleComponent.componentVariantId));
   if (components.length) {
     let cost = 0;
     for (const c of components) {
-      const a = await inventory.apply(tx, ctx, { variantId: c.componentVariantId, type: 'bundle_use', qtyDelta: -(c.qty * qty), refType: 'sale', refId: saleId, force: allowNegative });
+      const a = await inventory.apply(tx, ctx, { variantId: c.componentVariantId, type: 'bundle_use', qtyDelta: -(c.qty * qty), refType, refId: saleId, force: allowNegative });
       cost += a.costVnd * c.qty;
     }
     return cost;
   }
-  const a = await inventory.apply(tx, ctx, { variantId, type: 'sale', qtyDelta: -qty, refType: 'sale', refId: saleId, force: allowNegative });
+  const a = await inventory.apply(tx, ctx, { variantId, type: 'sale', qtyDelta: -qty, refType, refId: saleId, force: allowNegative });
   return a.costVnd;
 }
 
@@ -811,7 +811,7 @@ async function requireOrApprove(tx: Tx, ctx: Ctx, permission: 'sale.void_paid' |
  * Reverse consignment allocations of a sale line for `qty` units, newest lot first. There is one
  * allocation row per sale line and lot (TDD §5.3); it is reduced, and removed when it reaches zero.
  */
-async function reverseConsignment(tx: Tx, saleLineId: string, qty: number) {
+export async function reverseConsignment(tx: Tx, saleLineId: string, qty: number) {
   const allocs = await tx
     .select()
     .from(schema.consignmentAllocation)
@@ -829,7 +829,7 @@ async function reverseConsignment(tx: Tx, saleLineId: string, qty: number) {
   }
 }
 
-async function restock(tx: Tx, ctx: Ctx, refType: string, refId: string, variantId: string, qty: number, unitCostVnd: number) {
+export async function restock(tx: Tx, ctx: Ctx, refType: string, refId: string, variantId: string, qty: number, unitCostVnd: number) {
   const components = await tx.select().from(schema.bundleComponent).where(eq(schema.bundleComponent.bundleVariantId, variantId));
   if (components.length) {
     for (const c of components) {

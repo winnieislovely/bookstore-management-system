@@ -170,7 +170,7 @@ export async function search(ctx: Ctx, input: z.input<typeof CustomerListQuery> 
     left join crm.tier t on t.id = c.tier_id
     left join lateral (
       select count(*)::int as orders, sum(s.total_vnd) as orders_vnd, max(s.sold_at) as last_at
-      from sales.sale s where s.customer_id = c.id and s.status = 'completed'
+      from reports.sale_doc s where s.customer_id = c.id
     ) st on true
     where ${and(...where)}
     order by c.name asc

@@ -10,6 +10,9 @@ export const DOC_SERIES = {
   CNT: 'KK',
   PO: 'PO',
   CST: 'KG',
+  ORD: 'DH',
+  PRE: 'DT',
+  SPO: 'DR',
 } as const;
 export type DocSeries = keyof typeof DOC_SERIES;
 
