@@ -23,6 +23,8 @@ interface Dashboard {
   today: Totals;
   bestsellers: { variantId: string; sku: string; title: string; units: number; grossVnd: number }[];
   lowStock?: { variantId: string; sku: string; title: string; available: number; minStock: number }[];
+  /** Overdue library loans, for users who lend (FR-RPT-01). */
+  overdueLoans: { loanId: string; title: string; code: string; customerName: string; customerPhone: string | null; dueAt: string; daysLate: number }[];
 }
 interface SalesRow {
   key: string;
@@ -430,6 +432,33 @@ export function DashboardPage() {
               ) : (
                 <p className="text-ink-500">{t('dashboard.noData')}</p>
               )}
+            </Card>
+          )}
+          {!!q.data?.overdueLoans.length && (
+            <Card title="Sách mượn quá hạn" className="col-span-12 lg:col-span-6">
+              <table className="w-full table-fixed text-sm">
+                <thead>
+                  <tr className="border-b border-paper-300">
+                    <th scope="col" className={th}>Sách</th>
+                    <th scope="col" className={th}>Người mượn</th>
+                    <th scope="col" className={`${th} w-24 text-right`}>Trễ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-paper-300">
+                  {q.data.overdueLoans.map((l) => (
+                    <tr key={l.loanId}>
+                      <td className="truncate py-2">{l.title}</td>
+                      <td className="truncate py-2">{l.customerName}</td>
+                      <td className="py-2 text-right num text-danger-700">{formatNumber(l.daysLate)} ngày</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="mt-4 flex justify-end">
+                <Button variant="tonal" size="sm" onClick={() => navigate('/library?tab=overdue')}>
+                  {t('dashboard.viewDetails')}
+                </Button>
+              </div>
             </Card>
           )}
         </div>

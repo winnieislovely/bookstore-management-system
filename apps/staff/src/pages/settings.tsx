@@ -20,7 +20,7 @@ interface Def {
   options?: [string, string][];
 }
 
-/** Release R1 settings, grouped and labelled; later-release parameters keep their defaults. */
+/** Settings grouped and labelled; parameters of releases not built yet keep their defaults. */
 const GROUPS: [string, Def[]][] = [
   [
     'Thông tin cửa hàng',
@@ -64,6 +64,24 @@ const GROUPS: [string, Def[]][] = [
       { key: 'loyalty.expiry_months', label: 'Điểm hết hạn sau', kind: 'int', helper: 'tháng' },
       { key: 'loyalty.tier_silver_vnd', label: 'Hạng Bạc khi chi tiêu 12 tháng từ', kind: 'vnd' },
       { key: 'loyalty.tier_gold_vnd', label: 'Hạng Vàng khi chi tiêu 12 tháng từ', kind: 'vnd' },
+    ],
+  ],
+  [
+    // Library rules (BR-13, FR-LIB-06, FR-LIB-18).
+    'Thư viện',
+    [
+      { key: 'library.loan_fee_vnd', label: 'Phí mượn mỗi cuốn mỗi kỳ', kind: 'vnd' },
+      { key: 'library.loan_days', label: 'Một kỳ mượn', kind: 'int', helper: 'ngày' },
+      { key: 'library.renewals', label: 'Số lần gia hạn tối đa', kind: 'int', helper: 'lần, mỗi lần thêm một kỳ và một lần phí' },
+      { key: 'library.max_loans', label: 'Mượn tối đa cùng lúc', kind: 'int', helper: 'cuốn' },
+      { key: 'library.fine_per_day_vnd', label: 'Phí trả trễ mỗi cuốn mỗi ngày', kind: 'vnd' },
+      { key: 'library.grace_days', label: 'Số ngày trễ không tính phí', kind: 'int', helper: 'ngày' },
+      { key: 'library.lost_fee_vnd', label: 'Phí xử lý khi mất hoặc hỏng sách', kind: 'vnd' },
+      { key: 'library.remind_days', label: 'Nhắc nhân viên gọi trước hạn trả', kind: 'int', helper: 'ngày' },
+      { key: 'library.hold_days', label: 'Giữ sách cho người đặt trước', kind: 'int', helper: 'ngày' },
+      { key: 'library.fee_discount_spend_vnd', label: 'Giảm phí mượn khi khách đã mua từ', kind: 'vnd' },
+      { key: 'library.fee_discount_pct', label: 'Mức giảm phí mượn', kind: 'int', helper: '%; 0 là không giảm' },
+      { key: 'library.vat_bp', label: 'Thuế GTGT trên phí thư viện', kind: 'percent' },
     ],
   ],
   [

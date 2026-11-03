@@ -144,6 +144,8 @@ export interface SaleInput {
   items: Map<string, CachedItem>;
   /** Collecting a pre-order (FR-POS-09): needs the server. */
   preorderId?: string | null;
+  /** Library charges paid with this sale (FR-POS-08): need the server. */
+  libraryChargeIds?: string[];
 }
 
 export interface SaleOutcome {
@@ -164,6 +166,8 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
     if (s) await saveShift({ ...s, cashSalesVnd: s.cashSalesVnd + cashVnd });
   };
   if (input.preorderId && !input.shift.serverId) throw new ApiError(0, 'network_error', 'Cần kết nối mạng để nhận hàng đặt trước.');
+  const needsServer = input.libraryChargeIds?.length ? 'Cần kết nối mạng để thu phí thư viện.' : null;
+  if (needsServer && !input.shift.serverId) throw new ApiError(0, 'network_error', needsServer);
   if (input.shift.serverId) {
     try {
       const approvals = Object.fromEntries(input.approvals.filter((a) => a.token).map((a) => [a.action, a.token!]));
@@ -180,6 +184,7 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
           approvals,
           payments: input.payments.map((p) => (p.method === 'cash' ? { method: 'cash', amountVnd: p.amountVnd, tenderedVnd: p.tenderedVnd } : p)),
           ...(input.preorderId && { preorderId: input.preorderId }),
+          ...(input.libraryChargeIds?.length && { libraryChargeIds: input.libraryChargeIds }),
         }),
       }).catch(() => {
         throw new ApiError(0, 'network_error', '');
@@ -190,6 +195,7 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
       return { docNo: body.docNo, saleId: body.id, totalVnd: body.totalVnd, changeVnd, pointsEarned: body.pointsEarned, offline: false, printSlip: body.printSlip };
     } catch (e) {
       if (input.preorderId && isNetworkError(e)) throw new ApiError(0, 'network_error', 'Cần kết nối mạng để nhận hàng đặt trước.');
+      if (needsServer && isNetworkError(e)) throw new ApiError(0, 'network_error', needsServer);
       if (!isNetworkError(e) || !(await deviceInfo())) throw e;
     }
   }

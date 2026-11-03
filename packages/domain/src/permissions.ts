@@ -50,8 +50,8 @@ export const PERMISSIONS = {
   'event.refund': 'Hoàn tiền và chi phí sự kiện',
   // Library (R4)
   'library.manage': 'Danh mục thư viện',
-  'library.lend': 'Thành viên, mượn, trả',
-  'library.fine_waive': 'Miễn phí phạt, hoàn cọc',
+  'library.lend': 'Mượn, trả, gia hạn',
+  'library.fine_waive': 'Miễn phí phạt và khoản thu thư viện',
   // Website (R2)
   'web.content.view': 'Xem nội dung website',
   'web.content.edit': 'Sửa nội dung website',

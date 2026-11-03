@@ -15,6 +15,9 @@ export const CUSTOMER_REFS: { table: string; column: string; mode: 'move' | 'led
   { table: 'crm.customer_tier_history', column: 'customer_id', mode: 'move' },
   { table: 'crm.promotion_usage', column: 'customer_id', mode: 'move' },
   { table: 'sales.sale', column: 'customer_id', mode: 'move' },
+  { table: 'library.loan', column: 'customer_id', mode: 'move' },
+  { table: 'library.lib_reservation', column: 'customer_id', mode: 'move' },
+  { table: 'library.lib_charge', column: 'customer_id', mode: 'move' },
   { table: 'crm.points_ledger', column: 'customer_id', mode: 'ledger' },
   { table: 'crm.store_credit_ledger', column: 'customer_id', mode: 'ledger' },
   { table: 'crm.customer', column: 'merged_into', mode: 'self' },
@@ -97,7 +100,7 @@ async function purchaseRows(tx: Tx, customerId: string) {
     ) p order by p.sold_at desc, p.id desc`);
 }
 
-/** Purchases across channels with totals; events and library payments join in R3/R4. */
+/** Purchases across channels with totals; library payments are sale lines (FR-CRM-03); events join in R3. */
 export async function purchases(ctx: Ctx, customerId: string) {
   requirePermission(ctx, 'customer.view');
   const [c] = await ctx.db.select({ id: schema.customer.id }).from(schema.customer).where(eq(schema.customer.id, customerId));

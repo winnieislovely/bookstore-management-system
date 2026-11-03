@@ -6,6 +6,7 @@ import { csrf, errorHandler, limitBody, requestContext, securityHeaders, session
 import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
 import { importRoutes } from './routes/imports.js';
+import { libraryRoutes } from './routes/library.js';
 import { moreRoutes, purchasingExtraRoutes, rollbackRoutes } from './routes/more.js';
 import { offlineRoutes } from './routes/offline.js';
 import { orderRoutes } from './routes/orders.js';
@@ -41,6 +42,7 @@ export function createApp(deps: Deps): OpenAPIHono<AppEnv> {
   moreRoutes(app);
   purchasingExtraRoutes(app);
   rollbackRoutes(app);
+  libraryRoutes(app);
   orderRoutes(app, deps.carrier ?? createCarrier(deps.config), deps.config.GHN_WEBHOOK_SECRET);
 
   app.openAPIRegistry.registerComponent('securitySchemes', 'session', { type: 'apiKey', in: 'cookie', name: '__Host-bms_sid' });

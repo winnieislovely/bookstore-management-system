@@ -2,6 +2,7 @@ import { schema } from '@bookstore/db';
 import { sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
+import * as library from '../library/index.js';
 import { AppError, can, errors, randomToken, requirePermission, sha256, tsParam, type Ctx } from '../platform/index.js';
 import { writeTable } from '../imports/index.js';
 
@@ -96,9 +97,9 @@ export async function dashboard(ctx: Ctx) {
     today: dayT,
     bestsellers: bestsellers.map((b) => ({ variantId: b.variant_id, sku: b.sku, title: b.title, units: b.units, grossVnd: n(b.gross) })),
     ...(lowStock && { lowStock: lowStock.map((l) => ({ variantId: l.variant_id, sku: l.sku, title: l.title, available: l.available, minStock: l.min_stock })) }),
-    // Events (R3) and library (R4) lists join the dashboard in their releases.
+    // Events (R3) join the dashboard in their release.
     upcomingEvents: [],
-    overdueLoans: [],
+    overdueLoans: can(actor, 'library.lend') ? await library.overdueForDashboard(ctx.db, ctx.clock.now()) : [],
   };
 }
 
@@ -528,6 +529,11 @@ export async function badges(ctx: Ctx) {
   if (can(ctx.actor, 'sale.create')) {
     const [h] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.preorder where status = 'contacted' and expires_at < ${tsParam(ctx.clock.now())}`);
     out.holdsOverdue = h!.n;
+  }
+  // Library loans past their due date, on Mượn / trả (FR-LIB-14).
+  if (can(ctx.actor, 'library.lend')) {
+    const [l] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from library.loan where returned_at is null and due_at < ${tsParam(ctx.clock.now())}`);
+    out.libraryOverdue = l!.n;
   }
   return out;
 }

@@ -137,7 +137,8 @@ export const sale = sales.table(
   ],
 );
 
-export const ITEM_CLASSES = ['goods', 'event_ticket', 'library_deposit', 'library_fine', 'library_charge'] as const;
+/** Library loan fees, late fees and lost/damage charges are `library_charge` service lines (FR-POS-08). */
+export const ITEM_CLASSES = ['goods', 'event_ticket', 'library_charge'] as const;
 
 export const saleLine = sales.table(
   'sale_line',

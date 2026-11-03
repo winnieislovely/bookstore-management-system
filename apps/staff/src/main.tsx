@@ -18,6 +18,7 @@ import { AuditPage, DevicesPage, RolesPage, UsersPage } from './pages/admin';
 import { ConsignmentPage } from './pages/consignment';
 import { CountDetailPage, CountsPage } from './pages/counts';
 import { CustomerDetailPage, CustomersPage } from './pages/customers';
+import { LibraryCatalogPage, LibraryDeskPage, LibraryReportPage, LibraryTitlePage } from './pages/library';
 import { CodPage } from './pages/holds';
 import { OrderDetailPage, OrderNewPage, OrdersPage } from './pages/orders';
 import { ProductDetailPage } from './pages/productDetail';
@@ -98,6 +99,9 @@ const BUILT: Record<string, ReactNode> = {
   '/reports/sales': <SalesReportsPage />,
   '/reports/inventory': <InventoryReportsPage />,
   '/reports/tax': <TaxReportsPage />,
+  '/library': <LibraryDeskPage />,
+  '/library/catalog': <LibraryCatalogPage />,
+  '/reports/library': <LibraryReportPage />,
   '/settings': <SettingsPage />,
   '/import': <ImportPage />,
   '/devices': <DevicesPage />,
@@ -120,6 +124,7 @@ const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   // One page per report area now (Design §12.6); the old link opens sales.
   { path: 'reports', anyOf: ['report.view'], element: <Navigate to="/reports/sales" replace /> },
   { path: 'counts/:id', anyOf: ['inventory.count'], element: <CountDetailPage /> },
+  { path: 'library/titles/:id', anyOf: ['library.manage', 'library.lend'], element: <LibraryTitlePage /> },
 ];
 
 const router = createBrowserRouter([

@@ -148,12 +148,12 @@ describe('priceCart', () => {
     expect(r.pointsToEarn).toBe(11); // 110.200 / 10.000
   });
 
-  it('event tickets, deposits and fines earn no points; deposits are never discounted', () => {
+  it('event tickets and library charges earn no points; library charges are never discounted', () => {
     const customer = { tierCode: 'gold', tierDiscountBp: 1000, pointsMultiplierBp: 10000, pointsBalance: 0 };
     const r = run({
       customer,
       lines: [
-        { lineId: 'd', variantId: 'svc-deposit', itemClass: 'library_deposit', categoryIds: [], qty: 1, unitPriceVnd: vnd(200000), vatBp: 0 },
+        { lineId: 'd', variantId: 'svc-library', itemClass: 'library_charge', categoryIds: [], qty: 1, unitPriceVnd: vnd(200000), vatBp: 0 },
         { lineId: 't', variantId: 'svc-ticket', itemClass: 'event_ticket', categoryIds: [], qty: 1, unitPriceVnd: vnd(100000), vatBp: 0 },
       ],
       promotions: [promo('o', { type: 'percent', percentBp: 1000, scope: { kind: 'order' } })],

@@ -9,6 +9,7 @@ import {
   PAYMENT_REF_ALPHABET,
   PAYMENT_REF_LENGTH,
   pointsToReverse,
+  vatIncluded,
   priceCart,
   vnd,
   type CartLineInput,
@@ -21,6 +22,7 @@ import * as audit from '../audit/index.js';
 import * as customers from '../customers/index.js';
 import * as identity from '../identity/index.js';
 import * as inventory from '../inventory/index.js';
+import * as library from '../library/index.js';
 import * as notifications from '../notifications/index.js';
 import * as promotions from '../promotions/index.js';
 import * as settings from '../settings/index.js';
@@ -293,6 +295,7 @@ interface VariantInfo {
 }
 
 async function loadVariants(tx: Tx, ids: string[]): Promise<Map<string, VariantInfo>> {
+  if (!ids.length) return new Map();
   const rows = await tx.execute<{
     id: string;
     item_id: string;
@@ -423,6 +426,8 @@ export const BuyerSchema = z.object({
 });
 
 export const CompleteSaleSchema = CartSchema.extend({
+  /** A sale may carry only library charges (FR-POS-08). */
+  lines: z.array(CartLineSchema).max(200),
   shiftId: z.uuid(),
   payments: z.array(PaymentInputSchema).max(10),
   /** Part-payment (deposit, FR-POS-06). */
@@ -436,7 +441,9 @@ export const CompleteSaleSchema = CartSchema.extend({
   einvoiceRequest: BuyerSchema.optional(),
   /** Collecting a pre-order: its line at the agreed price, the deposit counted as paid (FR-POS-09). */
   preorderId: z.uuid().optional(),
-});
+  /** Unpaid library charges of the customer, sold as service lines (FR-POS-08, TDD §4.8). */
+  libraryChargeIds: z.array(z.uuid()).max(50).default([]),
+}).refine((d) => d.lines.length > 0 || d.libraryChargeIds.length > 0, { message: 'Giỏ hàng đang trống.', path: ['lines'] });
 export type CompleteSaleInput = z.input<typeof CompleteSaleSchema>;
 
 function requestHash(body: unknown): string {
@@ -558,11 +565,17 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
       throw new AppError(422, 'pricing_issue', 'Không áp dụng được mã giảm giá hoặc điểm. Hãy kiểm tra lại rồi thử lại.', priced.issues);
     }
     const approvedBy = await useApprovals(tx, ctx, priced, data.approvals);
+    // Library charges: never discounted, no points, VAT at `library.vat_bp` (BR-07, BR-14).
+    const charges = await library.chargesForSale(tx, data.customerId, data.libraryChargeIds);
+    if (charges.length && data.isDeposit) throw new AppError(422, 'library_charge_deposit', 'Phí thư viện cần thu đủ, không thu một phần.');
+    const chargesVnd = charges.reduce((a, c) => a + c.amountVnd, 0);
+    const chargesVatVnd = charges.reduce((a, c) => a + vatIncluded(vnd(c.amountVnd), cfg['library.vat_bp']), 0);
+    const totalVnd = priced.totalVnd + chargesVnd;
 
     // Payments: sum equals the total, unless this is a deposit sale (TDD §4.4). A pre-order deposit counts as paid.
     const paid = data.payments.reduce((a, p) => a + p.amountVnd, 0) + (pre?.depositVnd ?? 0);
-    if (data.isDeposit ? paid <= 0 || paid > priced.totalVnd : paid !== priced.totalVnd) {
-      throw new AppError(422, 'payment_mismatch', `Tổng thanh toán ${paid} ₫ chưa khớp với số phải trả ${priced.totalVnd} ₫.`, { paidVnd: paid, totalVnd: priced.totalVnd });
+    if (data.isDeposit ? paid <= 0 || paid > totalVnd : paid !== totalVnd) {
+      throw new AppError(422, 'payment_mismatch', `Tổng thanh toán ${paid} ₫ chưa khớp với số phải trả ${totalVnd} ₫.`, { paidVnd: paid, totalVnd });
     }
     for (const p of data.payments) {
       if (p.method === 'cash' && p.tenderedVnd !== undefined && p.tenderedVnd < p.amountVnd) {
@@ -580,13 +593,13 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
         shiftId: shift.id,
         cashierId: actor.userId,
         customerId: data.customerId ?? null,
-        subtotalVnd: priced.subtotalVnd,
+        subtotalVnd: priced.subtotalVnd + chargesVnd,
         discountVnd: priced.discountVnd,
         pointsRedeemed: priced.redeemPoints,
         pointsDiscountVnd: priced.redeemValueVnd,
         pointsEarned,
-        totalVnd: priced.totalVnd,
-        vatVnd: priced.vatVnd,
+        totalVnd,
+        vatVnd: priced.vatVnd + chargesVatVnd,
         isDeposit: data.isDeposit,
         soldAt: now,
         note: data.note ?? null,
@@ -626,6 +639,22 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
       // Consignors are paid on the selling price before store discounts (TDD §4.3).
       await allocateConsignment(tx, row!.id, l.variantId, l.qty, l.unitPriceVnd, now);
     }
+    for (const [i, c] of charges.entries()) {
+      await tx.insert(schema.saleLine).values({
+        saleId,
+        lineNo: priced.lines.length + i + 1,
+        variantId: null,
+        itemClass: 'library_charge',
+        description: c.description,
+        serviceRef: { libChargeId: c.id, kind: c.kind },
+        qty: 1,
+        unitPriceVnd: c.amountVnd,
+        totalVnd: c.amountVnd,
+        vatBp: cfg['library.vat_bp'],
+        vatVnd: vatIncluded(vnd(c.amountVnd), cfg['library.vat_bp']),
+      });
+    }
+    await library.markChargesPaid(tx, charges.map((c) => c.id), saleId, now);
 
     for (const p of data.payments) {
       await tx.insert(schema.salePayment).values({
@@ -681,14 +710,14 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
       einvoiceStatus = 'pending';
     }
 
-    await emit(tx, 'sale.completed', { saleId, customerId: data.customerId ?? null, totalVnd: priced.totalVnd });
+    await emit(tx, 'sale.completed', { saleId, customerId: data.customerId ?? null, totalVnd });
     const tendered = data.payments.reduce((a, p) => a + (p.method === 'cash' ? (p.tenderedVnd ?? p.amountVnd) - p.amountVnd : 0), 0);
     return {
       id: saleId,
       docNo,
-      totalVnd: priced.totalVnd,
+      totalVnd,
       discountVnd: priced.discountVnd,
-      vatVnd: priced.vatVnd,
+      vatVnd: priced.vatVnd + chargesVatVnd,
       changeVnd: tendered,
       pointsEarned,
       pointsRedeemed: priced.redeemPoints,
@@ -904,6 +933,8 @@ export async function voidSale(ctx: Ctx, saleId: string, input: z.input<typeof V
         await tx.insert(schema.cashMovement).values({ shiftId: current.id, direction: 'out', amountVnd: Number(cash!.total), reason: `Hủy đơn ${s.docNo}`, createdBy: ctx.actor!.userId, at: now });
       }
     }
+    // Library charges paid by this sale are owed again (FR-POS-08).
+    await library.unpayForVoid(tx, saleId);
     await tx.update(schema.sale).set({ status: 'voided', voidedBy: ctx.actor!.userId, voidedAt: now, voidReason: data.reason, approvedBy: approver }).where(eq(schema.sale.id, saleId));
     // An unissued invoice is withdrawn; an issued one is cancelled by the worker (TDD §8.3).
     await tx
@@ -980,6 +1011,7 @@ export async function returnSaleTx(tx: Tx, ctx: Ctx, saleId: string, data: z.inf
   for (const r of data.lines) {
     const line = saleLines.find((l) => l.id === r.saleLineId);
     if (!line) throw new AppError(400, 'line_not_in_sale', 'Dòng hàng không thuộc đơn này.');
+    if (line.itemClass === 'library_charge') throw new AppError(422, 'not_returnable', 'Phí thư viện không trả lại được. Nếu thu nhầm, hãy hủy đơn hoặc nhờ quản lý miễn phí.');
     const done = priorQty(line.id);
     if (done + r.qty > line.qty) {
       throw new AppError(422, 'return_exceeds_sold', `Chỉ còn ${line.qty - done} sản phẩm '${line.description}' có thể trả.`);

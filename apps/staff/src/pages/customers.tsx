@@ -10,6 +10,7 @@ import { ApiError, get, patch, post } from '../lib/api';
 import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { can, useMe } from '../lib/session';
 import { Dialog } from '../pos/widgets';
+import { CustomerLibrarySection } from './library';
 
 /** Customers and loyalty points (FR-CRM-01..09, Design §12.1, §12.3). */
 
@@ -318,6 +319,7 @@ export function CustomerDetailPage() {
             rows={x.pointsLedger.map((l) => ({ id: l.id, at: l.at, reason: REASON[l.reason] ?? l.reason, note: l.note, amount: `${l.delta > 0 ? '+' : ''}${formatNumber(l.delta)}`, extra: l.expiresAt ? `Hết hạn ${formatDate(l.expiresAt)}` : null }))}
             action={!erased && can(me, 'customer.adjust_points') && <Button variant="tonal" size="sm" onClick={() => setDialog('points')}>Điều chỉnh điểm</Button>}
           />
+          {(can(me, 'library.lend') || can(me, 'library.manage')) && <CustomerLibrarySection customerId={x.id} />}
         </div>
         <div className="flex flex-col gap-6">
           <Card title="Hồ sơ">

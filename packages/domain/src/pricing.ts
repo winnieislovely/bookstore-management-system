@@ -20,14 +20,12 @@ import { vatIncluded } from './vat.js';
  *      point-earning lines
  */
 
-/** Item classes; event tickets, deposits and fines earn no points (FR-CRM-04, BR-07). */
-export type ItemClass = 'goods' | 'event_ticket' | 'library_deposit' | 'library_fine' | 'library_charge';
+/** Item classes; event tickets and library charges earn no points (FR-CRM-04, BR-07). */
+export type ItemClass = 'goods' | 'event_ticket' | 'library_charge';
 
 const EARNS_POINTS: Record<ItemClass, boolean> = {
   goods: true,
   event_ticket: false,
-  library_deposit: false,
-  library_fine: false,
   library_charge: false,
 };
 
@@ -35,8 +33,6 @@ const EARNS_POINTS: Record<ItemClass, boolean> = {
 const DISCOUNTABLE: Record<ItemClass, boolean> = {
   goods: true,
   event_ticket: true,
-  library_deposit: false,
-  library_fine: false,
   library_charge: false,
 };
 

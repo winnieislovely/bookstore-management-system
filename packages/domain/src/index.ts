@@ -15,3 +15,4 @@ export * from './state-machines.js';
 export * from './docno.js';
 export * from './barcode.js';
 export * from './orders.js';
+export * from './library.js';

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { AlertOctagon, AlertTriangle, Bell, LogOut, Menu, WifiOff, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router';
+import { Link, NavLink, Outlet, useLocation } from 'react-router';
 import { get, post } from '../lib/api';
 import { formatRelative, formatVnd } from '../lib/format';
 import { t } from '../lib/i18n';
@@ -43,6 +43,8 @@ function Sidebar({ groups, badges, rail, onNavigate }: { groups: NavGroup[]; bad
                   <li key={item.path}>
                     <NavLink
                       to={item.path}
+                      // Mượn / trả stays unlit on the library pages below it.
+                      end={item.path === '/library'}
                       onClick={onNavigate}
                       title={rail ? t(item.label) : undefined}
                       className={({ isActive }) =>
@@ -112,6 +114,8 @@ function notificationTitle(n: NotificationItem): string {
       return t(v.problem === 'wal_lagging' ? 'notify.backup.walLagging' : 'notify.backup.stale');
     case 'consignment.deadline':
       return t('notify.consignment.deadline', { sku: String(v.sku ?? '') });
+    case 'library.loans_to_call':
+      return t('notify.library.loansToCall', { overdue: String(v.overdue ?? 0), dueSoon: String(v.dueSoon ?? 0) });
     default:
       return n.template;
   }
@@ -174,7 +178,14 @@ function NotificationBell() {
                         <li key={n.id} className={clsx('flex gap-3 px-4 py-3', !n.readAt && 'bg-sand-50')}>
                           {n.template === 'einvoice.failed' ? <AlertOctagon size={20} className="shrink-0 text-danger-700" aria-hidden /> : <AlertTriangle size={20} className="shrink-0 text-warning-700" aria-hidden />}
                           <div className="min-w-0 flex-1">
-                            <p className="font-semibold">{notificationTitle(n)}</p>
+                            {n.template === 'library.loans_to_call' ? (
+                              // Opens the list to call (FR-LIB-14).
+                              <Link to={`/library?tab=${Number(n.vars.overdue ?? 0) > 0 ? 'overdue' : 'due_soon'}`} className="font-semibold hover:underline" onClick={() => setOpen(false)}>
+                                {notificationTitle(n)}
+                              </Link>
+                            ) : (
+                              <p className="font-semibold">{notificationTitle(n)}</p>
+                            )}
                             <p className="text-xs text-ink-500">{formatRelative(n.createdAt)}</p>
                           </div>
                           {!n.readAt && <span className="mt-2 size-2 shrink-0 rounded-full bg-navy-700" aria-label="Chưa đọc" />}

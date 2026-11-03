@@ -53,14 +53,23 @@ export const SETTINGS = {
   'event.refund_cutoff_h': { schema: int(0, 720), default: 48 },
   'preorder.deposit_pct': { schema: int(0, 100), default: 30 },
   'preorder.hold_days': { schema: int(1, 90), default: 7 },
-  'library.loan_days': { schema: int(1, 365), default: 14 },
+  // Library (BR-13, FR-LIB-06): a renewal adds another loan period and another loan fee.
+  'library.loan_fee_vnd': { schema: int(0), default: 50000 },
+  'library.loan_days': { schema: int(1, 365), default: 30 },
   'library.renewals': { schema: int(0, 20), default: 2 },
-  'library.renewal_days': { schema: int(1, 365), default: 7 },
   'library.max_loans': { schema: int(1, 100), default: 3 },
-  'library.deposit_vnd': { schema: int(0), default: 200000 },
   'library.fine_per_day_vnd': { schema: int(0), default: 2000 },
   'library.grace_days': { schema: int(0, 30), default: 0 },
   'library.lost_fee_vnd': { schema: int(0), default: 20000 },
+  'library.remind_days': { schema: int(0, 30), default: 3 },
+  'library.hold_days': { schema: int(1, 30), default: 3 },
+  /** Loan-fee discount for buyers (FR-LIB-18); 0 % turns it off. */
+  'library.fee_discount_spend_vnd': { schema: int(0), default: 5000000 },
+  'library.fee_discount_pct': { schema: int(0, 100), default: 10 },
+  /** VAT rate on library fees and charges (VAT-inclusive, BR-02). */
+  'library.vat_bp': { schema: z.union([z.literal(0), z.literal(500), z.literal(800), z.literal(1000)]), default: 0 },
+  /** No deposit (FR-LIB-09); the deposit ledger is built if the policy changes. */
+  'library.deposit_vnd': { schema: int(0), default: 0 },
   'hr.ot_multiplier_weekday_bp': { schema: int(10000, 100000), default: 15000 },
   'hr.ot_multiplier_rest_bp': { schema: int(10000, 100000), default: 20000 },
   'hr.ot_multiplier_holiday_bp': { schema: int(10000, 100000), default: 30000 },

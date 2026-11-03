@@ -2,6 +2,7 @@ import { createDb } from '@bookstore/db';
 import { MockEInvoiceAdapter, type EInvoiceAdapter } from '@bookstore/modules/integrations/einvoice';
 import { createCarrier } from '@bookstore/modules/integrations/ghn';
 import * as jobs from '@bookstore/modules/jobs';
+import * as library from '@bookstore/modules/library';
 import * as orders from '@bookstore/modules/orders';
 import { createFieldCrypto, systemClock, type Ctx } from '@bookstore/modules/platform';
 import * as system from '@bookstore/modules/system';
@@ -65,6 +66,9 @@ const JOBS: { name: string; cron: string; run: () => Promise<unknown> }[] = [
   { name: 'ghn.poll', cron: '*/3 * * * *', run: () => orders.pollShipments(ctx(), carrier) },
   { name: 'geo.refresh', cron: '0 3 * * *', run: () => orders.refreshGeo(ctx(), carrier) },
   { name: 'preorder.expire', cron: '0 8 * * *', run: () => orders.notifyExpiredHolds(ctx()) },
+  // Library (TDD §9.1): staff are reminded in-app, no email (FR-LIB-14); uncollected holds expire (FR-LIB-13).
+  { name: 'library.reminders', cron: '0 8 * * *', run: () => library.remindLoans(ctx()) },
+  { name: 'library.reservation_expire', cron: '20 * * * *', run: () => library.expireHolds(ctx()) },
 ];
 
 async function main() {

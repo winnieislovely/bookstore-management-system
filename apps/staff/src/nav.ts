@@ -3,7 +3,9 @@ import {
   BookOpen,
   Boxes,
   Building2,
+  ArrowLeftRight,
   ClipboardList,
+  Library,
   Handshake,
   Landmark,
   LayoutDashboard,
@@ -25,7 +27,7 @@ import type { MessageKey } from './lib/i18n';
 
 /**
  * Navigation map (SRS Appendix C, Design Appendix A). Items appear only with permission (FR-ADM-03).
- * Groups for later releases (Events, Library, Website, HR) join with them.
+ * Groups for later releases (Events, Website, HR) join with them.
  */
 export interface NavItem {
   path: string;
@@ -55,6 +57,13 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
+    label: 'nav.group.library',
+    items: [
+      { path: '/library', label: 'nav.libraryDesk', icon: ArrowLeftRight, anyOf: ['library.lend'], badge: 'libraryOverdue' },
+      { path: '/library/catalog', label: 'nav.libraryCatalog', icon: Library, anyOf: ['library.manage', 'library.lend'] },
+    ],
+  },
+  {
     label: 'nav.group.catalog',
     items: [
       { path: '/products', label: 'nav.products', icon: BookOpen, anyOf: ['catalog.view'] },
@@ -78,6 +87,7 @@ export const NAV: NavGroup[] = [
       { path: '/reports/sales', label: 'nav.reportsSales', icon: TrendingUp, anyOf: ['report.view'] },
       { path: '/reports/inventory', label: 'nav.reportsInventory', icon: Boxes, anyOf: ['report.view'] },
       { path: '/reports/tax', label: 'nav.reportsTax', icon: Landmark, anyOf: ['report.view'] },
+      { path: '/reports/library', label: 'nav.reportsLibrary', icon: Library, anyOf: ['report.view'] },
     ],
   },
   {

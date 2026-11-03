@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, Check, Info, LogOut, Menu, Minus, MoreHorizontal, Plus, RefreshCw, ScanBarcode, ShoppingCart, Ticket, User, Wallet, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, Check, Info, Library, LogOut, Menu, Minus, MoreHorizontal, Plus, RefreshCw, ScanBarcode, ShoppingCart, Ticket, User, Wallet, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Button, Field, InlineAlert, Skeleton } from '../components/ui';
@@ -8,7 +8,7 @@ import { get } from '../lib/api';
 import { formatDateTime, formatNumber, formatVnd } from '../lib/format';
 import { can, useMe, type Me } from '../lib/session';
 import { cashMovement, closeShift, completeSale, expectedCash, openShift, refreshShift, type LocalShift, type Payment, type SaleOutcome } from './actions';
-import { findByCode, isPreorderLine, priceLocally, searchItems, useCart, type CartApproval, type PricedCart } from './cart';
+import { findByCode, isPreorderLine, priceLocally, searchItems, useCart, type CartApproval, type CartLibraryCharge, type PricedCart } from './cart';
 import { db, kvGet, kvSet, type CachedItem } from './db';
 import { deviceInfo, registerDevice, type DeviceInfo } from './device';
 import { ApprovalDialog, CloseShiftDialog, CustomerDialog, LineDialog, PaymentSheet, SaleDone } from './dialogs';
@@ -257,7 +257,15 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     return () => {
       live = false;
     };
-  }, [cart.lines, cart.customer, cart.couponCode, cart.redeemPoints, cart.preorder, grants]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cart.lines, cart.customer, cart.couponCode, cart.redeemPoints, cart.preorder, cart.libraryCharges.length > 0, grants]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Unpaid library charges of the attached customer, offered under the customer (FR-POS-08, Design §13.1).
+  const libraryOwed = useQuery({
+    queryKey: ['library-charges', cart.customer?.id],
+    enabled: status.online && !!cart.customer && !cart.preorder,
+    queryFn: () => get<{ items: CartLibraryCharge[]; totalVnd: number }>(`/api/v1/customers/${cart.customer!.id}/library-charges`),
+  });
+  const owedNotInCart = (libraryOwed.data?.items ?? []).filter((c) => !cart.libraryCharges.some((x) => x.id === c.id));
 
   // Live search as you type; Enter adds an exact code (scanner) or the single result.
   useEffect(() => {
@@ -291,7 +299,9 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   };
 
   const lines = priced?.result.lines ?? [];
-  const total = priced?.result.totalVnd ?? 0;
+  const libraryVnd = cart.libraryCharges.reduce((a, c) => a + c.amountVnd, 0);
+  const total = (priced?.result.totalVnd ?? 0) + libraryVnd;
+  const cartEmpty = !cart.lines.length && !cart.libraryCharges.length;
 
   /** Xác nhận: approvals first, then the payment sheet. */
   const confirm = () => {
@@ -314,10 +324,11 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
 
   const pay = async (payments: Payment[]) => {
     const outcome = await completeSale(
-      { shift, cashierId: me.id, lines: cart.lines, customer: cart.customer, couponCode: cart.couponCode, redeemPoints: cart.redeemPoints, approvals: cart.approvals, payments, priced: priced!.result, items: priced!.items, preorderId: cart.preorder?.id ?? null },
+      { shift, cashierId: me.id, lines: cart.lines, customer: cart.customer, couponCode: cart.couponCode, redeemPoints: cart.redeemPoints, approvals: cart.approvals, payments, priced: priced!.result, items: priced!.items, preorderId: cart.preorder?.id ?? null, libraryChargeIds: cart.libraryCharges.map((c) => c.id) },
       saleKey.current,
     );
     setDialog({ kind: 'done', outcome });
+    if (cart.libraryCharges.length) void libraryOwed.refetch();
   };
 
   const newSale = () => {
@@ -423,6 +434,17 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
       </li>
     );
   });
+  // Library charges: service lines without a stepper, never discounted (FR-POS-08).
+  const chargeLines = cart.libraryCharges.map((c) => (
+    <li key={c.id} className="flex items-start gap-2 px-4 py-3">
+      <Library size={18} className="mt-0.5 shrink-0 text-ink-500" aria-hidden />
+      <p className="min-w-0 flex-1 text-sm font-semibold">{c.description}</p>
+      <span className="font-semibold whitespace-nowrap num">{formatVnd(c.amountVnd)}</span>
+      <button type="button" className="-my-2 inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-50" aria-label="Bỏ khoản phí khỏi giỏ" onClick={() => cart.removeLibraryCharge(c.id)}>
+        <X size={16} aria-hidden />
+      </button>
+    </li>
+  ));
   const searching = results.length > 0 || q.trim().length >= 2;
 
   const cartPanel = (
@@ -452,20 +474,32 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             Thêm khách
           </Button>
         )}
+        {owedNotInCart.length > 0 && (
+          <div className="mt-3 flex items-center gap-3 rounded-md bg-sand-50 px-3 py-2 text-sm">
+            <Library size={18} className="shrink-0 text-ink-700" aria-hidden />
+            <p className="min-w-0 flex-1">
+              Còn {owedNotInCart.length} khoản phí thư viện chưa thu – <span className="font-semibold num">{formatVnd(owedNotInCart.reduce((a, c) => a + c.amountVnd, 0))}</span>
+            </p>
+            <Button variant="secondary" size="sm" disabled={readOnly} onClick={() => cart.addLibraryCharges(owedNotInCart)}>
+              Thêm vào giỏ
+            </Button>
+          </div>
+        )}
       </div>
       <ul className="flex-1 divide-y divide-paper-300 overflow-y-auto" aria-live="polite">
-        {cart.lines.length === 0 && (
+        {cartEmpty && (
           <li className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-ink-500">
             <ShoppingCart size={48} className="text-ink-300" aria-hidden />
             <p>Chưa có sản phẩm nào được chọn</p>
           </li>
         )}
         {cartLines}
+        {chargeLines}
       </ul>
       <div className="border-t border-paper-300 p-4">
         <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 text-sm num">
           <dt className="text-ink-700">Tạm tính</dt>
-          <dd className="text-right">{formatVnd(priced?.result.subtotalVnd ?? 0)}</dd>
+          <dd className="text-right">{formatVnd((priced?.result.subtotalVnd ?? 0) + libraryVnd)}</dd>
           {!!priced?.result.discountVnd && (
             <>
               <dt className="text-ink-700">Khuyến mãi / giảm giá</dt>
@@ -494,7 +528,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             {cart.redeemPoints ? `${formatNumber(cart.redeemPoints)} điểm` : 'Điểm'}
           </Button>
         </div>
-        <Button variant="accent" size="xl" full icon={Check} className="mt-3" disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
+        <Button variant="accent" size="xl" full icon={Check} className="mt-3" disabled={cartEmpty || !priced || readOnly || lease === 'expired'} onClick={confirm}>
           Xác nhận
         </Button>
       </div>
@@ -658,7 +692,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           }}
         />
       )}
-      {dialog?.kind === 'pay' && priced && <PaymentSheet priced={priced.result} depositVnd={cart.preorder?.depositVnd ?? 0} online={status.online} onClose={() => setDialog(null)} onPay={pay} />}
+      {dialog?.kind === 'pay' && priced && <PaymentSheet priced={priced.result} depositVnd={cart.preorder?.depositVnd ?? 0} libraryVnd={libraryVnd} online={status.online} onClose={() => setDialog(null)} onPay={pay} />}
       {dialog?.kind === 'preorder' && (
         <PreorderDialog
           shiftId={shift.serverId ?? null}
