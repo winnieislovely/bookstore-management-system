@@ -38,7 +38,6 @@ export const PERMISSIONS = {
   // Orders (R2)
   'online.manage': 'Xử lý đơn online / mạng xã hội',
   'online.confirm_payment': 'Xác nhận chuyển khoản',
-  'contact_task.manage': 'Danh sách cần liên hệ', // derived
   // Customers and promotions
   'customer.view': 'Xem khách hàng',
   'customer.manage': 'Tạo / sửa khách hàng',
@@ -142,7 +141,6 @@ export const DEFAULT_ROLES: Record<RoleCode, { name: string; permissions: Permis
       'inventory.view',
       'online.manage',
       'online.confirm_payment',
-      'contact_task.manage',
       'customer.view',
       'customer.manage',
     ],
@@ -151,7 +149,6 @@ export const DEFAULT_ROLES: Record<RoleCode, { name: string; permissions: Permis
     name: 'Điều phối sự kiện',
     permissions: [
       'catalog.view',
-      'contact_task.manage',
       'customer.view',
       'customer.manage',
       'event.manage',
@@ -162,7 +159,6 @@ export const DEFAULT_ROLES: Record<RoleCode, { name: string; permissions: Permis
     name: 'Thủ thư',
     permissions: [
       'catalog.view',
-      'contact_task.manage',
       'customer.view',
       'customer.manage',
       'library.manage',

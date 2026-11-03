@@ -18,7 +18,7 @@ import { AuditPage, DevicesPage, RolesPage, UsersPage } from './pages/admin';
 import { ConsignmentPage } from './pages/consignment';
 import { CountDetailPage, CountsPage } from './pages/counts';
 import { CustomerDetailPage, CustomersPage } from './pages/customers';
-import { CodPage, ContactTasksPage } from './pages/holds';
+import { CodPage } from './pages/holds';
 import { OrderDetailPage, OrderNewPage, OrdersPage } from './pages/orders';
 import { ProductDetailPage } from './pages/productDetail';
 import { ProductNewPage } from './pages/productNew';
@@ -85,7 +85,6 @@ const BUILT: Record<string, ReactNode> = {
   '/dashboard': <DashboardPage />,
   '/products': <ProductsPage />,
   '/orders': <OrdersPage />,
-  '/contact-tasks': <ContactTasksPage />,
   '/sales': <SalesPage />,
   '/shifts': <ShiftsPage />,
   '/customers': <CustomersPage />,

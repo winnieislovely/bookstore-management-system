@@ -1,13 +1,14 @@
-import { useQuery } from '@tanstack/react-query';
-import { AlertOctagon, ArrowLeft, Clock, FileCheck, FileText, MoreHorizontal, Printer, Receipt, RotateCcw, Send, XCircle } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertOctagon, ArrowLeft, CalendarClock, Clock, FileCheck, FileText, MoreHorizontal, PackageCheck, PhoneCall, Printer, Receipt, RotateCcw, Send, Truck, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ApprovalPrompt, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
+import { ApprovalPrompt, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, Tabs, TextArea, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
-import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
+import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { printSlip } from '../lib/print';
 import { can, useMe } from '../lib/session';
+import { CancelPreorder, PREORDER_STATUS, PreorderChip, type PreorderRow } from '../pos/preorders';
 import { Dialog } from '../pos/widgets';
 
 /** Sales list and record (FR-POS-12..17, Design §12.1, §12.3, §11.2 E-invoice). */
@@ -50,7 +51,26 @@ interface SaleRow {
   einvoiceStatus: string | null;
 }
 
+/** Đơn hàng: counter sales and pre-orders, one tab each (FR-POS-21, FR-POS-09, Design §12.1). */
 export function SalesPage() {
+  const [tab, setTab] = useParam('tab', 'sales');
+  return (
+    <>
+      <PageHeader title="Đơn hàng" />
+      <Tabs
+        tabs={[
+          { key: 'sales', label: 'Đơn bán' },
+          { key: 'preorders', label: 'Đơn đặt trước' },
+        ]}
+        value={tab === 'preorders' ? 'preorders' : 'sales'}
+        onChange={setTab}
+      />
+      {tab === 'preorders' ? <PreorderList /> : <SaleList />}
+    </>
+  );
+}
+
+function SaleList() {
   const navigate = useNavigate();
   const [q, setQ] = useParam('q');
   const [status, setStatus] = useListParam('status');
@@ -74,7 +94,6 @@ export function SalesPage() {
 
   return (
     <>
-      <PageHeader title="Đơn bán" />
       <div className="mb-4 flex items-center gap-2">
         <SearchBox value={q} onChange={setQ} placeholder="Tìm mã đơn, khách hàng, SĐT, SKU…" />
         <FilterMenu
@@ -96,6 +115,162 @@ export function SalesPage() {
       />
       <Pager page={Number(page)} hasMore={(list.data?.items.length ?? 0) === 40} onPage={(p) => setPage(String(p))} />
     </>
+  );
+}
+
+// =============================================================================================
+// Pre-orders (FR-POS-09, FR-ORD-14): taken and collected at the POS, listed here
+
+const PREORDER_OPEN = ['reserved', 'ordered', 'arrived', 'contacted'];
+
+function PreorderList() {
+  const [q, setQ] = useParam('pq');
+  const [status, setStatus] = useListParam('pstatus');
+  const [open, setOpen] = useState<PreorderRow | null>(null);
+  const query = { q: q || undefined, status: status.join(',') || undefined };
+  const list = useQuery({ queryKey: ['preorders', query], queryFn: () => get<{ items: PreorderRow[] }>('/api/v1/preorders', query) });
+  const columns: Column<PreorderRow>[] = [
+    { header: 'Mã phiếu', cell: (p) => <span className="code">{p.docNo}</span> },
+    {
+      header: 'Khách hàng',
+      cell: (p) => (
+        <span>
+          {p.customerName}
+          <span className="block text-[13px] whitespace-nowrap text-ink-500">{p.customerPhone && formatPhone(p.customerPhone)}</span>
+        </span>
+      ),
+    },
+    {
+      header: 'Sản phẩm',
+      cell: (p) => (
+        <span className="line-clamp-2">
+          {p.lines.map((l) => `${l.title} × ${formatNumber(l.qty)}`).join(', ')}
+        </span>
+      ),
+    },
+    { header: 'Tổng tiền', align: 'right', cell: (p) => formatVnd(p.totalVnd) },
+    { header: 'Đã cọc', align: 'right', cell: (p) => formatVnd(p.depositVnd) },
+    { header: 'Trạng thái', cell: (p) => <PreorderChip p={p} /> },
+    { header: 'Ngày đặt', className: 'whitespace-nowrap', cell: (p) => formatDate(p.createdAt) },
+  ];
+  return (
+    <>
+      <div className="mb-4 flex items-center gap-2">
+        <SearchBox value={q} onChange={setQ} placeholder="Tìm mã phiếu, khách hàng, SĐT, SKU…" />
+        <FilterMenu groups={[{ label: 'Trạng thái', options: Object.entries(PREORDER_STATUS).map(([key, v]) => ({ key, label: v.label })), values: status, onChange: setStatus }]} />
+      </div>
+      <DataTable
+        columns={columns}
+        rows={list.data?.items}
+        rowKey={(p) => p.id}
+        onRow={setOpen}
+        error={list.error}
+        onRetry={() => list.refetch()}
+        minWidth={880}
+        empty={{ icon: CalendarClock, title: q || status.length ? 'Không có phiếu phù hợp' : 'Chưa có phiếu đặt trước', help: 'Phiếu đặt trước tạo ở màn Bán hàng (nút Đặt trước) sẽ hiện ở đây.' }}
+      />
+      {open && <PreorderRecord p={open} onClose={() => setOpen(null)} />}
+    </>
+  );
+}
+
+function PreorderRecord({ p, onClose }: { p: PreorderRow; onClose: () => void }) {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const { data: me } = useMe();
+  const shift = useOpenShift();
+  const [cancel, setCancel] = useState(false);
+  const ready = p.status === 'arrived' || p.status === 'contacted';
+  const live = PREORDER_OPEN.includes(p.status);
+  if (cancel) return <CancelPreorder p={p} shiftId={shift.data?.id ?? null} onClose={() => { setCancel(false); onClose(); }} />;
+  return (
+    <Dialog title={`Phiếu ${p.docNo}`} size="md" onClose={onClose}>
+      <div className="flex flex-col gap-4 text-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <PreorderChip p={p} />
+          <span className="text-ink-500">{formatDateTime(p.createdAt)}</span>
+        </div>
+        <Facts
+          items={[
+            ['Khách hàng', p.customerName],
+            ['Điện thoại', p.customerPhone ? <a href={`tel:${p.customerPhone}`} className="font-semibold whitespace-nowrap text-navy-700 underline num">{formatPhone(p.customerPhone)}</a> : '—'],
+            ...(p.contactedAt ? ([['Đã liên hệ', formatDateTime(p.contactedAt)]] as [string, React.ReactNode][]) : []),
+            ['Tổng tiền', <span className="num">{formatVnd(p.totalVnd)}</span>],
+            ['Đã cọc', <span className="num">{formatVnd(p.depositVnd)}{p.depositMethod && ` · ${METHOD_LABEL[p.depositMethod] ?? p.depositMethod}`}</span>],
+            ['Còn phải trả', <span className="font-semibold num">{formatVnd(Math.max(0, p.totalVnd - p.depositVnd))}</span>],
+          ]}
+        />
+        <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
+          {p.lines.map((l) => (
+            <li key={l.variantId} className="flex items-baseline justify-between gap-3 p-3">
+              <span className="min-w-0">
+                <span className="block font-medium">{l.title}</span>
+                <span className="text-[13px] text-ink-500">
+                  {formatNumber(l.qty)} × {formatVnd(l.unitPriceVnd)}
+                  {live && <span className="ml-2">{l.held ? '· đã giữ hàng' : '· chưa về'}</span>}
+                </span>
+              </span>
+              <span className="font-medium whitespace-nowrap num">{formatVnd(l.qty * l.unitPriceVnd)}</span>
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-col gap-2">
+          {ready && can(me, 'sale.create') && (
+            <Button variant="primary" full icon={PackageCheck} onClick={() => navigate(`/pos?preorder=${encodeURIComponent(p.docNo)}`)}>
+              Nhận hàng tại quầy
+            </Button>
+          )}
+          {p.status === 'arrived' && (
+            <Button
+              variant="secondary"
+              full
+              icon={PhoneCall}
+              onClick={async () => {
+                try {
+                  await post(`/api/v1/preorders/${p.id}/contacted`);
+                  toast.success('Đã ghi nhận liên hệ. Hàng được giữ 7 ngày.');
+                  void qc.invalidateQueries({ queryKey: ['preorders'] });
+                  onClose();
+                } catch (e) {
+                  toast.error((e as Error).message);
+                }
+              }}
+            >
+              Đã liên hệ
+            </Button>
+          )}
+          {p.status === 'reserved' && (
+            <Button
+              variant="secondary"
+              full
+              icon={Truck}
+              onClick={async () => {
+                try {
+                  await post(`/api/v1/preorders/${p.id}/ordered`);
+                  toast.success('Đã ghi nhận đặt hàng nhà cung cấp.');
+                  void qc.invalidateQueries({ queryKey: ['preorders'] });
+                  onClose();
+                } catch (e) {
+                  toast.error((e as Error).message);
+                }
+              }}
+            >
+              Đã đặt NCC
+            </Button>
+          )}
+          {p.saleId && (
+            <Button variant="tonal" full onClick={() => navigate(`/sales/${p.saleId}`)}>
+              Xem đơn bán
+            </Button>
+          )}
+          {live && (
+            <Button variant="destructive-outline" full icon={XCircle} onClick={() => setCancel(true)}>
+              Hủy phiếu
+            </Button>
+          )}
+        </div>
+      </div>
+    </Dialog>
   );
 }
 

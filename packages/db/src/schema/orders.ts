@@ -258,37 +258,6 @@ export const returnRequest = orders.table(
   ],
 );
 
-export const CONTACT_REASONS = ['preorder_arrived', 'pickup_ready', 'library_hold', 'waitlist_offer', 'event_cancelled'] as const;
-
-/** To-notify worklist (FR-ORD-18): created by other modules, closed by staff. */
-export const contactTask = orders.table(
-  'contact_task',
-  {
-    id: id(),
-    reason: text().notNull(),
-    customerId: uuid().references(() => customer.id),
-    name: text().notNull(),
-    phone: text(),
-    refType: text().notNull(),
-    refId: uuid().notNull(),
-    refLabel: text(),
-    dueAt: ts().notNull(),
-    status: text().notNull().default('open'),
-    contactedBy: uuid(),
-    contactedAt: ts(),
-    note: text(),
-    attempts: integer().notNull().default(0),
-    overdueNotifiedAt: ts(),
-    createdAt: createdAt(),
-  },
-  (t) => [
-    index('contact_task_status_idx').on(t.status, t.dueAt),
-    uniqueIndex('contact_task_open_ref_uq').on(t.reason, t.refType, t.refId).where(sql`${t.status} = 'open'`),
-    check('contact_task_reason_ck', inList(t.reason, CONTACT_REASONS)),
-    check('contact_task_status_ck', inList(t.status, ['open', 'contacted', 'cancelled'])),
-  ],
-);
-
 /** Deposit taken at the counter, held for the customer until collection (FR-ORD-14, TDD §4.5). */
 const depositColumns = () => ({
   depositVnd: vndCol().notNull().default(0),
@@ -308,11 +277,6 @@ export const preorder = orders.table(
     customerId: uuid()
       .notNull()
       .references(() => customer.id),
-    variantId: uuid()
-      .notNull()
-      .references(() => itemVariant.id),
-    qty: integer().notNull(),
-    unitPriceVnd: vndCol().notNull(),
     ...depositColumns(),
     status: text().notNull().default('reserved'),
     allocatedAt: ts(),
@@ -327,12 +291,34 @@ export const preorder = orders.table(
     createdAt: createdAt(),
   },
   (t) => [
-    index('preorder_variant_idx').on(t.variantId, t.status, t.createdAt),
+    index('preorder_status_idx').on(t.status, t.createdAt),
     index('preorder_customer_idx').on(t.customerId),
     check('preorder_status_ck', inList(t.status, statesOf(PREORDER))),
-    check('preorder_qty_ck', sql`${t.qty} > 0`),
     check('preorder_source_ck', inList(t.source, ORDER_SOURCES)),
     check('preorder_deposit_method_ck', sql`${t.depositMethod} is null or ${inList(t.depositMethod, DEPOSIT_METHODS)}`),
     check('preorder_outcome_ck', sql`${t.depositOutcome} is null or ${inList(t.depositOutcome, ['refunded', 'forfeited'])}`),
+  ],
+);
+
+/** One product of a pre-order at its agreed price; `reserved_at` once its copies are held (FR-ORD-14). */
+export const preorderLine = orders.table(
+  'preorder_line',
+  {
+    id: id(),
+    preorderId: uuid()
+      .notNull()
+      .references(() => preorder.id),
+    lineNo: integer().notNull(),
+    variantId: uuid()
+      .notNull()
+      .references(() => itemVariant.id),
+    qty: integer().notNull(),
+    unitPriceVnd: vndCol().notNull(),
+    reservedAt: ts(),
+  },
+  (t) => [
+    uniqueIndex('preorder_line_variant_uq').on(t.preorderId, t.variantId),
+    index('preorder_line_waiting_idx').on(t.variantId).where(sql`${t.reservedAt} is null`),
+    check('preorder_line_qty_ck', sql`${t.qty} > 0`),
   ],
 );

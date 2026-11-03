@@ -1,7 +1,6 @@
 import {
   BadgePercent,
   BookOpen,
-  PhoneCall,
   Boxes,
   Building2,
   ClipboardList,
@@ -50,7 +49,6 @@ export const NAV: NavGroup[] = [
     items: [
       { path: '/pos', label: 'nav.selling', icon: ScanBarcode, anyOf: ['sale.create'] },
       { path: '/orders', label: 'nav.orders', icon: Truck, anyOf: ['online.manage'], badge: 'ordersNeedingAction' },
-      { path: '/contact-tasks', label: 'nav.contactTasks', icon: PhoneCall, anyOf: ['contact_task.manage'], badge: 'contactTasksOverdue' },
       { path: '/sales', label: 'nav.sales', icon: Receipt, anyOf: ['sale.create', 'sale.view_all'], badge: 'einvoicesFailed' },
       { path: '/customers', label: 'nav.customers', icon: Users, anyOf: ['customer.view'] },
       { path: '/promotions', label: 'nav.promotions', icon: BadgePercent, anyOf: ['promotion.manage'] },

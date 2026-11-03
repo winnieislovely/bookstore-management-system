@@ -225,7 +225,7 @@ function UserForm({ user, roles, onClose, onSaved }: { user: User | null; roles:
 const GROUPS: [string, string[]][] = [
   ['Bán hàng', ['sale', 'return', 'shift', 'einvoice', 'pos']],
   ['Sản phẩm và kho', ['catalog', 'inventory', 'purchasing', 'data']],
-  ['Khách hàng và khuyến mãi', ['customer', 'promotion', 'contact_task']],
+  ['Khách hàng và khuyến mãi', ['customer', 'promotion']],
   ['Đơn online, sự kiện, thư viện, website', ['order', 'event', 'library', 'web', 'payment']],
   ['Nhân sự', ['hr', 'payroll', 'staff']],
   ['Báo cáo và quản trị', ['report', 'audit', 'user', 'role', 'settings']],

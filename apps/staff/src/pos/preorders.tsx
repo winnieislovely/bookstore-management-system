@@ -1,23 +1,23 @@
-import { normalizePaymentRef, ORDER_SOURCES, paymentRefFromBytes } from '@bookstore/domain';
+import { normalizePaymentRef, paymentRefFromBytes } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { CalendarClock, PackageCheck, Plus, Truck, XCircle } from 'lucide-react';
+import { Plus, Trash2, User, UserPlus, X } from 'lucide-react';
 import { useState } from 'react';
-import { ConfirmDialog, SelectField, Tabs, TextArea, toast, useDebounced } from '../components/data';
-import { CopyCode, ORDER_SOURCE } from '../components/order-ui';
+import { ConfirmDialog, SelectField, TextArea, toast, useDebounced } from '../components/data';
+import { CopyCode } from '../components/order-ui';
 import { ProductSearch, hitTitle, type ProductHit } from '../components/product-search';
-import { Button, EmptyState, ErrorState, Field, InlineAlert, Skeleton, StatusChip, type Tone } from '../components/ui';
+import { Button, Field, InlineAlert, StatusChip, type Tone } from '../components/ui';
 import { get, post } from '../lib/api';
-import { formatDate, formatNumber, formatPhone, formatVnd } from '../lib/format';
+import { formatNumber, formatPhone, formatVnd } from '../lib/format';
 import type { CartCustomer, CartPreorder } from './cart';
 import { Dialog, MoneyInput } from './widgets';
 
 /**
- * Pre-orders at the POS (FR-POS-09, FR-ORD-14, Design §13.1): take a pre-order with its deposit,
- * see the list, recall an arrived one into the cart, mark it ordered or cancel it. Needs the server.
+ * Pre-orders (FR-POS-09, FR-ORD-14): the POS takes a pre-order with its deposit; the list is the
+ * “Đơn đặt trước” tab of Đơn hàng, which opens a pre-order in the POS to collect it. Needs the server.
  */
 
-const STATUS: Record<string, { label: string; tone: Tone }> = {
+export const PREORDER_STATUS: Record<string, { label: string; tone: Tone }> = {
   reserved: { label: 'Đã đặt', tone: 'neutral' },
   ordered: { label: 'Đã đặt NCC', tone: 'info' },
   arrived: { label: 'Đã về', tone: 'accent' },
@@ -31,165 +31,128 @@ export interface PreorderRow {
   docNo: string;
   status: string;
   createdAt: string;
-  variantId: string;
-  qty: number;
-  unitPriceVnd: number;
+  lines: { variantId: string; sku: string; title: string; qty: number; unitPriceVnd: number; held: boolean }[];
+  totalVnd: number;
   depositVnd: number;
   depositMethod: string | null;
+  contactedAt: string | null;
   expiresAt: string | null;
+  saleId: string | null;
   customerId: string;
   customerName: string;
   customerPhone: string | null;
   customerTierCode: string | null;
   customerPoints: number;
-  sku: string;
-  title: string;
 }
 
-function PreorderChip({ p }: { p: PreorderRow }) {
+export function PreorderChip({ p }: { p: PreorderRow }) {
   // Holding-period countdown, turning to a warning in the last 2 days (Design §11.2).
   if (p.status === 'contacted' && p.expiresAt) {
     const left = Math.ceil((new Date(p.expiresAt).getTime() - Date.now()) / 86_400_000);
     return <StatusChip tone={left <= 2 ? 'warning' : 'info'}>{left > 0 ? `Đã liên hệ · còn ${left} ngày` : 'Quá hạn giữ hàng'}</StatusChip>;
   }
-  const s = STATUS[p.status] ?? { label: p.status, tone: 'neutral' as Tone };
+  const s = PREORDER_STATUS[p.status] ?? { label: p.status, tone: 'neutral' as Tone };
   return <StatusChip tone={s.tone}>{s.label}</StatusChip>;
 }
 
-export function PreorderDialog({
-  shiftId,
-  online,
-  onCollect,
-  onClose,
-}: {
-  /** The open shift on the server: cash deposits go into its drawer. */
-  shiftId: string | null;
-  online: boolean;
-  onCollect: (p: CartPreorder, customer: CartCustomer) => void;
-  onClose: () => void;
-}) {
-  const [tab, setTab] = useState<'list' | 'new'>('list');
-  const [action, setAction] = useState<null | { p: PreorderRow; kind: 'cancel' }>(null);
+/** What the POS cart needs to collect a pre-order (FR-POS-09). */
+export function toCart(p: PreorderRow): { preorder: CartPreorder; customer: CartCustomer } {
+  return {
+    preorder: { id: p.id, docNo: p.docNo, lines: p.lines.map((l) => ({ variantId: l.variantId, qty: l.qty, unitPriceVnd: l.unitPriceVnd })), depositVnd: p.depositVnd },
+    customer: { id: p.customerId, name: p.customerName, phoneE164: p.customerPhone, tierCode: p.customerTierCode, pointsBalance: p.customerPoints },
+  };
+}
+
+/** The POS “Đặt trước” button: a new pre-order with its deposit. */
+export function PreorderDialog({ shiftId, online, customer, onClose }: { shiftId: string | null; online: boolean; customer: CartCustomer | null; onClose: () => void }) {
   if (!online || !shiftId) {
     return (
       <Dialog title="Đặt trước" size="sm" onClose={onClose}>
-        <InlineAlert tone="warning">Cần kết nối mạng để tạo, tra cứu hoặc nhận hàng đặt trước.</InlineAlert>
+        <InlineAlert tone="warning">Cần kết nối mạng để tạo phiếu đặt trước.</InlineAlert>
       </Dialog>
     );
   }
-  if (action) return <CancelPreorder p={action.p} shiftId={shiftId} onClose={() => setAction(null)} />;
   return (
     <Dialog title="Đặt trước" size="lg" onClose={onClose}>
-      <Tabs
-        tabs={[
-          { key: 'list', label: 'Danh sách phiếu' },
-          { key: 'new', label: 'Tạo phiếu' },
-        ]}
-        value={tab}
-        onChange={setTab}
-      />
-      {tab === 'list' ? (
-        <PreorderList
-          onCollect={(p) =>
-            onCollect(
-              { id: p.id, docNo: p.docNo, variantId: p.variantId, qty: p.qty, unitPriceVnd: p.unitPriceVnd, depositVnd: p.depositVnd },
-              { id: p.customerId, name: p.customerName, phoneE164: p.customerPhone, tierCode: p.customerTierCode, pointsBalance: p.customerPoints },
-            )
-          }
-          onCancel={(p) => setAction({ p, kind: 'cancel' })}
-        />
-      ) : (
-        <NewPreorder shiftId={shiftId} onDone={() => setTab('list')} />
-      )}
+      <NewPreorder shiftId={shiftId} initialCustomer={customer} onDone={onClose} />
     </Dialog>
   );
 }
 
-function PreorderList({ onCollect, onCancel }: { onCollect: (p: PreorderRow) => void; onCancel: (p: PreorderRow) => void }) {
-  const qc = useQueryClient();
+/**
+ * Customer of the pre-order: an existing customer found by phone or name, or a new one with phone
+ * and name (FR-POS-04, BR-16 – the server links a known phone to its customer).
+ */
+function CustomerPicker({ value, onChange }: { value: CustomerChoice; onChange: (v: CustomerChoice) => void }) {
   const [q, setQ] = useState('');
-  const [open, setOpen] = useState(true);
   const term = useDebounced(q.trim(), 300);
-  const list = useQuery({
-    queryKey: ['preorders', term, open],
-    queryFn: () => get<{ items: PreorderRow[] }>('/api/v1/preorders', { q: term || undefined, status: open ? 'reserved,ordered,arrived,contacted' : undefined }),
+  const found = useQuery({
+    queryKey: ['preorder-customer', term],
+    enabled: term.length >= 2 && !value,
+    queryFn: () => get<{ items: CartCustomer[] }>('/api/v1/customers', { q: term, limit: 6 }),
   });
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <input
-          className="h-11 min-w-0 flex-1 rounded-md border border-paper-500 bg-white px-3 text-sm focus:border-navy-700"
-          placeholder="Tìm mã phiếu, tên hoặc SĐT khách, SKU…"
-          aria-label="Tìm phiếu đặt trước"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <label className="inline-flex items-center gap-2 text-sm">
-          <input type="checkbox" className="size-5 accent-navy-700" checked={open} onChange={(e) => setOpen(e.target.checked)} />
-          Chỉ phiếu đang mở
-        </label>
+  if (value?.kind === 'existing') {
+    const c = value.customer;
+    return (
+      <div className="flex flex-col gap-1">
+        <p className="text-[13px] font-medium text-ink-700">Khách hàng</p>
+        <div className="flex items-center gap-3 rounded-md border border-paper-300 p-3 text-sm">
+          <User size={20} aria-hidden />
+          <span className="min-w-0 flex-1">
+            <span className="block font-semibold">{c.name}</span>
+            <span className="text-ink-500 num">
+              {c.phoneE164 && formatPhone(c.phoneE164)} · {formatNumber(c.pointsBalance)} điểm
+            </span>
+          </span>
+          <Button variant="ghost" icon={X} aria-label="Bỏ khách" onClick={() => onChange(null)} />
+        </div>
       </div>
-      {list.isError ? (
-        <ErrorState error={list.error} onRetry={() => list.refetch()} />
-      ) : !list.data ? (
-        <Skeleton className="h-32" />
-      ) : list.data.items.length === 0 ? (
-        <EmptyState icon={CalendarClock} title="Không có phiếu đặt trước" />
-      ) : (
-        <ul className="max-h-[55dvh] divide-y divide-paper-300 overflow-y-auto rounded-lg border border-paper-300">
-          {list.data.items.map((p) => {
-            const ready = p.status === 'arrived' || p.status === 'contacted';
-            const live = !['collected', 'cancelled'].includes(p.status);
-            return (
-              <li key={p.id} className="flex flex-col gap-2 p-3 text-sm">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="font-semibold">{p.title}</p>
-                    <p className="text-ink-700">
-                      {p.customerName}
-                      {p.customerPhone && <span className="ml-2 text-ink-500 num">{formatPhone(p.customerPhone)}</span>}
-                    </p>
-                    <p className="text-[13px] text-ink-500 num">
-                      <span className="code whitespace-nowrap">{p.docNo}</span> · {formatDate(p.createdAt)} · SL {formatNumber(p.qty)} · {formatVnd(p.unitPriceVnd * p.qty)} · Đã cọc {formatVnd(p.depositVnd)}
-                    </p>
-                  </div>
-                  <PreorderChip p={p} />
-                </div>
-                {live && (
-                  <div className="flex flex-wrap gap-2">
-                    {ready && (
-                      <Button size="sm" variant="primary" icon={PackageCheck} onClick={() => onCollect(p)}>
-                        Nhận hàng
-                      </Button>
-                    )}
-                    {p.status === 'reserved' && (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        icon={Truck}
-                        onClick={async () => {
-                          try {
-                            await post(`/api/v1/preorders/${p.id}/ordered`);
-                            toast.success('Đã ghi nhận đặt hàng nhà cung cấp.');
-                            void qc.invalidateQueries({ queryKey: ['preorders'] });
-                          } catch (e) {
-                            toast.error((e as Error).message);
-                          }
-                        }}
-                      >
-                        Đã đặt NCC
-                      </Button>
-                    )}
-                    <Button size="sm" variant="secondary" icon={XCircle} onClick={() => onCancel(p)}>
-                      Hủy phiếu
-                    </Button>
-                  </div>
-                )}
-              </li>
-            );
-          })}
+    );
+  }
+  if (value?.kind === 'new') {
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <p className="text-[13px] font-medium text-ink-700">Khách mới</p>
+          <Button variant="ghost" size="sm" onClick={() => onChange(null)}>
+            Tìm khách cũ
+          </Button>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Số điện thoại" required inputMode="tel" value={value.phone} onChange={(e) => onChange({ ...value, phone: e.target.value })} />
+          <Field label="Tên khách" required value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} />
+        </div>
+      </div>
+    );
+  }
+  const items = found.data?.items ?? [];
+  const digits = q.replace(/\D/g, '');
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-[13px] font-medium text-ink-700">Khách hàng</p>
+      <input
+        className="h-11 w-full rounded-md border border-paper-500 bg-white px-3 text-sm focus:border-navy-700"
+        placeholder="Tìm theo SĐT hoặc tên khách"
+        aria-label="Tìm khách theo số điện thoại hoặc tên"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
+      {term.length >= 2 && found.data && (
+        <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
+          {items.length === 0 && <li className="px-3 py-2 text-sm text-ink-500">Không có khách phù hợp.</li>}
+          {items.map((c) => (
+            <li key={c.id}>
+              <button type="button" className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-navy-50" onClick={() => onChange({ kind: 'existing', customer: c })}>
+                <span className="min-w-0 flex-1 font-medium">{c.name}</span>
+                <span className="whitespace-nowrap text-ink-500 num">{c.phoneE164 && formatPhone(c.phoneE164)}</span>
+              </button>
+            </li>
+          ))}
         </ul>
       )}
+      <Button variant="tonal" size="sm" icon={UserPlus} className="self-start" onClick={() => onChange({ kind: 'new', phone: digits.length >= 6 ? q.trim() : '', name: digits.length >= 6 ? '' : q.trim() })}>
+        Khách mới
+      </Button>
     </div>
   );
 }
@@ -200,25 +163,27 @@ interface DepositState {
   ref: string;
 }
 
-function NewPreorder({ shiftId, onDone }: { shiftId: string; onDone: () => void }) {
+type CustomerChoice = { kind: 'existing'; customer: CartCustomer } | { kind: 'new'; phone: string; name: string } | null;
+
+function NewPreorder({ shiftId, initialCustomer, onDone }: { shiftId: string; initialCustomer: CartCustomer | null; onDone: () => void }) {
   const qc = useQueryClient();
-  const [cust, setCust] = useState({ phone: '', name: '', source: 'other' });
-  const [hit, setHit] = useState<ProductHit | null>(null);
-  const [qty, setQty] = useState(1);
+  const [cust, setCust] = useState<CustomerChoice>(initialCustomer ? { kind: 'existing', customer: initialCustomer } : null);
+  const [items, setItems] = useState<{ hit: ProductHit; qty: number }[]>([]);
   const [dep, setDep] = useState<DepositState>({ method: 'cash', amountVnd: null, ref: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const total = (hit?.priceVnd ?? 0) * qty;
+  const total = items.reduce((a, x) => a + x.hit.priceVnd * x.qty, 0);
+  const add = (h: ProductHit) =>
+    setItems((xs) => (xs.some((x) => x.hit.variantId === h.variantId) ? xs.map((x) => (x.hit.variantId === h.variantId ? { ...x, qty: x.qty + 1 } : x)) : [...xs, { hit: h, qty: 1 }]));
   const save = async () => {
     setError(null);
-    if (!hit) return setError('Chọn sản phẩm khách đặt.');
+    if (!cust) return setError('Chọn khách hoặc nhập khách mới.');
+    if (!items.length) return setError('Chọn sản phẩm khách đặt.');
     setBusy(true);
     try {
       const r = await post<{ docNo: string; status: string }>('/api/v1/preorders', {
-        source: cust.source,
-        customer: { name: cust.name.trim(), phone: cust.phone.trim() },
-        variantId: hit.variantId,
-        qty,
+        customer: cust.kind === 'existing' ? { customerId: cust.customer.id } : { name: cust.name.trim(), phone: cust.phone.trim() },
+        lines: items.map((x) => ({ variantId: x.hit.variantId, qty: x.qty })),
         deposit: { method: dep.method, amountVnd: dep.amountVnd ?? 0, ...(dep.method === 'cash' ? { shiftId } : { ref: dep.method === 'transfer' ? normalizePaymentRef(dep.ref) : dep.ref.trim() }) },
       });
       toast.success(r.status === 'arrived' ? `Đã lưu ${r.docNo}. Hàng đã có sẵn – có thể nhận hàng ngay.` : `Đã lưu ${r.docNo}.`);
@@ -232,31 +197,31 @@ function NewPreorder({ shiftId, onDone }: { shiftId: string; onDone: () => void 
   };
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Số điện thoại" required inputMode="tel" value={cust.phone} onChange={(e) => setCust({ ...cust, phone: e.target.value })} />
-        <Field label="Tên khách" required value={cust.name} onChange={(e) => setCust({ ...cust, name: e.target.value })} />
-        <SelectField label="Kênh" value={cust.source} onChange={(e) => setCust({ ...cust, source: e.target.value })} className="sm:col-span-2">
-          {ORDER_SOURCES.filter((s) => s !== 'website').map((s) => (
-            <option key={s} value={s}>
-              {s === 'other' ? 'Tại quầy / khác' : ORDER_SOURCE[s]}
-            </option>
-          ))}
-        </SelectField>
+      <CustomerPicker value={cust} onChange={setCust} />
+      <div className="flex flex-col gap-2">
+        <p className="text-[13px] font-medium text-ink-700">Sản phẩm</p>
+        <ProductSearch onPick={add} placeholder="Nhập SKU / tên sản phẩm" scanIcon={false} />
+        {items.length > 0 && (
+          <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
+            {items.map((x, i) => (
+              <li key={x.hit.variantId} className="flex items-center gap-3 p-3 text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">{hitTitle(x.hit)}</p>
+                  <p className="text-ink-700 num">{formatVnd(x.hit.priceVnd)}</p>
+                </div>
+                <input
+                  aria-label={`Số lượng ${hitTitle(x.hit)}`}
+                  inputMode="numeric"
+                  className="h-10 w-16 rounded-md border border-paper-500 text-center num"
+                  value={x.qty}
+                  onChange={(e) => setItems(items.map((y, j) => (j === i ? { ...y, qty: Math.max(1, Number(e.target.value.replace(/\D/g, '')) || 1) } : y)))}
+                />
+                <Button variant="ghost" icon={Trash2} aria-label={`Xóa ${hitTitle(x.hit)}`} onClick={() => setItems(items.filter((_, j) => j !== i))} />
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-      {hit ? (
-        <div className="flex items-center justify-between gap-3 rounded-md border border-paper-300 p-3 text-sm">
-          <span className="min-w-0">
-            <span className="block font-medium">{hitTitle(hit)}</span>
-            <span className="text-ink-700 num">{formatVnd(hit.priceVnd)}</span>
-          </span>
-          <Button variant="ghost" size="sm" onClick={() => setHit(null)}>
-            Đổi
-          </Button>
-        </div>
-      ) : (
-        <ProductSearch onPick={setHit} placeholder="Nhập SKU / tên sản phẩm" scanIcon={false} />
-      )}
-      <Field label="Số lượng" inputMode="numeric" value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value.replace(/\D/g, '')) || 1))} />
       <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Hình thức nhận cọc">
         {(
           [
@@ -293,7 +258,8 @@ function NewPreorder({ shiftId, onDone }: { shiftId: string; onDone: () => void 
   );
 }
 
-function CancelPreorder({ p, shiftId, onClose }: { p: PreorderRow; shiftId: string; onClose: () => void }) {
+/** Cancel with the deposit refunded (cash out of the open shift) or kept (FR-ORD-16). */
+export function CancelPreorder({ p, shiftId, onClose }: { p: PreorderRow; shiftId: string | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [reason, setReason] = useState('');
   const [deposit, setDeposit] = useState<'refund' | 'forfeit'>('refund');
@@ -306,7 +272,7 @@ function CancelPreorder({ p, shiftId, onClose }: { p: PreorderRow; shiftId: stri
       destructive
       onClose={onClose}
       onConfirm={async () => {
-        await post(`/api/v1/preorders/${p.id}/cancel`, { reason: reason.trim(), deposit, shiftId, ...(ref.trim() && { refundRef: ref.trim() }) });
+        await post(`/api/v1/preorders/${p.id}/cancel`, { reason: reason.trim(), deposit, ...(shiftId && { shiftId }), ...(ref.trim() && { refundRef: ref.trim() }) });
         toast.success(`Đã hủy ${p.docNo}.`);
         void qc.invalidateQueries({ queryKey: ['preorders'] });
       }}
@@ -319,7 +285,7 @@ function CancelPreorder({ p, shiftId, onClose }: { p: PreorderRow; shiftId: stri
             <option value="forfeit">Giữ cọc (khách mất cọc)</option>
           </SelectField>
           {deposit === 'refund' && p.depositMethod !== 'cash' && <Field label="Mã giao dịch hoàn tiền" required value={ref} onChange={(e) => setRef(e.target.value)} />}
-          {deposit === 'refund' && p.depositMethod === 'cash' && <p className="text-[13px] text-ink-500">Tiền mặt được chi ra từ ca đang mở.</p>}
+          {deposit === 'refund' && p.depositMethod === 'cash' && (shiftId ? <p className="text-[13px] text-ink-500">Tiền mặt được chi ra từ ca đang mở.</p> : <InlineAlert tone="warning">Cần một ca đang mở để hoàn cọc tiền mặt. Hãy mở ca ở màn hình Bán hàng.</InlineAlert>)}
         </>
       )}
     </ConfirmDialog>

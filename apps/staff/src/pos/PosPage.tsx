@@ -2,17 +2,17 @@ import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, Check, Info, LogOut, Menu, Minus, MoreHorizontal, Plus, RefreshCw, ScanBarcode, ShoppingCart, Ticket, User, Wallet, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { Button, Field, InlineAlert, Skeleton } from '../components/ui';
 import { get } from '../lib/api';
 import { formatDateTime, formatNumber, formatVnd } from '../lib/format';
 import { can, useMe, type Me } from '../lib/session';
 import { cashMovement, closeShift, completeSale, expectedCash, openShift, refreshShift, type LocalShift, type Payment, type SaleOutcome } from './actions';
-import { findByCode, preorderLineId, priceLocally, searchItems, useCart, type CartApproval, type PricedCart } from './cart';
+import { findByCode, isPreorderLine, priceLocally, searchItems, useCart, type CartApproval, type PricedCart } from './cart';
 import { db, kvGet, kvSet, type CachedItem } from './db';
 import { deviceInfo, registerDevice, type DeviceInfo } from './device';
 import { ApprovalDialog, CloseShiftDialog, CustomerDialog, LineDialog, PaymentSheet, SaleDone } from './dialogs';
-import { PreorderDialog } from './preorders';
+import { PreorderDialog, toCart, type PreorderRow } from './preorders';
 import { bootstrap, flush, leaseState, startSync, usePosStatus } from './sync';
 import { CameraScanner, Dialog, MoneyInput } from './widgets';
 
@@ -238,7 +238,6 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const lease = leaseState();
   // Pre-orders past their holding period, on the header button (FR-ORD-16).
   const badges = useQuery({ queryKey: ['badges'], enabled: status.online, queryFn: () => get<{ holdsOverdue?: number }>('/api/v1/me/badges'), refetchInterval: 60_000 });
-  const preLine = cart.preorder ? preorderLineId(cart.preorder) : null;
 
   useEffect(() => {
     void kvGet<string>('registerCode').then((c) => setRegisterCode(c ?? device.deviceCode));
@@ -327,6 +326,36 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     setDialog(null);
   };
 
+  // “Nhận hàng tại quầy” on Đơn hàng opens /pos?preorder=DT-… : the pre-order goes into the cart (FR-POS-09).
+  const [params, setParams] = useSearchParams();
+  const preorderNo = params.get('preorder');
+  useEffect(() => {
+    if (!preorderNo || !status.online || readOnly) return;
+    setParams({}, { replace: true });
+    void (async () => {
+      try {
+        const r = await get<{ items: PreorderRow[] }>('/api/v1/preorders', { q: preorderNo });
+        const p = r.items.find((x) => x.docNo === preorderNo);
+        if (!p || (p.status !== 'arrived' && p.status !== 'contacted')) {
+          setMessage({ tone: 'danger', text: `Phiếu ${preorderNo} chưa có hàng hoặc đã xử lý xong.` });
+          return;
+        }
+        // A cart in progress goes to the held carts first.
+        const c = useCart.getState();
+        if (c.lines.length && !c.preorder) {
+          await db.heldCarts.put({ id: crypto.randomUUID(), label: c.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: c.lines, customer: c.customer, couponCode: c.couponCode, redeemPoints: c.redeemPoints }, heldAt: new Date().toISOString() });
+          setHeldCount(await db.heldCarts.count());
+          setMessage({ tone: 'info', text: 'Đã chuyển giỏ hàng đang bán vào Giỏ chờ.' });
+        }
+        const { preorder, customer } = toCart(p);
+        c.loadPreorder(preorder, customer);
+        saleKey.current = crypto.randomUUID();
+      } catch (e) {
+        setMessage({ tone: 'danger', text: errText(e) });
+      }
+    })();
+  }, [preorderNo, status.online, readOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const holdCart = async () => {
     if (!cart.lines.length) return;
     await db.heldCarts.put({ id: crypto.randomUUID(), label: cart.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: cart.lines, customer: cart.customer, couponCode: cart.couponCode, redeemPoints: cart.redeemPoints }, heldAt: new Date().toISOString() });
@@ -340,7 +369,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     const pl = lines.find((x) => x.lineId === l.lineId);
     const item = priced?.items.get(l.variantId);
     // A recalled pre-order line keeps its agreed price and quantity (FR-POS-09).
-    if (l.lineId === preLine) {
+    if (cart.preorder && isPreorderLine(l.lineId)) {
       return (
         <li key={l.lineId} className="bg-olive-50 px-4 py-3">
           <p className="line-clamp-2 font-semibold">{item?.title ?? '…'}</p>
@@ -349,7 +378,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           </p>
           <div className="mt-1 flex items-center gap-2 text-sm">
             <span className="text-ink-700 num">
-              {l.qty} × {formatVnd(pl?.unitPriceVnd ?? cart.preorder!.unitPriceVnd)}
+              {l.qty} × {formatVnd(pl?.unitPriceVnd ?? 0)}
             </span>
             <span className="ml-auto font-semibold whitespace-nowrap num">{formatVnd(pl?.totalVnd ?? 0)}</span>
           </div>
@@ -634,18 +663,8 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         <PreorderDialog
           shiftId={shift.serverId ?? null}
           online={status.online}
+          customer={cart.preorder ? null : cart.customer}
           onClose={() => setDialog(null)}
-          onCollect={async (p, customer) => {
-            // A cart in progress (not another pre-order) goes to the held carts first.
-            if (cart.lines.length && !cart.preorder) {
-              await db.heldCarts.put({ id: crypto.randomUUID(), label: cart.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: cart.lines, customer: cart.customer, couponCode: cart.couponCode, redeemPoints: cart.redeemPoints }, heldAt: new Date().toISOString() });
-              setHeldCount(await db.heldCarts.count());
-              setMessage({ tone: 'info', text: 'Đã chuyển giỏ hàng đang bán vào Giỏ chờ.' });
-            }
-            cart.loadPreorder(p, customer);
-            saleKey.current = crypto.randomUUID();
-            setDialog(null);
-          }}
         />
       )}
       {dialog?.kind === 'done' && <SaleDone outcome={dialog.outcome} online={status.online} onNew={newSale} />}

@@ -237,16 +237,12 @@ describe('fulfilment', () => {
     const ready = await h.call('POST', `/api/v1/orders/${o.id}/pickup-ready`, { cookie: online });
     expect(ready.status, JSON.stringify(ready.body)).toBe(200);
     expect(ready.body.pickupCode).toMatch(/^\d{6}$/);
-    const [task] = await h.t.sql`select reason, status, phone from orders.contact_task where ref_id = ${o.id}`;
-    expect(task).toMatchObject({ reason: 'pickup_ready', status: 'open', phone: '+84933333333' });
     const wrongCode = ready.body.pickupCode === '000000' ? '111111' : '000000';
     expect((await h.call('POST', `/api/v1/orders/${o.id}/handover`, { cookie: online, body: { code: wrongCode } })).status).toBe(422);
     const before = await level(book);
     const ok = await h.call('POST', `/api/v1/orders/${o.id}/handover`, { cookie: online, body: { code: ready.body.pickupCode } });
     expect(ok.body.status).toBe('done');
     expect(await level(book)).toEqual({ onHand: before.onHand - 1, reserved: before.reserved - 1 });
-    const [closed] = await h.t.sql`select status from orders.contact_task where ref_id = ${o.id}`;
-    expect(closed!.status).toBe('contacted');
   });
 
   it('confirms several orders with a result per order (FR-ORD-13)', async () => {

@@ -60,29 +60,27 @@ describe('pre-orders at the POS (FR-POS-09, FR-ORD-14, BR-10)', () => {
   let second: { id: string; docNo: string };
 
   it('lets the cashier take a deposit of at least 30%, cash into the open shift', async () => {
-    const low = await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Mai', phone: '0911000001' }, variantId: upcoming, qty: 2, deposit: cash(10000) } });
+    const low = await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Mai', phone: '0911000001' }, lines: [{ variantId: upcoming, qty: 2 }], deposit: cash(10000) } });
     expect(low.status).toBe(422);
     expect(low.body.error.code).toBe('deposit_out_of_range');
-    const r = await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Mai', phone: '0911000001' }, variantId: upcoming, qty: 2, deposit: cash(72000) } });
+    const r = await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Mai', phone: '0911000001' }, lines: [{ variantId: upcoming, qty: 2 }], deposit: cash(72000) } });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body).toMatchObject({ status: 'reserved' });
     expect(r.body.docNo).toMatch(/^DT-\d{4}-00001$/);
     first = r.body;
     const [m] = await h.t.sql`select direction, amount_vnd::int as amount, reason from sales.cash_movement where shift_id = ${shiftId}`;
     expect(m).toMatchObject({ direction: 'in', amount: 72000, reason: `Cọc ${first.docNo}` });
-    second = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Nam', phone: '0911000002' }, variantId: upcoming, qty: 1, deposit: { method: 'transfer', amountVnd: 120000, ref: 'ABCD2345' } } })).body;
+    second = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Nam', phone: '0911000002' }, lines: [{ variantId: upcoming, qty: 1 }], deposit: { method: 'transfer', amountVnd: 120000, ref: 'ABCD2345' } } })).body;
     // Online staff without the POS permission do not see pre-orders any more.
     expect((await h.call('GET', '/api/v1/preorders', { cookie: online })).status).toBe(403);
   });
 
-  it('allocates incoming stock oldest first and adds the customer to the worklist', async () => {
+  it('allocates incoming stock oldest first; a fully held pre-order is Arrived', async () => {
     await stockIn(upcoming, 2);
     const list = (await h.call('GET', '/api/v1/preorders', { cookie: cashier })).body.items;
     expect(list.find((p: { id: string }) => p.id === first.id).status).toBe('arrived');
     expect(list.find((p: { id: string }) => p.id === second.id).status).toBe('reserved');
-    const tasks = (await h.call('GET', '/api/v1/contact-tasks', { cookie: online })).body.items;
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]).toMatchObject({ reason: 'preorder_arrived', refLabel: first.docNo, phone: '+84911000001', overdue: false });
+    expect(list.find((p: { id: string }) => p.id === first.id).customerPhone).toBe('+84911000001');
     await stockIn(upcoming, 1);
     expect((await h.call('GET', '/api/v1/preorders?status=arrived', { cookie: cashier })).body.items).toHaveLength(2);
   });
@@ -113,8 +111,6 @@ describe('pre-orders at the POS (FR-POS-09, FR-ORD-14, BR-10)', () => {
     expect(await level(upcoming)).toEqual({ onHand: before.onHand - 2, reserved: before.reserved - 2 });
     const p = (await h.call('GET', `/api/v1/preorders?q=${first.docNo}`, { cookie: cashier })).body.items[0];
     expect(p).toMatchObject({ status: 'collected', saleId: sale.body.id });
-    const [task] = await h.t.sql`select status from orders.contact_task where ref_id = ${first.id}`;
-    expect(task!.status).toBe('contacted');
     // The drawer counts the deposit once, when it was taken (cash movement), and the rest at the sale.
     const shift = (await h.call('GET', `/api/v1/pos/shifts/${shiftId}`, { cookie: cashier })).body;
     expect(shift.cash).toMatchObject({ cashSalesVnd: 168000, cashInVnd: 72000 });
@@ -122,10 +118,9 @@ describe('pre-orders at the POS (FR-POS-09, FR-ORD-14, BR-10)', () => {
     expect(again.body.error.code).toBe('preorder_not_ready');
   });
 
-  it('starts the holding period when contacted and alerts once past it (FR-ORD-16)', async () => {
-    const task = (await h.call('GET', '/api/v1/contact-tasks?reason=preorder_arrived', { cookie: online })).body.items.find((t: { refId: string }) => t.refId === second.id);
-    expect((await h.call('POST', `/api/v1/contact-tasks/${task.id}/unreachable`, { cookie: online, body: { note: 'Không nghe máy' } })).body.attempts).toBe(1);
-    expect((await h.call('POST', `/api/v1/contact-tasks/${task.id}/contacted`, { cookie: online, body: {} })).body.status).toBe('contacted');
+  it('starts the holding period when the customer was called and alerts once past it (FR-ORD-16)', async () => {
+    expect((await h.call('POST', `/api/v1/preorders/${second.id}/contacted`, { cookie: cashier })).body.status).toBe('contacted');
+    expect((await h.call('POST', `/api/v1/preorders/${second.id}/contacted`, { cookie: cashier })).body.error.code).toBe('invalid_transition');
     const p = (await h.call('GET', '/api/v1/preorders?status=contacted', { cookie: cashier })).body.items[0];
     expect(p.id).toBe(second.id);
     expect(new Date(p.expiresAt).getTime() - new Date(p.contactedAt).getTime()).toBe(7 * 86_400_000);
@@ -144,10 +139,37 @@ describe('pre-orders at the POS (FR-POS-09, FR-ORD-14, BR-10)', () => {
     expect((await level(upcoming)).reserved).toBe(before.reserved - 1);
   });
 
+  it('holds several products item by item and is Arrived only when all are held', async () => {
+    const registerId = (await h.call('GET', '/api/v1/pos/registers', { cookie: cashier })).body.items[0].id;
+    const current = (await h.call('GET', `/api/v1/pos/shifts/current?register=${registerId}`, { cookie: cashier })).body.shift.id;
+    const dup = await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Hà', phone: '0911000005' }, lines: [{ variantId: other, qty: 1 }, { variantId: other, qty: 2 }], deposit: { method: 'cash', amountVnd: 200000, shiftId: current } } });
+    expect(dup.status).toBe(400);
+    const p = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Hà', phone: '0911000005' }, lines: [{ variantId: other, qty: 1 }, { variantId: upcoming, qty: 5 }], deposit: { method: 'cash', amountVnd: 300000, shiftId: current } } })).body;
+    expect(p.status).toBe('reserved');
+    let row = (await h.call('GET', `/api/v1/preorders?q=${p.docNo}`, { cookie: cashier })).body.items[0];
+    expect(row.totalVnd).toBe(120000 + 5 * 150000);
+    expect(row.lines.map((l: { variantId: string; held: boolean }) => [l.variantId, l.held])).toEqual([
+      [other, true],
+      [upcoming, false],
+    ]);
+    await stockIn(upcoming, 5);
+    row = (await h.call('GET', `/api/v1/preorders?q=${p.docNo}`, { cookie: cashier })).body.items[0];
+    expect(row.status).toBe('arrived');
+    const [ha] = await h.t.sql`select id from crm.customer where phone_e164 = '+84911000005'`;
+    const missing = await h.call('POST', '/api/v1/pos/sales', { cookie: cashier, body: { shiftId: current, preorderId: p.id, customerId: ha!.id, lines: [{ lineId: 'a', variantId: other, qty: 1 }], payments: [{ method: 'cash', amountVnd: 1 }] } });
+    expect(missing.body.error.code).toBe('preorder_line');
+    const sale = await h.call('POST', '/api/v1/pos/sales', {
+      cookie: cashier,
+      body: { shiftId: current, preorderId: p.id, customerId: ha!.id, lines: [{ lineId: 'a', variantId: other, qty: 1 }, { lineId: 'b', variantId: upcoming, qty: 5 }], payments: [{ method: 'cash', amountVnd: 870000 - 300000 }] },
+    });
+    expect(sale.status, JSON.stringify(sale.body)).toBe(201);
+    expect(sale.body.totalVnd).toBe(870000);
+  });
+
   it('refunds a cash deposit from the open shift on cancel', async () => {
     const registerId = (await h.call('GET', '/api/v1/pos/registers', { cookie: cashier })).body.items[0].id;
     const current = (await h.call('GET', `/api/v1/pos/shifts/current?register=${registerId}`, { cookie: cashier })).body.shift.id;
-    const p = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Quang', phone: '0911000004' }, variantId: other, qty: 3, deposit: { method: 'cash', amountVnd: 120000, shiftId: current } } })).body;
+    const p = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Quang', phone: '0911000004' }, lines: [{ variantId: other, qty: 3 }], deposit: { method: 'cash', amountVnd: 120000, shiftId: current } } })).body;
     expect((await h.call('POST', `/api/v1/preorders/${p.id}/ordered`, { cookie: cashier })).body.status).toBe('ordered');
     const noShift = await h.call('POST', `/api/v1/preorders/${p.id}/cancel`, { cookie: cashier, body: { reason: 'Nhà phát hành hết hàng', deposit: 'refund' } });
     expect(noShift.status).toBe(400);

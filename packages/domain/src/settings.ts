@@ -53,7 +53,6 @@ export const SETTINGS = {
   'event.refund_cutoff_h': { schema: int(0, 720), default: 48 },
   'preorder.deposit_pct': { schema: int(0, 100), default: 30 },
   'preorder.hold_days': { schema: int(1, 90), default: 7 },
-  'contact_task.due_hours': { schema: int(1, 720), default: 24 },
   'library.loan_days': { schema: int(1, 365), default: 14 },
   'library.renewals': { schema: int(0, 20), default: 2 },
   'library.renewal_days': { schema: int(1, 365), default: 7 },

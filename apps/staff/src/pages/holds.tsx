@@ -1,160 +1,18 @@
 import { CHANNEL_KINDS } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import clsx from 'clsx';
-import { ArrowLeft, HandCoins, PhoneCall, PhoneOff, Plus, RadioTower } from 'lucide-react';
+import { ArrowLeft, HandCoins, Plus, RadioTower } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ConfirmDialog, DataTable, FilterMenu, SelectField, Tabs, TextArea, toast, useListParam, useParam, type Column } from '../components/data';
+import { ConfirmDialog, DataTable, SelectField, Tabs, toast, useParam, type Column } from '../components/data';
 import { ORDER_SOURCE } from '../components/order-ui';
-import { Button, EmptyState, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
+import { Button, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { get, patch, post } from '../lib/api';
-import { formatDateTime, formatPhone, formatVnd } from '../lib/format';
+import { formatDateTime, formatVnd } from '../lib/format';
 import { Dialog, MoneyInput } from '../pos/widgets';
 
 /**
- * The to-notify worklist (“Cần liên hệ”, FR-ORD-18, Design §12.8), COD reconciliation (FR-ORD-11),
- * channel profiles (FR-SOC-01) and the product share card (FR-SOC-04). Pre-orders are in the POS.
+ * COD reconciliation (FR-ORD-11), channel profiles (FR-SOC-01) and the product share card (FR-SOC-04). Pre-orders are in the POS.
  */
-
-// =============================================================================================
-// To-notify worklist (FR-ORD-18, UC-19, Design §12.8)
-
-interface Task {
-  id: string;
-  reason: string;
-  name: string;
-  phone: string | null;
-  refType: string;
-  refId: string;
-  refLabel: string | null;
-  dueAt: string;
-  note: string | null;
-  attempts: number;
-  overdue: boolean;
-}
-
-const TASK_REASON: Record<string, string> = {
-  preorder_arrived: 'Pre-order về',
-  pickup_ready: 'Sẵn sàng nhận hàng',
-  library_hold: 'Thư viện giữ sách',
-  waitlist_offer: 'Suất chờ sự kiện',
-  event_cancelled: 'Sự kiện hủy',
-};
-
-function refLink(t: Task): string | null {
-  if (t.refType === 'web_order') return `/orders/${t.refId}`;
-  if (t.refType === 'preorder') return '/pos';
-  return null;
-}
-
-function DueChip({ t }: { t: Task }) {
-  if (t.overdue) return <StatusChip tone="danger">Quá hạn</StatusChip>;
-  const today = new Date().toDateString() === new Date(t.dueAt).toDateString();
-  return today ? <StatusChip tone="warning">Hạn hôm nay</StatusChip> : <StatusChip tone="info">Hạn {formatDateTime(t.dueAt)}</StatusChip>;
-}
-
-export function ContactTasksPage() {
-  const qc = useQueryClient();
-  const [reason, setReason] = useListParam('reason');
-  const [unreachable, setUnreachable] = useState<Task | null>(null);
-  const list = useQuery({ queryKey: ['contact-tasks', reason], queryFn: () => get<{ items: Task[] }>('/api/v1/contact-tasks', { reason: reason.join(',') || undefined }) });
-  const items = [...(list.data?.items ?? [])].sort((a, b) => Number(b.overdue) - Number(a.overdue) || a.dueAt.localeCompare(b.dueAt));
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: ['contact-tasks'] });
-    void qc.invalidateQueries({ queryKey: ['badges'] });
-  };
-  return (
-    <>
-      <PageHeader title="Cần liên hệ" />
-      <div className="mb-4">
-        <FilterMenu groups={[{ label: 'Lý do', options: Object.entries(TASK_REASON).map(([key, label]) => ({ key, label })), values: reason, onChange: setReason }]} />
-      </div>
-      {list.isError ? (
-        <ErrorState error={list.error} onRetry={() => list.refetch()} />
-      ) : !list.data ? (
-        <Skeleton className="h-40" />
-      ) : items.length === 0 ? (
-        <EmptyState icon={PhoneCall} title="Không có ai cần liên hệ" help="Khách có pre-order về, đơn sẵn sàng nhận… sẽ hiện ở đây." />
-      ) : (
-        <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {items.map((t) => {
-            const link = refLink(t);
-            return (
-              <li key={t.id} className={clsx('flex flex-col gap-3 rounded-lg border bg-white p-4', t.overdue ? 'border-danger-700' : 'border-paper-300')}>
-                <div className="flex items-start justify-between gap-2">
-                  <p className="text-sm text-ink-700">
-                    {TASK_REASON[t.reason] ?? t.reason}
-                    {t.refLabel && (
-                      <>
-                        {' · '}
-                        {link ? (
-                          <Link to={link} className="code whitespace-nowrap text-navy-700 underline">
-                            {t.refLabel}
-                          </Link>
-                        ) : (
-                          <span className="code whitespace-nowrap">{t.refLabel}</span>
-                        )}
-                      </>
-                    )}
-                  </p>
-                  <DueChip t={t} />
-                </div>
-                <div>
-                  <p className="font-semibold text-ink-900">{t.name}</p>
-                  {t.phone && (
-                    <a href={`tel:${t.phone}`} className="text-xl font-semibold text-navy-700 underline num">
-                      {formatPhone(t.phone)}
-                    </a>
-                  )}
-                </div>
-                {t.note && <p className="text-[13px] whitespace-pre-line text-ink-500">{t.note}</p>}
-                <div className="mt-auto flex gap-2">
-                  <Button
-                    variant="primary"
-                    icon={PhoneCall}
-                    onClick={async () => {
-                      try {
-                        await post(`/api/v1/contact-tasks/${t.id}/contacted`, {});
-                        toast.success(`Đã liên hệ ${t.name}.`);
-                        refresh();
-                      } catch (e) {
-                        toast.error((e as Error).message);
-                      }
-                    }}
-                  >
-                    Đã liên hệ
-                  </Button>
-                  <Button variant="secondary" icon={PhoneOff} onClick={() => setUnreachable(t)}>
-                    Không liên lạc được
-                  </Button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {unreachable && <UnreachableDialog task={unreachable} onClose={() => setUnreachable(null)} onDone={refresh} />}
-    </>
-  );
-}
-
-function UnreachableDialog({ task, onClose, onDone }: { task: Task; onClose: () => void; onDone: () => void }) {
-  const [note, setNote] = useState('');
-  return (
-    <ConfirmDialog
-      title="Không liên lạc được"
-      body="Việc vẫn mở tới hạn; ghi chú lần gọi để người sau biết."
-      confirm="Lưu ghi chú"
-      onClose={onClose}
-      onConfirm={async () => {
-        await post(`/api/v1/contact-tasks/${task.id}/unreachable`, { note: note.trim() });
-        onDone();
-      }}
-    >
-      <TextArea label="Ghi chú" required value={note} onChange={(e) => setNote(e.target.value)} />
-    </ConfirmDialog>
-  );
-}
 
 // =============================================================================================
 // COD reconciliation (FR-ORD-11)

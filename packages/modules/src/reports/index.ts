@@ -529,10 +529,5 @@ export async function badges(ctx: Ctx) {
     const [h] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.preorder where status = 'contacted' and expires_at < ${tsParam(ctx.clock.now())}`);
     out.holdsOverdue = h!.n;
   }
-  // Overdue to-notify tasks on “Cần liên hệ” (UC-19), not a dashboard tile (FR-RPT-01).
-  if (can(ctx.actor, 'contact_task.manage')) {
-    const [r] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.contact_task where status = 'open' and due_at < ${tsParam(ctx.clock.now())}`);
-    out.contactTasksOverdue = r!.n;
-  }
   return out;
 }

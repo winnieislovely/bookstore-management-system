@@ -65,7 +65,6 @@ const JOBS: { name: string; cron: string; run: () => Promise<unknown> }[] = [
   { name: 'ghn.poll', cron: '*/3 * * * *', run: () => orders.pollShipments(ctx(), carrier) },
   { name: 'geo.refresh', cron: '0 3 * * *', run: () => orders.refreshGeo(ctx(), carrier) },
   { name: 'preorder.expire', cron: '0 8 * * *', run: () => orders.notifyExpiredHolds(ctx()) },
-  { name: 'contact_task.overdue', cron: '5 * * * *', run: () => orders.notifyOverdueTasks(ctx()) },
 ];
 
 async function main() {

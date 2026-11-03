@@ -651,7 +651,6 @@ async function cancelTx(tx: Tx, ctx: Ctx, o: OrderRow, reason: string) {
   // Promotion usage counts only orders that go ahead (FR-PRM-06).
   await tx.delete(schema.promotionUsage).where(and(eq(schema.promotionUsage.refType, REF), eq(schema.promotionUsage.refId, o.id)));
   if (o.couponCode) await tx.update(schema.coupon).set({ used: sql`greatest(${schema.coupon.used} - 1, 0)` }).where(sql`upper(${schema.coupon.code}) = ${o.couponCode}`);
-  await tx.update(schema.contactTask).set({ status: 'cancelled' }).where(and(eq(schema.contactTask.refType, REF), eq(schema.contactTask.refId, o.id), eq(schema.contactTask.status, 'open')));
   await transition(tx, ctx, o, 'cancelled', reason, { cancelledAt: ctx.clock.now(), cancelReason: reason, reviewReasons: [] });
   await audit.record(tx, ctx, { action: 'order.cancel', entity: REF, entityId: o.id, after: { reason } });
   // A paid transfer is refunded outside the system (no payment gateway, SRS §2.6).
@@ -826,7 +825,7 @@ export async function markDelivered(ctx: Ctx, id: string) {
 // =============================================================================================
 // Store pickup (FR-ORD-12)
 
-/** Packed and ready: a 6-digit pickup code (stored hashed) and a to-notify task. */
+/** Packed and ready: a 6-digit pickup code (stored hashed) for staff to give the customer when they call. */
 export async function pickupReady(ctx: Ctx, id: string) {
   requirePermission(ctx, 'online.manage');
   return ctx.db.transaction(async (tx) => {
@@ -837,16 +836,6 @@ export async function pickupReady(ctx: Ctx, id: string) {
     const code = pickupCodeFromBytes(randomBytes(4));
     const now = ctx.clock.now();
     await tx.update(schema.webOrder).set({ readyAt: now, pickupCodeHash: sha256(`${o.id}:${code}`), updatedAt: now }).where(eq(schema.webOrder.id, id));
-    await createContactTask(tx, ctx, {
-      reason: 'pickup_ready',
-      customerId: o.customerId,
-      name: o.recipient.name,
-      phone: o.recipient.phone,
-      refType: REF,
-      refId: o.id,
-      refLabel: o.docNo,
-      dueAt: new Date(now.getTime() + 24 * 3600_000),
-    });
     return { id, pickupCode: code };
   });
 }
@@ -863,31 +852,9 @@ export async function handover(ctx: Ctx, id: string, input: z.input<typeof Hando
     if (o.pickupCodeHash !== sha256(`${o.id}:${code}`)) throw new AppError(422, 'pickup_code_mismatch', 'Mã nhận hàng không đúng. Hãy hỏi lại khách.');
     if (o.paymentMethod === 'transfer' && !o.paidAt) throw errors.conflict('payment_required', `Đơn ${o.docNo} chưa nhận được chuyển khoản.`);
     await takeStockOut(tx, ctx, o);
-    await tx.update(schema.contactTask).set({ status: 'contacted', contactedAt: ctx.clock.now(), contactedBy: ctx.actor!.userId }).where(and(eq(schema.contactTask.refType, REF), eq(schema.contactTask.refId, o.id), eq(schema.contactTask.status, 'open')));
     await completeTx(tx, ctx, o, 'picked_up');
     return { id, status: o.status };
   });
-}
-
-// =============================================================================================
-// To-notify worklist (FR-ORD-18): tasks are created by other modules
-
-export interface ContactTaskInput {
-  reason: (typeof schema.CONTACT_REASONS)[number];
-  customerId: string | null;
-  name: string;
-  phone: string | null;
-  refType: string;
-  refId: string;
-  refLabel?: string | null;
-  dueAt: Date;
-}
-
-export async function createContactTask(tx: Tx, ctx: Ctx, t: ContactTaskInput): Promise<void> {
-  await tx
-    .insert(schema.contactTask)
-    .values({ ...t, refLabel: t.refLabel ?? null, status: 'open', createdAt: ctx.clock.now() })
-    .onConflictDoNothing();
 }
 
 
