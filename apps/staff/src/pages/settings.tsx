@@ -6,6 +6,8 @@ import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, Sta
 import { get, post, put } from '../lib/api';
 import { formatDateTime, formatNumber, formatRelative } from '../lib/format';
 import { Dialog } from '../pos/widgets';
+import { can, useMe } from '../lib/session';
+import { ChannelsPanel } from './holds';
 
 /** Settings (FR-ADM-04, FR-ADM-06, FR-ADM-10, TDD §11.5 health page). */
 
@@ -87,6 +89,7 @@ interface SettingItem {
 
 export function SettingsPage() {
   const [tab, setTab] = useParam('tab', 'config');
+  const { data: me } = useMe();
   return (
     <>
       <PageHeader title="Cài đặt" />
@@ -95,6 +98,8 @@ export function SettingsPage() {
           { key: 'config', label: 'Cấu hình' },
           { key: 'master', label: 'Danh mục dùng chung' },
           { key: 'backup', label: 'Sao lưu & dữ liệu' },
+          // Channel profiles need online.manage too (FR-SOC-01).
+          ...(can(me, 'online.manage') ? [{ key: 'channels', label: 'Kênh bán' }] : []),
         ]}
         value={tab as 'config'}
         onChange={setTab}
@@ -102,6 +107,7 @@ export function SettingsPage() {
       {tab === 'config' && <Config />}
       {tab === 'master' && <MasterData />}
       {tab === 'backup' && <Backup />}
+      {tab === 'channels' && can(me, 'online.manage') && <ChannelsPanel />}
     </>
   );
 }

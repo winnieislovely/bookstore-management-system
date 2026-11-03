@@ -18,7 +18,7 @@ import { AuditPage, DevicesPage, RolesPage, UsersPage } from './pages/admin';
 import { ConsignmentPage } from './pages/consignment';
 import { CountDetailPage, CountsPage } from './pages/counts';
 import { CustomerDetailPage, CustomersPage } from './pages/customers';
-import { ChannelsPage, CodPage, ContactTasksPage, HoldsPage } from './pages/holds';
+import { CodPage, ContactTasksPage, HoldsPage } from './pages/holds';
 import { OrderDetailPage, OrderNewPage, OrdersPage } from './pages/orders';
 import { ProductDetailPage } from './pages/productDetail';
 import { ProductNewPage } from './pages/productNew';
@@ -110,7 +110,6 @@ const BUILT: Record<string, ReactNode> = {
 const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   { path: 'sales/:id', anyOf: ['sale.create'], element: <SaleDetailPage /> },
   { path: 'orders/cod', anyOf: ['online.manage'], element: <CodPage /> },
-  { path: 'orders/channels', anyOf: ['online.manage'], element: <ChannelsPage /> },
   { path: 'orders/new', anyOf: ['online.manage'], element: <OrderNewPage /> },
   { path: 'orders/:id', anyOf: ['online.manage'], element: <OrderDetailPage /> },
   { path: 'shifts/:id', anyOf: ['shift.view_all'], element: <ShiftDetailPage /> },

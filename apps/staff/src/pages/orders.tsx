@@ -1,7 +1,7 @@
 import { ORDER_SOURCES } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { ArrowLeft, Calculator, CheckCircle, HandCoins, MoreHorizontal, Package, PackageCheck, Plus, RadioTower, RefreshCw, Store, Trash2, Truck, Undo2, XCircle } from 'lucide-react';
+import { ArrowLeft, Calculator, CheckCircle, HandCoins, MoreHorizontal, Package, PackageCheck, Plus, RefreshCw, Store, Trash2, Truck, Undo2, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, SelectionBar, TextArea, TimeFilter, timeLabel, timeRange, toast, useDebounced, useListParam, useParam, type Column } from '../components/data';
@@ -122,9 +122,6 @@ export function OrdersPage() {
           <>
             <Button variant="secondary" icon={HandCoins} onClick={() => navigate('/orders/cod')}>
               Đối soát COD
-            </Button>
-            <Button variant="secondary" icon={RadioTower} onClick={() => navigate('/orders/channels')}>
-              Kênh bán
             </Button>
             <Button variant="primary" icon={Plus} onClick={() => navigate('/orders/new')}>
               Tạo đơn

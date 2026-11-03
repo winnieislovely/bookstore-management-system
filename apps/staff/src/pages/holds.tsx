@@ -710,7 +710,8 @@ interface Channel {
   active: boolean;
 }
 
-export function ChannelsPage() {
+/** Channel profiles, a tab of Cài đặt (FR-SOC-01). */
+export function ChannelsPanel() {
   const qc = useQueryClient();
   const [edit, setEdit] = useState<Channel | 'new' | null>(null);
   const list = useQuery({ queryKey: ['channels', 'all'], queryFn: () => get<{ items: Channel[] }>('/api/v1/channels') });
@@ -723,19 +724,12 @@ export function ChannelsPage() {
   ];
   return (
     <>
-      <PageHeader
-        breadcrumb={
-          <Link to="/orders" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Giao hàng
-          </Link>
-        }
-        title="Kênh bán"
-        actions={
-          <Button variant="primary" icon={Plus} onClick={() => setEdit('new')}>
-            Thêm kênh
-          </Button>
-        }
-      />
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <p className="text-sm text-ink-500">Trang và tài khoản bán hàng, để chọn khi tạo đơn.</p>
+        <Button variant="primary" icon={Plus} onClick={() => setEdit('new')}>
+          Thêm kênh
+        </Button>
+      </div>
       <DataTable
         columns={columns}
         rows={list.data?.items}
