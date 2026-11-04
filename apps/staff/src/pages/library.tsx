@@ -1102,42 +1102,48 @@ interface SlipDetail extends Slip {
   owed: { id: string; kind: string; label: string; barcode: string; amountVnd: number }[];
 }
 
-function SlipDialog({
-  id,
-  onClose,
-  onRenew,
-  onReturn,
-  onLost,
-  onPay,
-  onRefund,
-  canRefund,
-}: {
-  id: string;
-  onClose: () => void;
-  onRenew: (loan: Loan) => void;
-  onReturn: (barcode: string) => void;
-  onLost: (loan: Loan) => void;
-  onPay: (customerId: string) => void;
-  onRefund: (payment: SlipPayment) => void;
-  canRefund: boolean;
-}) {
+/** Phiếu mượn: its own page, opened from a row of Mượn / trả (Design §13.8). */
+export function LibrarySlipPage() {
+  const { id = '' } = useParams();
+  const { data: me } = useMe();
+  const qc = useQueryClient();
+  const [dialog, setDialog] = useState<null | { kind: 'return'; barcode: string } | { kind: 'renew'; loan: Loan } | { kind: 'lost'; loan: Loan } | { kind: 'pay'; customerId: string } | { kind: 'refund'; payment: SlipPayment }>(null);
+  const [reason, setReason] = useState('');
   const d = useQuery({ queryKey: ['library-loans', 'slip', id], queryFn: () => get<SlipDetail>(`/api/v1/library/slips/${id}`) });
+  const fee = useQuery({ queryKey: ['library-borrower', d.data?.customerId], enabled: !!d.data && dialog?.kind === 'renew', queryFn: () => get<Borrower>(`/api/v1/library/borrowers/${d.data!.customerId}`) });
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['library-loans'] });
   const s = d.data;
   const owedVnd = s ? s.owed.reduce((a, c) => a + c.amountVnd, 0) : 0;
+  const canRefund = can(me, 'library.fine_waive');
+  const onRenew = (loan: Loan) => setDialog({ kind: 'renew', loan });
+  const onReturn = (barcode: string) => setDialog({ kind: 'return', barcode });
+  const onLost = (loan: Loan) => setDialog({ kind: 'lost', loan });
+  const onPay = (customerId: string) => setDialog({ kind: 'pay', customerId });
+  const onRefund = (payment: SlipPayment) => setDialog({ kind: 'refund', payment });
+  if (d.error) return <ErrorState error={d.error} onRetry={() => d.refetch()} />;
+  if (!s) return <Skeleton className="h-64" />;
   return (
-    <Dialog title={s ? `Phiếu mượn ${s.docNo ?? ''}`.trim() : 'Phiếu mượn'} size="lg" onClose={onClose} footer={<Button variant="secondary" onClick={onClose}>Đóng</Button>}>
-      {d.error ? (
-        <ErrorState error={d.error} onRetry={() => d.refetch()} />
-      ) : !s ? (
-        <Skeleton className="h-48" />
-      ) : (
-        <div className="flex flex-col gap-5 text-sm">
+    <>
+      <PageHeader
+        title={s.docNo ? `Phiếu mượn ${s.docNo}` : 'Phiếu mượn'}
+        breadcrumb={
+          <Link to="/library" className="hover:underline">
+            Mượn / trả
+          </Link>
+        }
+      />
+        <div className="flex flex-col gap-4 text-sm">
+          <Card title="Thông tin phiếu">
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
             <dt className="text-ink-500">Khách</dt>
-            <dd className="flex flex-wrap items-center gap-x-3">
+            <dd>
               <Link to={`/customers/${s.customerId}`} className="font-semibold hover:underline">
                 {s.customerName}
               </Link>
+            </dd>
+            {/* Phone on its own line (Design §13.8). */}
+            <dt className="text-ink-500">SĐT</dt>
+            <dd>
               <CallLink phone={s.customerPhone} />
             </dd>
             <dt className="text-ink-500">Thời gian tạo</dt>
@@ -1145,8 +1151,8 @@ function SlipDialog({
             <dt className="text-ink-500">Người thu</dt>
             <dd>{s.receivedBy ?? '—'}</dd>
           </dl>
-          <section className="flex flex-col gap-2">
-            <h3 className="text-[13px] font-semibold text-ink-700">Sách mượn</h3>
+          </Card>
+          <Card title="Sách mượn">
             <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
               {s.loans.map((l) => {
                 const out = !l.returnedAt;
@@ -1188,9 +1194,9 @@ function SlipDialog({
                 );
               })}
             </ul>
-          </section>
-          <section className="flex flex-col gap-2">
-            <h3 className="text-[13px] font-semibold text-ink-700">Thanh toán</h3>
+          </Card>
+          <Card title="Thanh toán">
+            <div className="flex flex-col gap-3">
             <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
               {s.payments.map((p) => (
                 <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
@@ -1230,10 +1236,45 @@ function SlipDialog({
                 Thu phí {formatVnd(owedVnd)}
               </Button>
             )}
-          </section>
+            </div>
+          </Card>
         </div>
+      {dialog?.kind === 'return' && <ReturnDialog initialBarcode={dialog.barcode} onClose={() => { setDialog(null); refresh(); }} />}
+      {dialog?.kind === 'renew' && <RenewDialog loan={dialog.loan} fee={fee.data} onClose={() => setDialog(null)} onDone={refresh} />}
+      {dialog?.kind === 'pay' && <PayChargesDialog customerId={dialog.customerId} onClose={() => setDialog(null)} onDone={refresh} />}
+      {dialog?.kind === 'lost' && (
+        <ConfirmDialog
+          title={`Báo mất “${dialog.loan.title}”?`}
+          body="Lượt mượn kết thúc, bản sách chuyển sang Mất và khách chịu giá trị cuốn sách cộng phí xử lý. Nếu tìm lại được, khoản phí sẽ được hủy."
+          confirm="Báo mất"
+          destructive
+          onConfirm={async () => {
+            const r = await post<{ chargeVnd: number }>(`/api/v1/library/loans/${dialog.loan.id}/mark-lost`);
+            toast.success(`Đã ghi nhận mất sách – phí ${formatVnd(r.chargeVnd)}.`);
+            refresh();
+            // Collect the charge now if the borrower pays at once (FR-LIB-11).
+            if (r.chargeVnd > 0) setTimeout(() => setDialog({ kind: 'pay', customerId: dialog.loan.customerId }), 0);
+          }}
+          onClose={() => setDialog((x) => (x?.kind === 'lost' ? null : x))}
+        />
       )}
-    </Dialog>
+      {dialog?.kind === 'refund' && (
+        <ConfirmDialog
+          title={`Hoàn phiếu ${dialog.payment.docNo} – ${formatVnd(dialog.payment.amountVnd)}?`}
+          body="Trả lại tiền cho khách; các khoản của phiếu này chuyển về chưa thu."
+          confirm="Hoàn tiền"
+          destructive
+          onConfirm={async () => {
+            await post(`/api/v1/library/payments/${dialog.payment.id}/refund`, { reason });
+            setReason('');
+            refresh();
+          }}
+          onClose={() => setDialog(null)}
+        >
+          <TextArea label="Lý do" required value={reason} onChange={(e) => setReason(e.target.value)} />
+        </ConfirmDialog>
+      )}
+    </>
   );
 }
 
@@ -1243,11 +1284,8 @@ export function LibraryDeskPage() {
   const [tab, setTab] = useParam('tab', 'open');
   const [q, setQ] = useParam('q');
   const [time, setTime] = useParam('time');
-  const [slipId, setSlipId] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<
-    null | { kind: 'borrow' } | { kind: 'return'; barcode?: string } | { kind: 'renew'; loan: Loan } | { kind: 'lost'; loan: Loan } | { kind: 'unhold'; hold: Hold } | { kind: 'pay'; customerId: string } | { kind: 'refund'; payment: SlipPayment }
-  >(null);
-  const [reason, setReason] = useState('');
+  const navigate = useNavigate();
+  const [dialog, setDialog] = useState<null | { kind: 'borrow' } | { kind: 'return' } | { kind: 'unhold'; hold: Hold }>(null);
   const days = time ? timeDays(time) : null;
   // Loan slips, one per check-out receipt (FR-LIB-09a); held copies keep their own list.
   const list = useQuery({
@@ -1263,7 +1301,6 @@ export function LibraryDeskPage() {
   const counts = list.data?.counts;
   const overview = useQuery({ queryKey: ['library-loans', 'overview'], queryFn: () => get<LibraryOverviewData>('/api/v1/library/overview') });
   const refresh = () => void qc.invalidateQueries({ queryKey: ['library-loans'] });
-  const fee = useQuery({ queryKey: ['settings-library-fee'], enabled: dialog?.kind === 'renew', queryFn: () => get<Borrower>(`/api/v1/library/borrowers/${(dialog as { loan: Loan }).loan.customerId}`) });
   const slipColumns: Column<Slip>[] = [
     { header: 'Số phiếu', className: 'whitespace-nowrap', cell: (s) => <span className="code font-medium">{s.docNo ?? '—'}</span> },
     {
@@ -1368,7 +1405,7 @@ export function LibraryDeskPage() {
           columns={slipColumns}
           rows={list.data?.items}
           rowKey={(s) => s.id}
-          onRow={(s) => setSlipId(s.id)}
+          onRow={(s) => navigate(`/library/slips/${s.id}`)}
           error={list.error}
           onRetry={() => list.refetch()}
           minWidth={960}
@@ -1379,54 +1416,8 @@ export function LibraryDeskPage() {
           }
         />
       )}
-      {slipId && (
-        <SlipDialog
-          id={slipId}
-          onClose={() => setSlipId(null)}
-          onRenew={(loan) => setDialog({ kind: 'renew', loan })}
-          onReturn={(barcode) => setDialog({ kind: 'return', barcode })}
-          onLost={(loan) => setDialog({ kind: 'lost', loan })}
-          onPay={(customerId) => setDialog({ kind: 'pay', customerId })}
-          onRefund={(payment) => setDialog({ kind: 'refund', payment })}
-          canRefund={can(me, 'library.fine_waive')}
-        />
-      )}
-      {dialog?.kind === 'refund' && (
-        <ConfirmDialog
-          title={`Hoàn phiếu ${dialog.payment.docNo} – ${formatVnd(dialog.payment.amountVnd)}?`}
-          body="Trả lại tiền cho khách; các khoản của phiếu này chuyển về chưa thu."
-          confirm="Hoàn tiền"
-          destructive
-          onConfirm={async () => {
-            await post(`/api/v1/library/payments/${dialog.payment.id}/refund`, { reason });
-            setReason('');
-            refresh();
-          }}
-          onClose={() => setDialog(null)}
-        >
-          <TextArea label="Lý do" required value={reason} onChange={(e) => setReason(e.target.value)} />
-        </ConfirmDialog>
-      )}
       {dialog?.kind === 'borrow' && <BorrowDialog onClose={() => setDialog(null)} />}
-      {dialog?.kind === 'return' && <ReturnDialog {...(dialog.barcode && { initialBarcode: dialog.barcode })} onClose={() => setDialog(null)} />}
-      {dialog?.kind === 'renew' && <RenewDialog loan={dialog.loan} fee={fee.data} onClose={() => setDialog(null)} onDone={refresh} />}
-      {dialog?.kind === 'pay' && <PayChargesDialog customerId={dialog.customerId} onClose={() => setDialog(null)} onDone={refresh} />}
-      {dialog?.kind === 'lost' && (
-        <ConfirmDialog
-          title={`Báo mất “${dialog.loan.title}”?`}
-          body="Lượt mượn kết thúc, bản sách chuyển sang Mất và khách chịu giá trị cuốn sách cộng phí xử lý. Nếu tìm lại được, khoản phí sẽ được hủy."
-          confirm="Báo mất"
-          destructive
-          onConfirm={async () => {
-            const r = await post<{ chargeVnd: number }>(`/api/v1/library/loans/${dialog.loan.id}/mark-lost`);
-            toast.success(`Đã ghi nhận mất sách – phí ${formatVnd(r.chargeVnd)}.`);
-            refresh();
-            // Collect the charge now if the borrower pays at once (FR-LIB-11).
-            if (r.chargeVnd > 0) setTimeout(() => setDialog({ kind: 'pay', customerId: dialog.loan.customerId }), 0);
-          }}
-          onClose={() => setDialog((d) => (d?.kind === 'lost' ? null : d))}
-        />
-      )}
+      {dialog?.kind === 'return' && <ReturnDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === 'unhold' && (
         <ConfirmDialog
           title="Hủy giữ sách?"

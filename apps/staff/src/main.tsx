@@ -18,7 +18,7 @@ import { AuditPage, DevicesPage, RolesPage, UsersPage } from './pages/admin';
 import { ConsignmentPage } from './pages/consignment';
 import { CountDetailPage, CountsPage } from './pages/counts';
 import { CustomerDetailPage, CustomersPage } from './pages/customers';
-import { LibraryCatalogPage, LibraryDeskPage, LibraryReportPage, LibraryTitlePage } from './pages/library';
+import { LibraryCatalogPage, LibraryDeskPage, LibraryReportPage, LibrarySlipPage, LibraryTitlePage } from './pages/library';
 import { LibraryCountDetailPage, LibraryCountsPage } from './pages/libraryCounts';
 import { CodPage } from './pages/holds';
 import { OrderDetailPage, OrderNewPage, OrdersPage } from './pages/orders';
@@ -130,6 +130,7 @@ const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   { path: 'counts/:id', anyOf: ['inventory.count'], element: <CountDetailPage /> },
   { path: 'library/titles/:id', anyOf: ['library.manage', 'library.lend'], element: <LibraryTitlePage /> },
   { path: 'library/counts/:id', anyOf: ['library.count'], element: <LibraryCountDetailPage /> },
+  { path: 'library/slips/:id', anyOf: ['library.lend'], element: <LibrarySlipPage /> },
 ];
 
 const router = createBrowserRouter([
