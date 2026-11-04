@@ -9,6 +9,7 @@ import {
   isOverdue,
   lateFee,
   LIB_LANGUAGES,
+  LIB_PAYMENT_METHODS,
   loanFee,
   nextLibraryCode,
   normalizeIsbn,
@@ -22,7 +23,7 @@ import * as audit from '../audit/index.js';
 import * as inventory from '../inventory/index.js';
 import * as notifications from '../notifications/index.js';
 import * as settings from '../settings/index.js';
-import { AppError, can, emit, errors, requirePermission, tsParam, type Ctx, type Tx } from '../platform/index.js';
+import { AppError, can, emit, errors, nextDocNo, requirePermission, tsParam, type Ctx, type Tx } from '../platform/index.js';
 
 /**
  * Library (SRS §3.9, TDD §4.8): a lending collection with its own catalogue. Borrowers are
@@ -350,6 +351,43 @@ export async function labels(ctx: Ctx, copyIds: string[]) {
   return { items: rows };
 }
 
+export const CopiesQuery = z.object({
+  q: z.string().trim().min(1).max(100),
+  status: z.enum(['available', 'reserved', 'on_loan', 'lost', 'damaged']).optional(),
+});
+
+/** Copies matching a library code, copy code or title, for the check-out search (Design §13.8). */
+export async function searchCopies(ctx: Ctx, input: z.input<typeof CopiesQuery>) {
+  requireAny(ctx);
+  const q = CopiesQuery.parse(input);
+  const folded = foldText(q.q);
+  const rows = await ctx.db
+    .select({ id: schema.libCopy.id, barcode: schema.libCopy.barcode, status: schema.libCopy.status, shelf: schema.libCopy.shelf, code: schema.libTitle.code, title: schema.libTitle.title })
+    .from(schema.libCopy)
+    .innerJoin(schema.libTitle, eq(schema.libTitle.id, schema.libCopy.titleId))
+    .where(
+      and(
+        q.status ? eq(schema.libCopy.status, q.status) : undefined,
+        sql`(upper(${schema.libCopy.barcode}) like upper(${`${q.q}%`}) or ${schema.libTitle.searchText} like ${`%${folded}%`})`,
+      ),
+    )
+    .orderBy(asc(schema.libCopy.barcode))
+    .limit(20);
+  return { items: rows };
+}
+
+/** The scan step of check-out: one copy by its exact barcode, never a fuzzy title match. */
+export async function copyByBarcode(ctx: Ctx, barcode: string) {
+  requireAny(ctx);
+  const [row] = await ctx.db
+    .select({ id: schema.libCopy.id, barcode: schema.libCopy.barcode, status: schema.libCopy.status, code: schema.libTitle.code, title: schema.libTitle.title })
+    .from(schema.libCopy)
+    .innerJoin(schema.libTitle, eq(schema.libTitle.id, schema.libCopy.titleId))
+    .where(sql`upper(${schema.libCopy.barcode}) = upper(${barcode.trim()})`);
+  if (!row) throw new AppError(404, 'copy_not_found', `Không tìm thấy bản sách có mã ${barcode.trim()}.`, { barcode });
+  return row;
+}
+
 // =============================================================================================
 // Borrowers (FR-LIB-05, FR-LIB-15)
 
@@ -456,14 +494,15 @@ async function chargesOf(tx: Tx, where: SQL, limit: number) {
     reason: string | null;
     created_at: Date;
     paid_at: Date | null;
-    sale_doc_no: string | null;
+    receipt_no: string | null;
     code: string | null;
     title: string | null;
     barcode: string | null;
   }>(sql`
     select ch.id, ch.kind, ch.list_vnd, ch.discount_pct, ch.amount_vnd, ch.status, ch.reason, ch.created_at, ch.paid_at,
-           s.doc_no as sale_doc_no, t.code, t.title, c.barcode
+           coalesce(p.doc_no, s.doc_no) as receipt_no, t.code, t.title, c.barcode
     from library.lib_charge ch
+    left join library.lib_payment p on p.id = ch.payment_id
     left join sales.sale s on s.id = ch.sale_id
     left join library.loan l on l.id = ch.loan_id
     left join library.lib_copy c on c.id = l.copy_id
@@ -479,7 +518,8 @@ async function chargesOf(tx: Tx, where: SQL, limit: number) {
     reason: x.reason,
     createdAt: x.created_at,
     paidAt: x.paid_at,
-    saleDocNo: x.sale_doc_no,
+    /** Desk receipt, or the POS sale for charges paid before 4 Nov 2026. */
+    receiptNo: x.receipt_no,
     code: x.code,
     title: x.title,
     barcode: x.barcode,
@@ -488,15 +528,132 @@ async function chargesOf(tx: Tx, where: SQL, limit: number) {
 
 export const CHARGE_TEXT: Record<string, string> = { loan_fee: 'Phí mượn sách', late_fee: 'Phí trả trễ', lost: 'Phí mất sách', damage: 'Phí hỏng sách' };
 
-/** Unpaid charges offered at the POS as service lines (FR-POS-08). */
-export async function unpaidCharges(ctx: Ctx, customerId: string) {
-  if (!ctx.actor) throw errors.unauthenticated();
-  if (!can(ctx.actor, 'sale.create') && !can(ctx.actor, 'library.lend')) throw errors.forbidden('sale.create');
-  const items = (await chargesOf(ctx.db, sql`ch.customer_id = ${customerId}::uuid and ch.status = 'unpaid'`, 50)).map((c) => ({
-    ...c,
-    description: `${CHARGE_TEXT[c.kind]}${c.code ? ` – ${c.barcode} ${c.title}` : ''}`,
+// =============================================================================================
+// Library cash book (FR-LIB-09a): every fee is collected at the desk, never through the POS
+
+/** Cash or bank transfer only; a transfer reference may be noted (FR-LIB-09a). */
+export const PaymentSchema = z.object({
+  method: z.enum(['cash', 'transfer']),
+  ref: z.string().trim().max(60).optional(),
+});
+
+/** One receipt for the given unpaid charges of one borrower; they become paid. */
+async function collect(tx: Tx, ctx: Ctx, customerId: string, chargeIds: string[], payment: z.infer<typeof PaymentSchema>) {
+  const rows = await tx.select().from(schema.libCharge).where(inArray(schema.libCharge.id, chargeIds)).for('update');
+  if (rows.length !== new Set(chargeIds).size) throw errors.notFound('Khoản thu thư viện');
+  for (const r of rows) {
+    if (r.customerId !== customerId) throw new AppError(422, 'charge_customer', 'Khoản thu là của khách khác.');
+    if (r.status !== 'unpaid') throw errors.conflict('charge_not_unpaid', 'Một khoản đã được thu hoặc miễn. Hãy tải lại rồi thử lại.');
+  }
+  const amountVnd = rows.reduce((a, r) => a + r.amountVnd, 0);
+  const now = ctx.clock.now();
+  const docNo = await nextDocNo(tx, 'LIBP', now);
+  const [p] = await tx
+    .insert(schema.libPayment)
+    .values({ docNo, kind: 'receipt', customerId, method: payment.method, amountVnd, ref: payment.ref ?? null, receivedBy: ctx.actor!.userId, receivedAt: now })
+    .returning({ id: schema.libPayment.id });
+  await tx.update(schema.libCharge).set({ status: 'paid', paymentId: p!.id, paidAt: now }).where(inArray(schema.libCharge.id, chargeIds));
+  await audit.record(tx, ctx, { action: 'library.payment', entity: 'lib_payment', entityId: p!.id, after: { docNo, method: payment.method, amountVnd, chargeIds } });
+  return { id: p!.id, docNo, amountVnd, method: payment.method };
+}
+
+export const PayChargesSchema = z.object({
+  customerId: z.uuid(),
+  chargeIds: z.array(z.uuid()).min(1, 'Chọn ít nhất một khoản.').max(50),
+  payment: PaymentSchema,
+});
+
+/** Owed charges (late, lost, damage, or any left unpaid) collected at the desk. */
+export async function payCharges(ctx: Ctx, input: z.input<typeof PayChargesSchema>) {
+  requirePermission(ctx, 'library.lend');
+  const data = PayChargesSchema.parse(input);
+  return ctx.db.transaction((tx) => collect(tx, ctx, data.customerId, data.chargeIds, data.payment));
+}
+
+export const RefundSchema = z.object({ reason: z.string().trim().min(1, 'Cần nhập lý do hoàn tiền.').max(500) });
+
+/** A receipt taken by mistake: a negative entry in the cash book; its charges are owed again. */
+export async function refundPayment(ctx: Ctx, paymentId: string, input: z.input<typeof RefundSchema>) {
+  const actor = requirePermission(ctx, 'library.fine_waive');
+  const data = RefundSchema.parse(input);
+  return ctx.db.transaction(async (tx) => {
+    const [p] = await tx.select().from(schema.libPayment).where(eq(schema.libPayment.id, paymentId)).for('update');
+    if (!p) throw errors.notFound('Phiếu thu');
+    if (p.kind !== 'receipt') throw errors.conflict('not_a_receipt', 'Chỉ hoàn được phiếu thu.');
+    const [done] = await tx.select({ id: schema.libPayment.id }).from(schema.libPayment).where(eq(schema.libPayment.refundOf, p.id));
+    if (done) throw errors.conflict('already_refunded', `Phiếu ${p.docNo} đã được hoàn trước đó.`);
+    const now = ctx.clock.now();
+    const docNo = await nextDocNo(tx, 'LIBP', now);
+    const [r] = await tx
+      .insert(schema.libPayment)
+      .values({ docNo, kind: 'refund', customerId: p.customerId, method: p.method, amountVnd: -p.amountVnd, ref: p.ref, refundOf: p.id, reason: data.reason, receivedBy: actor.userId, receivedAt: now })
+      .returning({ id: schema.libPayment.id });
+    await tx.update(schema.libCharge).set({ status: 'unpaid', paymentId: null, paidAt: null }).where(eq(schema.libCharge.paymentId, p.id));
+    await audit.record(tx, ctx, { action: 'library.payment.refund', entity: 'lib_payment', entityId: p.id, after: { refundDocNo: docNo, reason: data.reason, amountVnd: p.amountVnd } });
+    return { id: r!.id, docNo, amountVnd: -p.amountVnd };
+  });
+}
+
+export const PaymentsQuery = z.object({
+  from: z.iso.date(),
+  to: z.iso.date(),
+  method: z.enum(LIB_PAYMENT_METHODS).optional(),
+});
+
+/** The cash book for a period, newest first, with totals by method (FR-LIB-09a). */
+export async function listPayments(ctx: Ctx, input: z.input<typeof PaymentsQuery>) {
+  requirePermission(ctx, 'library.lend');
+  const q = PaymentsQuery.parse(input);
+  const start = new Date(`${q.from}T00:00:00+07:00`);
+  const end = new Date(new Date(`${q.to}T00:00:00+07:00`).getTime() + 86_400_000);
+  const rows = await ctx.db.execute<{
+    id: string;
+    doc_no: string;
+    kind: string;
+    method: string;
+    amount_vnd: string;
+    ref: string | null;
+    reason: string | null;
+    received_at: Date | string;
+    customer_id: string;
+    customer_name: string;
+    received_by: string | null;
+    refunded: boolean;
+    refund_of_no: string | null;
+    items: string | null;
+  }>(sql`
+    select p.id, p.doc_no, p.kind, p.method, p.amount_vnd, p.ref, p.reason, p.received_at, p.customer_id, cu.name as customer_name, u.display_name as received_by,
+           exists (select 1 from library.lib_payment r where r.refund_of = p.id) as refunded,
+           (select o.doc_no from library.lib_payment o where o.id = p.refund_of) as refund_of_no,
+           (select string_agg(case ch.kind when 'loan_fee' then 'Phí mượn' when 'late_fee' then 'Phí trả trễ' when 'lost' then 'Phí mất sách' else 'Phí hỏng sách' end
+                   || coalesce(' ' || c.barcode, ''), ', ' order by ch.created_at)
+              from library.lib_charge ch left join library.loan l on l.id = ch.loan_id left join library.lib_copy c on c.id = l.copy_id
+             where ch.payment_id = coalesce(p.refund_of, p.id)) as items
+    from library.lib_payment p join crm.customer cu on cu.id = p.customer_id left join platform.app_user u on u.id = p.received_by
+    where p.received_at >= ${tsParam(start)} and p.received_at < ${tsParam(end)} ${q.method ? sql`and p.method = ${q.method}` : sql``}
+    order by p.received_at desc, p.doc_no desc limit 500`);
+  const items = rows.map((x) => ({
+    id: x.id,
+    docNo: x.doc_no,
+    kind: x.kind,
+    method: x.method,
+    amountVnd: Number(x.amount_vnd),
+    ref: x.ref,
+    reason: x.reason,
+    receivedAt: x.received_at,
+    customerId: x.customer_id,
+    customerName: x.customer_name,
+    receivedBy: x.received_by,
+    refunded: x.refunded,
+    refundOfNo: x.refund_of_no,
+    items: x.items,
   }));
-  return { items, totalVnd: items.reduce((a, c) => a + c.amountVnd, 0) };
+  const totals = { cash: 0, transfer: 0, card: 0, all: 0 };
+  for (const i of items) {
+    totals[i.method as 'cash' | 'transfer' | 'card'] += i.amountVnd;
+    totals.all += i.amountVnd;
+  }
+  return { from: q.from, to: q.to, items, totals };
 }
 
 // =============================================================================================
@@ -504,6 +661,8 @@ export async function unpaidCharges(ctx: Ctx, customerId: string) {
 
 export const CheckoutSchema = z.object({
   customerId: z.uuid(),
+  /** Loan fees are taken at the desk before the loans are recorded (FR-LIB-07, FR-LIB-09a). */
+  payment: PaymentSchema,
   barcodes: z
     .array(z.string().trim().min(1).max(40))
     .min(1, 'Hãy quét ít nhất một cuốn.')
@@ -547,6 +706,7 @@ export async function checkout(ctx: Ctx, input: z.input<typeof CheckoutSchema>) 
     const fee = loanFee(await lifetimeSpend(tx, cust.id), feeRules(r));
     const dueAt = dueAfter(now, r['library.loan_days']);
     const out = [];
+    const feeIds: string[] = [];
     for (const b of data.barcodes) {
       const x = byBarcode.get(b.toUpperCase());
       if (!x) throw new AppError(404, 'copy_not_found', `Không tìm thấy bản sách có mã ${b}.`, { barcode: b });
@@ -564,11 +724,13 @@ export async function checkout(ctx: Ctx, input: z.input<typeof CheckoutSchema>) 
       const [loan] = await tx.insert(schema.loan).values({ copyId: c.id, customerId: cust.id, loanedAt: now, dueAt, createdBy: actor.userId }).returning({ id: schema.loan.id });
       await tx.update(schema.libCopy).set({ status: 'on_loan', updatedAt: now }).where(eq(schema.libCopy.id, c.id));
       if (hold) await tx.update(schema.libReservation).set({ status: 'collected' }).where(eq(schema.libReservation.id, hold.id));
-      await raiseCharge(tx, ctx, { customerId: cust.id, loanId: loan!.id, kind: 'loan_fee', ...fee });
+      const ch = await raiseCharge(tx, ctx, { customerId: cust.id, loanId: loan!.id, kind: 'loan_fee', ...fee });
+      if (ch) feeIds.push(ch.id);
       out.push({ loanId: loan!.id, barcode: c.barcode, code: x.code, title: x.title, dueAt, feeVnd: fee.amountVnd, listFeeVnd: fee.listVnd });
     }
-    await audit.record(tx, ctx, { action: 'library.checkout', entity: 'customer', entityId: cust.id, after: { barcodes: out.map((o) => o.barcode), dueAt, feeVnd: fee.amountVnd } });
-    return { customerId: cust.id, customerName: cust.name, dueAt, discountPct: fee.discountPct, loans: out, totalFeeVnd: out.reduce((a, o) => a + o.feeVnd, 0) };
+    const receipt = feeIds.length ? await collect(tx, ctx, cust.id, feeIds, data.payment) : null;
+    await audit.record(tx, ctx, { action: 'library.checkout', entity: 'customer', entityId: cust.id, after: { barcodes: out.map((o) => o.barcode), dueAt, feeVnd: fee.amountVnd, receipt: receipt?.docNo } });
+    return { customerId: cust.id, customerName: cust.name, dueAt, discountPct: fee.discountPct, loans: out, totalFeeVnd: out.reduce((a, o) => a + o.feeVnd, 0), receiptNo: receipt?.docNo ?? null };
   });
 }
 
@@ -663,9 +825,12 @@ async function lockOpenLoan(tx: Tx, loanId: string) {
   return l;
 }
 
-/** One more loan period for another loan fee (FR-LIB-12, BR-13). */
-export async function renew(ctx: Ctx, loanId: string) {
+export const RenewSchema = z.object({ payment: PaymentSchema });
+
+/** One more loan period for another loan fee, taken at the desk (FR-LIB-12, BR-13). */
+export async function renew(ctx: Ctx, loanId: string, input: z.input<typeof RenewSchema>) {
   const actor = requirePermission(ctx, 'library.lend');
+  const data = RenewSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
     const now = ctx.clock.now();
     const r = await rules(ctx, tx);
@@ -680,9 +845,10 @@ export async function renew(ctx: Ctx, loanId: string) {
     const fee = loanFee(await lifetimeSpend(tx, l.customer_id), feeRules(r));
     await tx.update(schema.loan).set({ dueAt: newDueAt, renewals: l.renewals + 1 }).where(eq(schema.loan.id, l.id));
     await tx.insert(schema.loanRenewal).values({ loanId: l.id, renewedAt: now, newDueAt, by: actor.userId });
-    await raiseCharge(tx, ctx, { customerId: l.customer_id, loanId: l.id, kind: 'loan_fee', ...fee });
-    await audit.record(tx, ctx, { action: 'library.renew', entity: 'loan', entityId: l.id, after: { newDueAt, feeVnd: fee.amountVnd } });
-    return { loanId: l.id, dueAt: newDueAt, renewals: l.renewals + 1, feeVnd: fee.amountVnd };
+    const ch = await raiseCharge(tx, ctx, { customerId: l.customer_id, loanId: l.id, kind: 'loan_fee', ...fee });
+    const receipt = ch ? await collect(tx, ctx, l.customer_id, [ch.id], data.payment) : null;
+    await audit.record(tx, ctx, { action: 'library.renew', entity: 'loan', entityId: l.id, after: { newDueAt, feeVnd: fee.amountVnd, receipt: receipt?.docNo } });
+    return { loanId: l.id, dueAt: newDueAt, renewals: l.renewals + 1, feeVnd: fee.amountVnd, receiptNo: receipt?.docNo ?? null };
   });
 }
 
@@ -718,27 +884,7 @@ export async function waiveCharge(ctx: Ctx, chargeId: string, input: z.input<typ
 }
 
 // =============================================================================================
-// Payment at the POS (sales module calls these inside the sale transaction)
-
-/** Lock the unpaid charges of the sale's customer that the cart carries. */
-export async function chargesForSale(tx: Tx, customerId: string | null | undefined, ids: string[]) {
-  if (!ids.length) return [];
-  if (!customerId) throw new AppError(422, 'library_charge_customer', 'Phí thư viện cần gắn đúng khách hàng vào đơn.');
-  const rows = await tx.select().from(schema.libCharge).where(inArray(schema.libCharge.id, ids)).orderBy(asc(schema.libCharge.createdAt)).for('update');
-  if (rows.length !== new Set(ids).size) throw errors.notFound('Khoản phí thư viện');
-  for (const r of rows) {
-    if (r.customerId !== customerId) throw new AppError(422, 'library_charge_customer', 'Khoản phí thư viện là của khách khác.');
-    if (r.status !== 'unpaid') throw errors.conflict('library_charge_paid', 'Một khoản phí thư viện đã được thu hoặc miễn. Hãy tải lại giỏ hàng.');
-  }
-  const desc = await chargesOf(tx, sql`ch.id in (${sql.join(ids.map((i) => sql`${i}::uuid`), sql`, `)})`, ids.length);
-  const d = new Map(desc.map((c) => [c.id, `${CHARGE_TEXT[c.kind]}${c.code ? ` – ${c.barcode} ${c.title}` : ''}`]));
-  return rows.map((r) => ({ id: r.id, amountVnd: r.amountVnd, kind: r.kind, description: d.get(r.id)! }));
-}
-
-export async function markChargesPaid(tx: Tx, ids: string[], saleId: string, at: Date) {
-  if (!ids.length) return;
-  await tx.update(schema.libCharge).set({ status: 'paid', saleId, paidAt: at }).where(inArray(schema.libCharge.id, ids));
-}
+// POS sales from before 4 Nov 2026 that paid library charges
 
 /** A voided sale gives its library charges back to the borrower as unpaid. */
 export async function unpayForVoid(tx: Tx, saleId: string) {
@@ -892,36 +1038,6 @@ export async function remindLoans(ctx: Ctx): Promise<{ dueSoon: number; overdue:
 }
 
 // =============================================================================================
-// Stock-take (FR-LIB-04)
-
-export const StocktakeSchema = z.object({
-  /** The shelf scanned; without it the whole collection is compared. */
-  shelf: optText(60),
-  barcodes: z.array(z.string().trim().min(1).max(40)).max(5000),
-});
-
-export async function stocktake(ctx: Ctx, input: z.input<typeof StocktakeSchema>) {
-  requirePermission(ctx, 'library.manage');
-  const data = StocktakeSchema.parse(input);
-  const scanned = [...new Set(data.barcodes.map((b) => b.toUpperCase()))];
-  const all = await ctx.db
-    .select({ id: schema.libCopy.id, barcode: schema.libCopy.barcode, status: schema.libCopy.status, shelf: schema.libCopy.shelf, title: schema.libTitle.title, code: schema.libTitle.code })
-    .from(schema.libCopy)
-    .innerJoin(schema.libTitle, eq(schema.libTitle.id, schema.libCopy.titleId))
-    .where(data.shelf ? sql`(${schema.libCopy.shelf} = ${data.shelf} or upper(${schema.libCopy.barcode}) in (${sql.join(scanned.length ? scanned.map((b) => sql`${b}`) : [sql`''`], sql`, `)}))` : undefined);
-  const byBarcode = new Map(all.map((c) => [c.barcode.toUpperCase(), c]));
-  const seen = new Set(scanned);
-  // On the shelf in the records but not scanned.
-  const missing = all.filter((c) => (c.status === 'available' || c.status === 'reserved') && (!data.shelf || c.shelf === data.shelf) && !seen.has(c.barcode.toUpperCase()));
-  // Scanned here but recorded elsewhere: another shelf, on loan, lost or damaged.
-  const misplaced = scanned
-    .map((b) => byBarcode.get(b))
-    .filter((c): c is NonNullable<typeof c> => !!c && ((!!data.shelf && c.shelf !== data.shelf) || (c.status !== 'available' && c.status !== 'reserved')));
-  const unknown = scanned.filter((b) => !byBarcode.has(b));
-  return { scanned: scanned.length, missing, misplaced, unknown };
-}
-
-// =============================================================================================
 // Library report (FR-LIB-16, FR-RPT-07)
 
 export const ReportSchema = z.object({ from: z.iso.date(), to: z.iso.date() });
@@ -968,6 +1084,21 @@ export async function report(ctx: Ctx, input: z.input<typeof ReportSchema>) {
 }
 
 /** Overdue loans for the dashboard (FR-RPT-01). */
+/** Library overview now (FR-LIB-15a): copies in the collection (all but lost), available, open and overdue loans. */
+export async function overviewTx(tx: Tx, now: Date) {
+  const [r] = await tx.execute<{ copies: number; available: number; on_loan: number; overdue: number }>(sql`
+    select (select count(*)::int from library.lib_copy where status <> 'lost') as copies,
+           (select count(*)::int from library.lib_copy where status = 'available') as available,
+           (select count(*)::int from library.loan where returned_at is null) as on_loan,
+           (select count(*)::int from library.loan where returned_at is null and due_at < ${tsParam(now)}) as overdue`);
+  return { copies: r!.copies, available: r!.available, onLoan: r!.on_loan, overdue: r!.overdue };
+}
+
+export async function overview(ctx: Ctx) {
+  requireAny(ctx);
+  return overviewTx(ctx.db, ctx.clock.now());
+}
+
 export async function overdueForDashboard(tx: Tx, now: Date) {
   const rows = await tx.execute<{ id: string; title: string; code: string; customer_name: string; customer_phone: string | null; due_at: Date }>(sql`
     select l.id, t.title, t.code, cu.name as customer_name, cu.phone_e164 as customer_phone, l.due_at from library.loan l

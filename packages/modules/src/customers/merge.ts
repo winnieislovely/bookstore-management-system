@@ -18,6 +18,7 @@ export const CUSTOMER_REFS: { table: string; column: string; mode: 'move' | 'led
   { table: 'library.loan', column: 'customer_id', mode: 'move' },
   { table: 'library.lib_reservation', column: 'customer_id', mode: 'move' },
   { table: 'library.lib_charge', column: 'customer_id', mode: 'move' },
+  { table: 'library.lib_payment', column: 'customer_id', mode: 'move' },
   { table: 'crm.points_ledger', column: 'customer_id', mode: 'ledger' },
   { table: 'crm.store_credit_ledger', column: 'customer_id', mode: 'ledger' },
   { table: 'crm.customer', column: 'merged_into', mode: 'self' },

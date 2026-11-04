@@ -17,6 +17,10 @@ export const LIB_CHARGE_STATUSES = ['unpaid', 'paid', 'waived', 'cancelled'] as 
 export const LIB_RESERVATION_STATUSES = ['queued', 'held', 'collected', 'expired', 'cancelled'] as const;
 /** How an open loan was closed. */
 export const LOAN_CLOSED_AS = ['returned', 'lost'] as const;
+/** Library cash book (FR-LIB-09a): collected at the desk, never through the POS. */
+export const LIB_PAYMENT_METHODS = ['cash', 'transfer', 'card'] as const;
+export type LibPaymentMethod = (typeof LIB_PAYMENT_METHODS)[number];
+export const LIB_PAYMENT_KINDS = ['receipt', 'refund'] as const;
 
 // =============================================================================================
 // Library codes and copy barcodes (FR-LIB-01)

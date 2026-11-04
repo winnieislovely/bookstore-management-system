@@ -25,6 +25,7 @@
     "./system": "./src/system/index.ts",
     "./orders": "./src/orders/index.ts",
     "./library": "./src/library/index.ts",
+    "./library/counts": "./src/library/counts.ts",
     "./integrations/ghn": "./src/integrations/ghn.ts"
   },
   "scripts": {

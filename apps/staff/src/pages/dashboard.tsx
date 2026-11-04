@@ -9,6 +9,7 @@ import { get } from '../lib/api';
 import { formatDate, formatNumber, formatVnd, formatVndCompact } from '../lib/format';
 import { t } from '../lib/i18n';
 import { useMe } from '../lib/session';
+import { LibraryOverview, type LibraryOverviewData } from './library';
 
 /** Dashboard (FR-RPT-01, Design §12.5): today's figures, range-filtered charts and lists — no alert tiles. */
 
@@ -24,6 +25,7 @@ interface Dashboard {
   bestsellers: { variantId: string; sku: string; title: string; units: number; grossVnd: number }[];
   lowStock?: { variantId: string; sku: string; title: string; available: number; minStock: number }[];
   /** Overdue library loans, for users who lend (FR-RPT-01). */
+  libraryOverview?: LibraryOverviewData;
   overdueLoans: { loanId: string; title: string; code: string; customerName: string; customerPhone: string | null; dueAt: string; daysLate: number }[];
 }
 interface SalesRow {
@@ -434,8 +436,12 @@ export function DashboardPage() {
               )}
             </Card>
           )}
-          {!!q.data?.overdueLoans.length && (
-            <Card title="Sách mượn quá hạn" className="col-span-12 lg:col-span-6">
+          {q.data?.libraryOverview && (
+            <Card title="Tổng quan thư viện" className="col-span-12">
+              <LibraryOverview data={q.data.libraryOverview} />
+              {!!q.data.overdueLoans.length && (
+                <>
+              <h3 className="mt-6 mb-2 text-sm font-semibold">Sách mượn quá hạn</h3>
               <table className="w-full table-fixed text-sm">
                 <thead>
                   <tr className="border-b border-paper-300">
@@ -459,6 +465,8 @@ export function DashboardPage() {
                   {t('dashboard.viewDetails')}
                 </Button>
               </div>
+                </>
+              )}
             </Card>
           )}
         </div>

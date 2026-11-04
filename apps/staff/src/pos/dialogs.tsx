@@ -78,7 +78,6 @@ function newRef(): string {
 export function PaymentSheet({
   priced,
   depositVnd = 0,
-  libraryVnd = 0,
   online,
   onPay,
   onClose,
@@ -86,13 +85,11 @@ export function PaymentSheet({
   priced: PriceCartResult;
   /** A collected pre-order's deposit, already paid (FR-POS-09). */
   depositVnd?: number;
-  /** Library charges on the cart, outside the goods pricing (FR-POS-08). */
-  libraryVnd?: number;
   online: boolean;
   onPay: (payments: Payment[]) => Promise<void>;
   onClose: () => void;
 }) {
-  const total = priced.totalVnd + libraryVnd - depositVnd;
+  const total = priced.totalVnd - depositVnd;
   const [payments, setPayments] = useState<Payment[]>([]);
   const paid = payments.reduce((a, p) => a + p.amountVnd, 0);
   const remaining = total - paid;

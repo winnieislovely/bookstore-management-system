@@ -100,6 +100,7 @@ export async function dashboard(ctx: Ctx) {
     // Events (R3) join the dashboard in their release.
     upcomingEvents: [],
     overdueLoans: can(actor, 'library.lend') ? await library.overdueForDashboard(ctx.db, ctx.clock.now()) : [],
+    ...(can(actor, 'library.lend') && { libraryOverview: await library.overviewTx(ctx.db, ctx.clock.now()) }),
   };
 }
 

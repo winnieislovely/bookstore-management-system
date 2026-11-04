@@ -1,6 +1,6 @@
-import { LIB_ACQUIRED_VIA, LIB_CHARGE_KINDS, LIB_CHARGE_STATUSES, LIB_COPY_STATUSES, LIB_LANGUAGES, LIB_RESERVATION_STATUSES, LOAN_CLOSED_AS } from '@bookstore/domain';
+import { LIB_ACQUIRED_VIA, LIB_CHARGE_KINDS, LIB_CHARGE_STATUSES, LIB_COPY_STATUSES, LIB_LANGUAGES, LIB_PAYMENT_KINDS, LIB_PAYMENT_METHODS, LIB_RESERVATION_STATUSES, LOAN_CLOSED_AS, STOCK_COUNT, statesOf } from '@bookstore/domain';
 import { sql } from 'drizzle-orm';
-import { check, index, integer, pgSchema, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, index, integer, jsonb, pgSchema, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { customer } from './crm.js';
 import { appUser } from './platform.js';
 import { sale } from './sales.js';
@@ -136,7 +136,36 @@ export const libReservation = library.table(
   ],
 );
 
-/** Loan fees, late fees and lost/damage charges: revenue when raised, paid through the POS (BR-14). */
+/** Library cash book (FR-LIB-09a): receipts and refunds at the desk; library revenue, not sales (BR-14). */
+export const libPayment = library.table(
+  'lib_payment',
+  {
+    id: id(),
+    docNo: text().notNull().unique(),
+    kind: text().notNull().default('receipt'),
+    customerId: uuid()
+      .notNull()
+      .references(() => customer.id),
+    method: text().notNull(),
+    /** Positive for receipts, negative for refunds. */
+    amountVnd: vndCol().notNull(),
+    /** Transfer reference or card approval code. */
+    ref: text(),
+    refundOf: uuid(),
+    reason: text(),
+    receivedBy: uuid().references(() => appUser.id),
+    receivedAt: ts().notNull(),
+  },
+  (t) => [
+    index('lib_payment_received_idx').on(t.receivedAt),
+    uniqueIndex('lib_payment_refund_uq').on(t.refundOf).where(sql`${t.refundOf} is not null`),
+    check('lib_payment_kind_ck', inList(t.kind, LIB_PAYMENT_KINDS)),
+    check('lib_payment_method_ck', inList(t.method, LIB_PAYMENT_METHODS)),
+    check('lib_payment_sign_ck', sql`(${t.kind} = 'receipt') = (${t.amountVnd} > 0)`),
+  ],
+);
+
+/** Loan fees, late fees and lost/damage charges: library revenue, paid at the desk (BR-14, FR-LIB-09a). */
 export const libCharge = library.table(
   'lib_charge',
   {
@@ -151,6 +180,9 @@ export const libCharge = library.table(
     discountPct: integer().notNull().default(0),
     amountVnd: vndCol().notNull(),
     status: text().notNull().default('unpaid'),
+    /** The desk receipt that paid it (FR-LIB-09a). */
+    paymentId: uuid().references(() => libPayment.id),
+    /** POS sale that paid it, before 4 Nov 2026. */
     saleId: uuid().references(() => sale.id),
     paidAt: ts(),
     waivedBy: uuid().references(() => appUser.id),
@@ -163,6 +195,50 @@ export const libCharge = library.table(
     check('lib_charge_kind_ck', inList(t.kind, LIB_CHARGE_KINDS)),
     check('lib_charge_status_ck', inList(t.status, LIB_CHARGE_STATUSES)),
     check('lib_charge_amount_ck', sql`${t.amountVnd} > 0 and ${t.listVnd} >= ${t.amountVnd}`),
-    check('lib_charge_paid_ck', sql`(${t.status} = 'paid') = (${t.saleId} is not null)`),
+    check('lib_charge_paid_ck', sql`(${t.status} = 'paid') = (${t.saleId} is not null or ${t.paymentId} is not null)`),
   ],
+);
+
+export interface LibCountScope {
+  shelves: string[];
+  languages: string[];
+  categories: string[];
+}
+
+/** Library count sessions (FR-LIB-04): the stock-count states; approval changes no copy. */
+export const libCount = library.table(
+  'lib_count',
+  {
+    id: id(),
+    docNo: text().notNull().unique(),
+    scope: jsonb().$type<LibCountScope>().notNull(),
+    blind: boolean().notNull().default(false),
+    status: text().notNull().default('open'),
+    createdBy: uuid().references(() => appUser.id),
+    approvedBy: uuid().references(() => appUser.id),
+    approvedAt: ts(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('lib_count_created_idx').on(t.createdAt), check('lib_count_status_ck', inList(t.status, statesOf(STOCK_COUNT)))],
+);
+
+/** One copy of a count: snapshot shelf and status; `found` null until checked; out-of-scope copies come from scans. */
+export const libCountLine = library.table(
+  'lib_count_line',
+  {
+    id: id(),
+    countId: uuid()
+      .notNull()
+      .references(() => libCount.id),
+    copyId: uuid()
+      .notNull()
+      .references(() => libCopy.id),
+    inScope: boolean().notNull().default(true),
+    expectedShelf: text(),
+    expectedStatus: text().notNull(),
+    found: boolean(),
+    checkedAt: ts(),
+    checkedBy: uuid().references(() => appUser.id),
+  },
+  (t) => [uniqueIndex('lib_count_line_uq').on(t.countId, t.copyId), check('lib_count_line_status_ck', inList(t.expectedStatus, LIB_COPY_STATUSES))],
 );

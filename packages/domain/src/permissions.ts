@@ -52,6 +52,8 @@ export const PERMISSIONS = {
   'library.manage': 'Danh mục thư viện',
   'library.lend': 'Mượn, trả, gia hạn',
   'library.fine_waive': 'Miễn phí phạt và khoản thu thư viện',
+  'library.count': 'Kiểm kê thư viện',
+  'library.count_approve': 'Duyệt kiểm kê thư viện',
   // Website (R2)
   'web.content.view': 'Xem nội dung website',
   'web.content.edit': 'Sửa nội dung website',
@@ -163,6 +165,7 @@ export const DEFAULT_ROLES: Record<RoleCode, { name: string; permissions: Permis
       'customer.manage',
       'library.manage',
       'library.lend',
+      'library.count',
     ],
   },
   website_editor: {

@@ -12,6 +12,10 @@ export const DOC_SERIES = {
   CST: 'KG',
   ORD: 'DH',
   PRE: 'DT',
+  /** Library count (FR-LIB-04). */
+  LCNT: 'KT',
+  /** Library cash book receipt (FR-LIB-09a). */
+  LIBP: 'PT',
 } as const;
 export type DocSeries = keyof typeof DOC_SERIES;
 

@@ -81,7 +81,6 @@ const GROUPS: [string, Def[]][] = [
       { key: 'library.hold_days', label: 'Giữ sách cho người đặt trước', kind: 'int', helper: 'ngày' },
       { key: 'library.fee_discount_spend_vnd', label: 'Giảm phí mượn khi khách đã mua từ', kind: 'vnd' },
       { key: 'library.fee_discount_pct', label: 'Mức giảm phí mượn', kind: 'int', helper: '%; 0 là không giảm' },
-      { key: 'library.vat_bp', label: 'Thuế GTGT trên phí thư viện', kind: 'percent' },
     ],
   ],
   [

@@ -19,6 +19,8 @@ import { ConsignmentPage } from './pages/consignment';
 import { CountDetailPage, CountsPage } from './pages/counts';
 import { CustomerDetailPage, CustomersPage } from './pages/customers';
 import { LibraryCatalogPage, LibraryDeskPage, LibraryReportPage, LibraryTitlePage } from './pages/library';
+import { LibraryCountDetailPage, LibraryCountsPage } from './pages/libraryCounts';
+import { LibraryPaymentsPage } from './pages/libraryPayments';
 import { CodPage } from './pages/holds';
 import { OrderDetailPage, OrderNewPage, OrdersPage } from './pages/orders';
 import { ProductDetailPage } from './pages/productDetail';
@@ -101,6 +103,8 @@ const BUILT: Record<string, ReactNode> = {
   '/reports/tax': <TaxReportsPage />,
   '/library': <LibraryDeskPage />,
   '/library/catalog': <LibraryCatalogPage />,
+  '/library/counts': <LibraryCountsPage />,
+  '/library/payments': <LibraryPaymentsPage />,
   '/reports/library': <LibraryReportPage />,
   '/settings': <SettingsPage />,
   '/import': <ImportPage />,
@@ -125,6 +129,7 @@ const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   { path: 'reports', anyOf: ['report.view'], element: <Navigate to="/reports/sales" replace /> },
   { path: 'counts/:id', anyOf: ['inventory.count'], element: <CountDetailPage /> },
   { path: 'library/titles/:id', anyOf: ['library.manage', 'library.lend'], element: <LibraryTitlePage /> },
+  { path: 'library/counts/:id', anyOf: ['library.count'], element: <LibraryCountDetailPage /> },
 ];
 
 const router = createBrowserRouter([

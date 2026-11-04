@@ -35,13 +35,6 @@ export interface CartPreorder {
   depositVnd: number;
 }
 
-/** An unpaid library charge of the customer, sold as a service line (FR-POS-08): never discounted, no points. */
-export interface CartLibraryCharge {
-  id: string;
-  description: string;
-  amountVnd: number;
-}
-
 /** Supervisor approvals for this cart: an online token or an offline approver id (FR-ADM-09). */
 export interface CartApproval {
   action: 'discount_over_limit' | 'price_override';
@@ -57,7 +50,6 @@ interface CartState {
   redeemPoints: number;
   approvals: CartApproval[];
   preorder: CartPreorder | null;
-  libraryCharges: CartLibraryCharge[];
   /** Last added line, for the 600 ms highlight (Design §7.4). */
   flashLineId: string | null;
   add: (variantId: string, qty?: number) => void;
@@ -68,8 +60,6 @@ interface CartState {
   setCoupon: (code: string) => void;
   setRedeem: (points: number) => void;
   addApproval: (a: CartApproval) => void;
-  addLibraryCharges: (charges: CartLibraryCharge[]) => void;
-  removeLibraryCharge: (id: string) => void;
   load: (s: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints'>) => void;
   /** Start a new cart from a pre-order (FR-POS-09). */
   loadPreorder: (p: CartPreorder, customer: CartCustomer) => void;
@@ -86,7 +76,6 @@ export const useCart = create<CartState>((set) => ({
   redeemPoints: 0,
   approvals: [],
   preorder: null,
-  libraryCharges: [],
   flashLineId: null,
   add: (variantId, qty = 1) =>
     set((s) => {
@@ -99,16 +88,13 @@ export const useCart = create<CartState>((set) => ({
   setQty: (lineId, qty) => set((s) => ({ lines: s.lines.map((l) => (l.lineId === lineId ? { ...l, qty: Math.max(1, qty) } : l)) })),
   update: (lineId, patch) => set((s) => ({ lines: s.lines.map((l) => (l.lineId === lineId ? { ...l, ...patch } : l)), approvals: [] })),
   remove: (lineId) => set((s) => ({ lines: s.lines.filter((l) => l.lineId !== lineId) })),
-  // Library charges belong to the customer: another customer drops them.
-  setCustomer: (customer) => set((s) => ({ customer, redeemPoints: 0, libraryCharges: customer?.id === s.customer?.id ? s.libraryCharges : [] })),
+  setCustomer: (customer) => set({ customer, redeemPoints: 0 }),
   setCoupon: (couponCode) => set({ couponCode }),
   setRedeem: (redeemPoints) => set({ redeemPoints }),
   addApproval: (a) => set((s) => ({ approvals: [...s.approvals.filter((x) => x.action !== a.action), a] })),
-  addLibraryCharges: (charges) => set((s) => ({ libraryCharges: [...s.libraryCharges, ...charges.filter((c) => !s.libraryCharges.some((x) => x.id === c.id))] })),
-  removeLibraryCharge: (id) => set((s) => ({ libraryCharges: s.libraryCharges.filter((c) => c.id !== id) })),
-  load: (c) => set({ ...c, approvals: [], preorder: null, libraryCharges: [], flashLineId: null }),
-  loadPreorder: (p, customer) => set({ lines: p.lines.map((l, i) => ({ lineId: `pre-${i + 1}`, variantId: l.variantId, qty: l.qty })), customer, couponCode: '', redeemPoints: 0, approvals: [], preorder: p, libraryCharges: [], flashLineId: null }),
-  clear: () => set({ lines: [], customer: null, couponCode: '', redeemPoints: 0, approvals: [], preorder: null, libraryCharges: [], flashLineId: null }),
+  load: (c) => set({ ...c, approvals: [], preorder: null, flashLineId: null }),
+  loadPreorder: (p, customer) => set({ lines: p.lines.map((l, i) => ({ lineId: `pre-${i + 1}`, variantId: l.variantId, qty: l.qty })), customer, couponCode: '', redeemPoints: 0, approvals: [], preorder: p, flashLineId: null }),
+  clear: () => set({ lines: [], customer: null, couponCode: '', redeemPoints: 0, approvals: [], preorder: null, flashLineId: null }),
 }));
 
 // ---------------------------------------------------------------------------------------------
@@ -167,10 +153,9 @@ export interface PricedCart {
   items: Map<string, CachedItem>;
 }
 
-export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints' | 'preorder' | 'libraryCharges'>, grants: { discountUnlimited: boolean; priceOverride: boolean }): Promise<PricedCart | null> {
+export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints' | 'preorder'>, grants: { discountUnlimited: boolean; priceOverride: boolean }): Promise<PricedCart | null> {
   const settings = await kvGet<PosSettings>('settings');
-  // A cart of library charges only still prices (an empty goods cart).
-  if (!settings || (!cart.lines.length && !cart.libraryCharges.length)) return null;
+  if (!settings || !cart.lines.length) return null;
   const items = new Map((await db.items.bulkGet(cart.lines.map((l) => l.variantId))).filter((i): i is CachedItem => !!i).map((i) => [i.variantId, i]));
   const promotions = (await kvGet<PromotionSnapshot[]>('promotions')) ?? [];
   const tiers = (await kvGet<{ code: string; benefits: { discountBp: number; pointsMultiplierBp: number } }[]>('tiers')) ?? [];

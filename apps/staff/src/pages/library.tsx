@@ -1,16 +1,17 @@
 import { barcodeSvg, BORROW_BLOCK_TEXT, dueAfter, escapeXml, type BorrowBlock } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertOctagon, ArrowLeftRight, BookmarkCheck, CheckCircle2, ClipboardCheck, Library, Phone, Plus, Printer, Search, Truck, User, UserPlus, X } from 'lucide-react';
+import { clsx } from 'clsx';
+import { AlertOctagon, ArrowLeftRight, BookmarkCheck, CheckCircle2, Library, Phone, Plus, Printer, ScanBarcode, Search, Truck, User, UserPlus, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ConfirmDialog, DataTable, Facts, FilterMenu, SearchBox, SelectField, Tabs, TextArea, TimeFilter, errText, timeDays, timeLabel, toast, useDebounced, useParam, type Column } from '../components/data';
+import { ConfirmDialog, DataTable, Facts, FilterMenu, SearchBox, SelectField, TextArea, TimeFilter, errText, timeDays, timeLabel, toast, useDebounced, useParam, type Column } from '../components/data';
 import { ProductSearch } from '../components/product-search';
 import { Button, Card, EmptyState, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
-import { get, patch, post } from '../lib/api';
+import { ApiError, get, patch, post } from '../lib/api';
 import { formatDate, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { printHtml } from '../lib/print';
 import { can, useMe } from '../lib/session';
-import { Dialog, MoneyInput } from '../pos/widgets';
+import { CameraScanner, Dialog, MoneyInput } from '../pos/widgets';
 
 /** Library (SRS §3.9, Design §13.8): borrow / return, catalogue and copies, report, customer tab. */
 
@@ -79,7 +80,8 @@ interface Charge {
   reason: string | null;
   createdAt: string;
   paidAt: string | null;
-  saleDocNo: string | null;
+  /** Desk receipt (PT-…), or the POS sale for charges paid before 4 Nov 2026. */
+  receiptNo: string | null;
   code: string | null;
   title: string | null;
   barcode: string | null;
@@ -99,6 +101,15 @@ interface Borrower {
   loanDays: number;
   charges: Charge[];
   reservations: Hold[];
+}
+
+interface CopyHit {
+  id: string;
+  barcode: string;
+  status: string;
+  shelf: string | null;
+  code: string;
+  title: string;
 }
 
 interface TitleRow {
@@ -215,7 +226,14 @@ function BorrowerPicker({ value, onChange }: { value: PickedCustomer | null; onC
   const digits = q.replace(/\D/g, '');
   return (
     <div className="flex flex-col gap-2">
-      <Field label="Số điện thoại hoặc tên khách" autoFocus value={q} onChange={(e) => setQ(e.target.value)} />
+      <input
+        className="h-11 w-full rounded-md border border-paper-500 bg-white px-3 focus:border-navy-700"
+        placeholder="Nhập số điện thoại/tên khách"
+        aria-label="Số điện thoại hoặc tên khách"
+        autoFocus
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
       {term.length >= 2 && found.data && (
         <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
           {items.length === 0 && <li className="px-3 py-2 text-sm text-ink-500">Không có khách phù hợp.</li>}
@@ -230,14 +248,120 @@ function BorrowerPicker({ value, onChange }: { value: PickedCustomer | null; onC
         </ul>
       )}
       <Button variant="tonal" size="sm" icon={UserPlus} className="self-start" onClick={() => setCreating({ phone: digits.length >= 6 ? q.trim() : '', name: digits.length >= 6 ? '' : q.trim() })}>
-        Tạo khách hàng
+        Khách mới
       </Button>
     </div>
   );
 }
 
+// =============================================================================================
+// Payment at the library desk (FR-LIB-09a, Design §13.8): cash, transfer (reference) or card (approval code)
+
+/** Cash or bank transfer only, no reference to type (FR-LIB-09a). */
+export type DeskPayment = { method: 'cash' | 'transfer' };
+export const PAYMENT_METHOD: Record<DeskPayment['method'], string> = { cash: 'Tiền mặt', transfer: 'Chuyển khoản' };
+/** Labels for cash-book rows, including card receipts taken before 5 Nov 2026. */
+export const PAYMENT_METHOD_LABEL: Record<string, string> = { ...PAYMENT_METHOD, card: 'Thẻ' };
+const paymentBody = (p: DeskPayment) => ({ method: p.method });
+const paymentReady = (_p: DeskPayment) => true;
+
+function PaymentFields({ totalVnd, value, onChange, showTotal = true }: { totalVnd: number; value: DeskPayment; onChange: (p: DeskPayment) => void; showTotal?: boolean }) {
+  return (
+    <div className="flex flex-col gap-3">
+      {showTotal && (
+        <div className="flex items-baseline justify-between text-sm">
+          <span className="text-ink-700">Số tiền cần thu</span>
+          <span className="text-lg font-semibold num">{formatVnd(totalVnd)}</span>
+        </div>
+      )}
+      {/* Radio ticks (Design §13.8). */}
+      <fieldset className="flex gap-6">
+        <legend className="sr-only">Phương thức thanh toán</legend>
+        {(Object.keys(PAYMENT_METHOD) as DeskPayment['method'][]).map((m) => (
+          <label key={m} className="inline-flex h-10 items-center gap-2 text-sm">
+            <input type="radio" name="desk-payment" className="size-[18px] accent-navy-700" checked={value.method === m} onChange={() => onChange({ method: m })} />
+            {PAYMENT_METHOD[m]}
+          </label>
+        ))}
+      </fieldset>
+    </div>
+  );
+}
+
+/** “Thu phí”: owed charges of one borrower collected at the desk (FR-LIB-09a). */
+export function PayChargesDialog({ customerId, onClose, onDone }: { customerId: string; onClose: () => void; onDone?: () => void }) {
+  const qc = useQueryClient();
+  const b = useQuery({ queryKey: ['library-borrower', customerId], queryFn: () => get<Borrower>(`/api/v1/library/borrowers/${customerId}`) });
+  const owed = (b.data?.charges ?? []).filter((c) => c.status === 'unpaid');
+  const [skip, setSkip] = useState<Set<string>>(new Set());
+  const [payment, setPayment] = useState<DeskPayment>({ method: 'cash' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const chosen = owed.filter((c) => !skip.has(c.id));
+  const total = chosen.reduce((a, c) => a + c.amountVnd, 0);
+  const pay = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await post<{ docNo: string; amountVnd: number }>('/api/v1/library/charges/pay', { customerId, chargeIds: chosen.map((c) => c.id), payment: paymentBody(payment) });
+      toast.success(`Đã thu ${formatVnd(r.amountVnd)} – phiếu ${r.docNo}.`);
+      void qc.invalidateQueries({ queryKey: ['library-borrower'] });
+      void qc.invalidateQueries({ queryKey: ['library-loans'] });
+      void qc.invalidateQueries({ queryKey: ['library-payments'] });
+      onDone?.();
+      onClose();
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      title={`Thu phí${b.data ? ` – ${b.data.customer.name}` : ''}`}
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Hủy
+          </Button>
+          <Button variant="primary" loading={busy} disabled={!chosen.length || !paymentReady(payment)} onClick={pay}>
+            Thu tiền
+          </Button>
+        </>
+      }
+    >
+      {!b.data ? (
+        <Skeleton className="h-24" />
+      ) : owed.length === 0 ? (
+        <p className="text-sm text-ink-700">Khách không còn khoản nào chưa thu.</p>
+      ) : (
+        <div className="flex flex-col gap-4">
+          <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
+            {owed.map((c) => (
+              <li key={c.id}>
+                <label className="flex items-center gap-3 px-3 py-2 text-sm">
+                  <input type="checkbox" className="size-[18px] accent-navy-700" checked={!skip.has(c.id)} onChange={() => setSkip((s) => { const n = new Set(s); if (n.has(c.id)) n.delete(c.id); else n.add(c.id); return n; })} />
+                  <span className="min-w-0 flex-1">
+                    {CHARGE[c.kind] ?? c.kind}
+                    {c.barcode && <span className="text-ink-500"> · {c.barcode}</span>}
+                  </span>
+                  <span className="font-semibold num">{formatVnd(c.amountVnd)}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <PaymentFields totalVnd={total} value={payment} onChange={setPayment} />
+          {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
 /** Eligibility card (UC-17 step 2): loans out of the limit, overdue, unpaid charges, buyer discount. */
-function EligibilityCard({ b }: { b: Borrower }) {
+function EligibilityCard({ b, onPay }: { b: Borrower; onPay?: () => void }) {
   const ok = b.blocks.length === 0;
   return (
     <div className={`flex flex-col gap-2 rounded-lg p-4 text-sm ${ok ? 'bg-success-50' : 'bg-danger-50'}`}>
@@ -255,9 +379,13 @@ function EligibilityCard({ b }: { b: Borrower }) {
       {b.blocks.map((k) => (
         <p key={k} className="text-danger-700">
           {BORROW_BLOCK_TEXT[k]}
-          {k === 'unpaid_charges' && ' Thu tại quầy bán hàng trước khi mượn tiếp.'}
         </p>
       ))}
+      {b.unpaidChargesVnd > 0 && onPay && (
+        <Button size="sm" variant="secondary" className="self-start" onClick={onPay}>
+          Thu phí
+        </Button>
+      )}
       {b.fee.discountPct > 0 && (
         <p className="flex flex-wrap items-center gap-2">
           <StatusChip tone="success">Giảm {b.fee.discountPct}% phí mượn</StatusChip>
@@ -275,31 +403,73 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [customer, setCustomer] = useState<PickedCustomer | null>(null);
   const [scan, setScan] = useState('');
+  const [camera, setCamera] = useState(false);
+  // Copies on the shelf matching the code or title typed (Design §13.8).
+  const scanTerm = useDebounced(scan.trim(), 250);
+  const shelfMatches = useQuery({
+    queryKey: ['library-copies', 'available', scanTerm],
+    enabled: scanTerm.length >= 2,
+    queryFn: () => get<{ items: CopyHit[] }>('/api/v1/library/copies', { q: scanTerm, status: 'available' }),
+  });
   const [copies, setCopies] = useState<{ barcode: string; title: string; code: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<{ totalFeeVnd: number; dueAt: string; count: number } | null>(null);
+  const [payment, setPayment] = useState<DeskPayment>({ method: 'cash' });
+  const [payOwed, setPayOwed] = useState(false);
   const b = useQuery({ queryKey: ['library-borrower', customer?.id], enabled: !!customer, queryFn: () => get<Borrower>(`/api/v1/library/borrowers/${customer!.id}`) });
-  const add = async () => {
-    const code = scan.trim().toUpperCase();
-    if (!code) return;
+  const pick = (c: CopyHit) => {
     setScan('');
     setError(null);
-    if (copies.some((c) => c.barcode === code)) return;
+    if (!copies.some((x) => x.barcode === c.barcode)) setCopies((cs) => [...cs, { barcode: c.barcode, title: c.title, code: c.code }]);
+  };
+  /**
+   * Enter or scan: an exact copy code is added; a title code or title adds its only copy on the
+   * shelf, or leaves the matches listed to pick; otherwise say why nothing can be lent.
+   */
+  const add = async (raw = scan) => {
+    const text = raw.trim();
+    if (!text) return;
+    setError(null);
     try {
-      const r = await get<{ items: TitleRow[] }>('/api/v1/library/titles', { q: code, limit: 1 });
-      const t = r.items[0];
-      if (!t) throw new Error(`Không tìm thấy bản sách có mã ${code}.`);
-      setCopies((cs) => [...cs, { barcode: code, title: t.title, code: t.code }]);
+      const exact = await get<CopyHit>(`/api/v1/library/copies/by-barcode/${encodeURIComponent(text)}`).catch((e: unknown) => {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      });
+      if (exact) {
+        if (exact.status !== 'available' && exact.status !== 'reserved') {
+          setError(`Bản ${exact.barcode} đang ${COPY_STATUS[exact.status]?.label.toLowerCase() ?? exact.status}, không cho mượn được.`);
+          return;
+        }
+        pick(exact);
+        return;
+      }
+      const shelf = (await get<{ items: CopyHit[] }>('/api/v1/library/copies', { q: text, status: 'available' })).items.filter((c) => !copies.some((x) => x.barcode === c.barcode));
+      if (shelf.length === 1) return pick(shelf[0]!);
+      if (shelf.length > 1) {
+        setScan(text);
+        return; // the list under the field lets staff choose the copy
+      }
+      const titles = (await get<{ items: TitleRow[] }>('/api/v1/library/titles', { q: text, limit: 1 })).items;
+      const t = titles[0];
+      setError(
+        !t
+          ? `Không tìm thấy sách có mã hoặc tên “${text}”.`
+          : t.copies === 0
+            ? `Đầu sách ${t.code} “${t.title}” chưa có bản sách nào. Thêm bản ở Quản lý đầu sách trước khi cho mượn.`
+            : `Mọi bản của ${t.code} “${t.title}” đang được mượn, giữ hoặc không dùng được.`,
+      );
     } catch (e) {
       setError(errText(e));
     }
   };
+  const suggestions = scanTerm.length >= 2 ? (shelfMatches.data?.items ?? []).filter((c) => !copies.some((x) => x.barcode === c.barcode)) : [];
   const confirm = async () => {
     setBusy(true);
     setError(null);
     try {
-      const r = await post<{ totalFeeVnd: number; dueAt: string; loans: unknown[] }>('/api/v1/library/loans/checkout', { customerId: customer!.id, barcodes: copies.map((c) => c.barcode) });
+      // The loan fee is taken at the desk before the loans are recorded (FR-LIB-07, FR-LIB-09a).
+      const r = await post<{ totalFeeVnd: number; dueAt: string; loans: unknown[] }>('/api/v1/library/loans/checkout', { customerId: customer!.id, barcodes: copies.map((c) => c.barcode), payment: paymentBody(payment) });
       setDone({ totalFeeVnd: r.totalFeeVnd, dueAt: r.dueAt, count: r.loans.length });
       void qc.invalidateQueries({ queryKey: ['library-loans'] });
     } catch (e) {
@@ -315,13 +485,16 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
           <span className="flex size-16 items-center justify-center rounded-full bg-success-50 text-success-700">
             <CheckCircle2 size={36} aria-hidden />
           </span>
-          <p className="text-lg font-semibold">
-            Đã cho mượn {done.count} cuốn – thu {formatVnd(done.totalFeeVnd)} tại quầy
-          </p>
-          <p className="text-ink-700">
-            Hạn trả <span className="text-xl font-semibold num">{formatDate(done.dueAt)}</span>
-          </p>
-          <p className="text-sm text-ink-500">Thu ngân thêm phí vào giỏ khi gắn khách {customer?.name} ở màn hình Bán hàng.</p>
+          <p className="text-lg font-semibold">Đã cho mượn</p>
+          {/* Labels left, values right (Design §13.8). */}
+          <dl className="grid w-full grid-cols-[1fr_auto] gap-x-3 gap-y-2 text-left text-sm">
+            <dt className="text-ink-700">Số cuốn</dt>
+            <dd className="text-right font-semibold num">{formatNumber(done.count)}</dd>
+            <dt className="text-ink-700">Hạn trả</dt>
+            <dd className="text-right font-semibold num">{formatDate(done.dueAt)}</dd>
+            <dt className="text-ink-700">Phí mượn</dt>
+            <dd className="text-right font-semibold num">{formatVnd(done.totalFeeVnd)}</dd>
+          </dl>
         </div>
       </Dialog>
     );
@@ -330,7 +503,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
   const due = data ? dueAfter(new Date(), data.loanDays) : null;
   return (
     <Dialog
-      title="Cho mượn sách"
+      title="Phiếu mượn sách"
       size="lg"
       onClose={onClose}
       footer={
@@ -338,71 +511,103 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
           <Button variant="secondary" onClick={onClose}>
             Hủy
           </Button>
-          <Button variant="primary" loading={busy} disabled={!data || data.blocks.length > 0 || copies.length === 0} onClick={confirm}>
-            Xác nhận cho mượn
+          <Button variant="primary" loading={busy} disabled={!data || data.blocks.length > 0 || copies.length === 0 || !paymentReady(payment)} onClick={confirm}>
+            Xác nhận
           </Button>
         </>
       }
     >
       <div className="flex flex-col gap-4">
         <section className="flex flex-col gap-2">
-          <h3 className="text-[13px] font-semibold text-ink-700">1. Người mượn</h3>
+          <h3 className="text-[13px] font-semibold text-ink-700">1. Thông tin người mượn</h3>
           <BorrowerPicker
             value={customer}
-            onChange={(c) => {
-              setCustomer(c);
-              setCopies([]);
-            }}
+            onChange={setCustomer}
           />
           {b.isLoading && customer && <Skeleton className="h-20" />}
           {b.error && <ErrorState error={b.error} onRetry={() => b.refetch()} />}
-          {data && <EligibilityCard b={data} />}
+          {data && <EligibilityCard b={data} onPay={() => setPayOwed(true)} />}
+          {payOwed && customer && <PayChargesDialog customerId={customer.id} onClose={() => setPayOwed(false)} onDone={() => void b.refetch()} />}
         </section>
-        {data && data.blocks.length === 0 && (
-          <section className="flex flex-col gap-2">
-            <h3 className="text-[13px] font-semibold text-ink-700">2. Quét sách</h3>
+        {/* Every section is shown from the start (Design §13.8). */}
+        <section className="flex flex-col gap-2">
+            <h3 className="text-[13px] font-semibold text-ink-700">2. Thông tin sách mượn</h3>
             <form
-              className="flex gap-2"
+              className="flex items-center gap-2"
               onSubmit={(e) => {
                 e.preventDefault();
                 void add();
               }}
             >
               <input
-                className="h-11 min-w-0 flex-1 rounded-md border border-paper-500 bg-white px-3 code focus:border-navy-700"
-                placeholder="Quét hoặc nhập mã bản sách, ví dụ VN-0123-2"
-                aria-label="Mã bản sách"
-                autoFocus
+                className="h-11 min-w-0 flex-1 rounded-md border border-paper-500 bg-white px-3 focus:border-navy-700"
+                placeholder="Nhập mã thư viện/tên sách"
+                aria-label="Mã thư viện"
                 value={scan}
                 onChange={(e) => setScan(e.target.value)}
               />
-              <Button type="submit" variant="secondary" disabled={!scan.trim()}>
-                Thêm
-              </Button>
+              <button type="button" className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-navy-50 text-navy-700 hover:bg-navy-100" aria-label="Quét mã bằng camera" onClick={() => setCamera(true)}>
+                <ScanBarcode size={20} aria-hidden />
+              </button>
             </form>
+            {suggestions.length > 0 && (
+              <ul className="max-h-56 divide-y divide-paper-300 overflow-y-auto rounded-md border border-paper-300">
+                {suggestions.map((c) => (
+                  <li key={c.id}>
+                    <button type="button" className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-navy-50" onClick={() => pick(c)}>
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-medium">{c.title}</span>
+                        <span className="text-ink-500">
+                          {c.barcode}
+                          {c.shelf ? ` · kệ ${c.shelf}` : ''}
+                        </span>
+                      </span>
+                      <Plus size={16} className="text-ink-500" aria-hidden />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {camera && (
+              <CameraScanner
+                onCode={(code) => {
+                  setCamera(false);
+                  void add(code);
+                }}
+                onClose={() => setCamera(false)}
+              />
+            )}
+            {copies.length === 0 && <p className="text-sm text-ink-500">Chưa có sách nào.</p>}
             {copies.length > 0 && (
               <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
                 {copies.map((c) => (
-                  <li key={c.barcode} className="flex items-center gap-3 px-3 py-2 text-sm">
+                  <li key={c.barcode} className="flex items-start gap-3 px-3 py-2 text-sm">
                     <span className="min-w-0 flex-1">
                       <span className="block font-semibold">{c.title}</span>
-                      <span className="code text-ink-500">{c.barcode}</span>
+                      {/* The copy's library code, with its loan fee on the same line (Design §13.8). */}
+                      <span className="flex items-baseline justify-between gap-3">
+                        <span className="text-ink-500">{c.barcode}</span>
+                        {data ? <Fee fee={data.fee} /> : <span className="text-ink-500">—</span>}
+                      </span>
                     </span>
-                    <Fee fee={data.fee} />
                     <Button variant="ghost" size="sm" icon={X} aria-label="Bỏ cuốn này" onClick={() => setCopies((cs) => cs.filter((x) => x.barcode !== c.barcode))} />
                   </li>
                 ))}
-                <li className="flex items-center justify-between gap-3 bg-paper-100 px-3 py-2 text-sm">
-                  <span>
-                    Hạn trả <span className="text-lg font-semibold num">{due && formatDate(due)}</span>
-                  </span>
-                  <span className="font-semibold num">Tổng phí {formatVnd(data.fee.amountVnd * copies.length)}</span>
-                </li>
               </ul>
             )}
-            {copies.length + data.openLoans.length > data.maxLoans && <InlineAlert tone="warning">Khách chỉ được mượn tối đa {data.maxLoans} cuốn cùng lúc.</InlineAlert>}
-          </section>
-        )}
+            {data && copies.length + data.openLoans.length > data.maxLoans && <InlineAlert tone="warning">Khách chỉ được mượn tối đa {data.maxLoans} cuốn cùng lúc.</InlineAlert>}
+        </section>
+        <section className="flex flex-col gap-2">
+            <h3 className="text-[13px] font-semibold text-ink-700">3. Thanh toán</h3>
+            {/* Due date and fee sit with the payment, labels left and values right (Design §13.8). */}
+            <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 rounded-md bg-paper-100 px-3 py-2 text-sm">
+              <span>Hạn trả</span>
+              <span className="text-right font-semibold num">{due ? formatDate(due) : '—'}</span>
+              <span>Tổng phí</span>
+              <span className="text-right font-semibold num">{data && copies.length ? formatVnd(data.fee.amountVnd * copies.length) : '—'}</span>
+            </div>
+            <PaymentFields totalVnd={(data?.fee.amountVnd ?? 0) * copies.length} value={payment} onChange={setPayment} showTotal={false} />
+        </section>
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       </div>
     </Dialog>
@@ -413,6 +618,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
 // Return (FR-LIB-08, UC-18)
 
 interface CheckinResult {
+  customerId: string;
   barcode: string;
   code: string;
   title: string;
@@ -428,11 +634,22 @@ interface CheckinResult {
 function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; onClose: () => void }) {
   const qc = useQueryClient();
   const [barcode, setBarcode] = useState(initialBarcode ?? '');
-  const [busy, setBusy] = useState<'ok' | 'damaged' | null>(null);
+  const [condition, setCondition] = useState<'ok' | 'damaged'>('ok');
+  const [camera, setCamera] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CheckinResult | null>(null);
-  const submit = async (condition: 'ok' | 'damaged') => {
-    setBusy(condition);
+  const [payFor, setPayFor] = useState<string | null>(null);
+  // Copies on loan matching the code or title typed (Design §13.8).
+  const term = useDebounced(barcode.trim(), 250);
+  const matches = useQuery({
+    queryKey: ['library-loans', 'return-search', term],
+    enabled: term.length >= 2 && !result,
+    queryFn: () => get<{ items: Loan[] }>('/api/v1/library/loans', { filter: 'open', q: term }),
+  });
+  const picked = matches.data?.items.some((l) => l.barcode.toUpperCase() === barcode.trim().toUpperCase());
+  const submit = async () => {
+    setBusy(true);
     setError(null);
     try {
       setResult(await post<CheckinResult>('/api/v1/library/loans/checkin', { barcode: barcode.trim(), condition }));
@@ -440,16 +657,33 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
     } catch (e) {
       setError(errText(e));
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
   const next = () => {
     setResult(null);
     setBarcode('');
+    setCondition('ok');
   };
   const owed = result ? result.lateFeeVnd + result.damageVnd : 0;
   return (
-    <Dialog title="Nhận trả sách" size="sm" onClose={onClose}>
+    <Dialog
+      title="Nhận trả sách"
+      size="sm"
+      onClose={onClose}
+      {...(!result && {
+        footer: (
+          <>
+            <Button variant="secondary" onClick={onClose}>
+              Hủy
+            </Button>
+            <Button variant="primary" loading={busy} disabled={!barcode.trim()} onClick={submit}>
+              Xác nhận
+            </Button>
+          </>
+        ),
+      })}
+    >
       {result ? (
         <div className="flex flex-col gap-4">
           <div className={`flex flex-col gap-1 rounded-lg p-4 ${result.daysLate > 0 || result.damageVnd > 0 ? 'bg-danger-50' : 'bg-success-50'}`}>
@@ -466,30 +700,85 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
               <p className="font-semibold text-success-700">Trả đúng hạn</p>
             )}
             {result.damageVnd > 0 && <p className="font-semibold text-danger-700 num">Sách hỏng – phí {formatVnd(result.damageVnd)}</p>}
-            {owed > 0 && <p className="text-sm text-ink-700">Khách thanh toán tại quầy bán hàng.</p>}
           </div>
+          {owed > 0 && (
+            <Button variant="primary" full onClick={() => setPayFor(result.customerId)}>
+              Thu phí {formatVnd(owed)}
+            </Button>
+          )}
+          {payFor && <PayChargesDialog customerId={payFor} onClose={() => setPayFor(null)} />}
           {result.hold && (
             <InlineAlert tone="info">
               Giữ cho {result.hold.customerName} – gọi <CallLink phone={result.hold.customerPhone} /> (giữ đến {formatDate(result.hold.holdUntil)}).
             </InlineAlert>
           )}
-          <Button variant="primary" full onClick={next}>
+          <Button variant={owed > 0 ? 'secondary' : 'primary'} full onClick={next}>
             Nhận cuốn khác
           </Button>
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-          <Field label="Mã bản sách" className="code" autoFocus value={barcode} onChange={(e) => setBarcode(e.target.value)} placeholder="Quét mã trên tem sách" />
-          <p className="text-[13px] font-medium text-ink-700">Tình trạng sách</p>
-          <div className="grid grid-cols-2 gap-3">
-            <Button variant="primary" size="xl" loading={busy === 'ok'} disabled={!barcode.trim() || !!busy} onClick={() => submit('ok')}>
-              OK
-            </Button>
-            <Button variant="destructive-outline" size="xl" loading={busy === 'damaged'} disabled={!barcode.trim() || !!busy} onClick={() => submit('damaged')}>
-              Hỏng
-            </Button>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-end gap-2">
+              <Field
+                label="Mã thư viện"
+                className="flex-1"
+                autoFocus
+                value={barcode}
+                onChange={(e) => setBarcode(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && barcode.trim() && void submit()}
+                placeholder="Nhập mã thư viện/tên sách"
+              />
+              {/* Camera scan fills the copy code (Design §13.8). */}
+              <button type="button" className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-navy-50 text-navy-700 hover:bg-navy-100" aria-label="Quét mã bằng camera" onClick={() => setCamera(true)}>
+                <ScanBarcode size={20} aria-hidden />
+              </button>
+            </div>
+            {term.length >= 2 && !picked && matches.data && (
+              <ul className="max-h-56 divide-y divide-paper-300 overflow-y-auto rounded-md border border-paper-300">
+                {matches.data.items.length === 0 && <li className="px-3 py-2 text-sm text-ink-500">Không có sách đang mượn phù hợp.</li>}
+                {matches.data.items.map((l) => (
+                  <li key={l.id}>
+                    <button type="button" className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-navy-50" onClick={() => setBarcode(l.barcode)}>
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-medium">{l.title}</span>
+                        <span className="text-ink-500">
+                          {l.barcode} · {l.customerName}
+                        </span>
+                      </span>
+                      {l.overdue && <StatusChip tone="danger">Quá hạn</StatusChip>}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
+          <fieldset>
+            <legend className="mb-1 text-[13px] font-medium text-ink-700">Tình trạng sách</legend>
+            <div className="flex gap-6">
+              {(
+                [
+                  ['ok', 'Nguyên vẹn'],
+                  ['damaged', 'Hỏng'],
+                ] as const
+              ).map(([v, label]) => (
+                <label key={v} className="inline-flex h-10 items-center gap-2 text-sm">
+                  <input type="radio" name="return-condition" className="size-[18px] accent-navy-700" checked={condition === v} onChange={() => setCondition(v)} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
           {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+          {camera && (
+            <CameraScanner
+              onCode={(code) => {
+                setBarcode(code);
+                setCamera(false);
+              }}
+              onClose={() => setCamera(false)}
+            />
+          )}
         </div>
       )}
     </Dialog>
@@ -497,21 +786,94 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
 }
 
 // =============================================================================================
+// Library overview (FR-LIB-15a, Design §12.5): four figures, each opening its list
+
+export interface LibraryOverviewData {
+  copies: number;
+  available: number;
+  onLoan: number;
+  overdue: number;
+}
+
+export function LibraryOverview({ data }: { data: LibraryOverviewData | undefined }) {
+  const tile = (label: string, value: number | undefined, to: string, tone?: string) => (
+    <Link to={to} className="flex flex-col gap-1 rounded-lg border border-paper-300 bg-white p-4 hover:border-navy-700">
+      <span className="text-sm text-ink-500">{label}</span>
+      {value === undefined ? <Skeleton className="h-8 w-16" /> : <span className={clsx('text-2xl leading-8 font-semibold num', tone)}>{formatNumber(value)}</span>}
+    </Link>
+  );
+  return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      {tile('Tổng số bản sách', data?.copies, '/library/catalog')}
+      {tile('Còn trên kệ', data?.available, '/library/catalog?status=available', 'text-success-700')}
+      {tile('Đang mượn', data?.onLoan, '/library')}
+      {tile('Quá hạn', data?.overdue, '/library?tab=overdue', data?.overdue ? 'text-danger-700' : undefined)}
+    </div>
+  );
+}
+
+/** Gia hạn: one more loan period; the fee is taken at the desk (FR-LIB-12, FR-LIB-09a). */
+function RenewDialog({ loan, fee, onClose, onDone }: { loan: Loan; fee: Borrower | undefined; onClose: () => void; onDone: () => void }) {
+  const [payment, setPayment] = useState<DeskPayment>({ method: 'cash' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const renew = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await post<{ dueAt: string }>(`/api/v1/library/loans/${loan.id}/renew`, { payment: paymentBody(payment) });
+      toast.success(`Đã gia hạn đến ${formatDate(r.dueAt)}.`);
+      onDone();
+      onClose();
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      title={`Gia hạn “${loan.title}”`}
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Hủy
+          </Button>
+          <Button variant="primary" loading={busy} disabled={!fee || !paymentReady(payment)} onClick={renew}>
+            Thu tiền và gia hạn
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <p className="text-sm text-ink-700">
+          Thêm {fee?.loanDays ?? '…'} ngày từ hạn trả hiện tại ({formatDate(loan.dueAt)}). Còn {loan.renewalsLeft} lần gia hạn.
+        </p>
+        {fee ? <PaymentFields totalVnd={fee.fee.amountVnd} value={payment} onChange={setPayment} /> : <Skeleton className="h-24" />}
+        {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+      </div>
+    </Dialog>
+  );
+}
+
+// =============================================================================================
 // Mượn / trả: loan lists with call links (FR-LIB-14, Design §13.8)
 
-type DeskTab = 'open' | 'due_soon' | 'overdue' | 'held';
 
 export function LibraryDeskPage() {
   const { data: me } = useMe();
   const qc = useQueryClient();
   const [tab, setTab] = useParam('tab', 'open');
   const [q, setQ] = useParam('q');
-  const [dialog, setDialog] = useState<null | { kind: 'borrow' } | { kind: 'return'; barcode?: string } | { kind: 'renew'; loan: Loan } | { kind: 'lost'; loan: Loan } | { kind: 'unhold'; hold: Hold }>(null);
+  const [dialog, setDialog] = useState<null | { kind: 'borrow' } | { kind: 'return'; barcode?: string } | { kind: 'renew'; loan: Loan } | { kind: 'lost'; loan: Loan } | { kind: 'unhold'; hold: Hold } | { kind: 'pay'; customerId: string }>(null);
   const list = useQuery({
     queryKey: ['library-loans', tab, q],
     queryFn: () => get<{ counts: { open: number; dueSoon: number; overdue: number; held: number }; items: Loan[]; holds: Hold[] }>('/api/v1/library/loans', { filter: tab, q: q || undefined }),
   });
   const counts = list.data?.counts;
+  const overview = useQuery({ queryKey: ['library-loans', 'overview'], queryFn: () => get<LibraryOverviewData>('/api/v1/library/overview') });
   const refresh = () => void qc.invalidateQueries({ queryKey: ['library-loans'] });
   const fee = useQuery({ queryKey: ['settings-library-fee'], enabled: dialog?.kind === 'renew', queryFn: () => get<Borrower>(`/api/v1/library/borrowers/${(dialog as { loan: Loan }).loan.customerId}`) });
   const loanColumns: Column<Loan>[] = [
@@ -604,18 +966,28 @@ export function LibraryDeskPage() {
           )
         }
       />
-      <Tabs<DeskTab>
-        tabs={[
-          { key: 'open', label: 'Đang mượn', ...(counts && { count: counts.open }) },
-          { key: 'due_soon', label: 'Sắp đến hạn', ...(counts && { count: counts.dueSoon }) },
-          { key: 'overdue', label: 'Quá hạn', ...(counts && { count: counts.overdue }) },
-          { key: 'held', label: 'Đang giữ', ...(counts && { count: counts.held }) },
-        ]}
-        value={tab as DeskTab}
-        onChange={setTab}
-      />
       <div className="mb-4">
+        <LibraryOverview data={overview.data} />
+      </div>
+      {/* Lists as a filter beside the search box, not tabs (Design §13.8). */}
+      <div className="mb-4 flex items-center gap-2">
         <SearchBox value={q} onChange={setQ} placeholder="Tìm tên, SĐT khách hoặc tên sách, mã bản…" />
+        <FilterMenu
+          groups={[
+            {
+              kind: 'single',
+              label: 'Trạng thái',
+              options: [
+                { key: 'due_soon', label: `Sắp đến hạn${counts ? ` (${counts.dueSoon})` : ''}` },
+                { key: 'overdue', label: `Quá hạn${counts ? ` (${counts.overdue})` : ''}` },
+                { key: 'held', label: `Đang giữ${counts ? ` (${counts.held})` : ''}` },
+              ],
+              // No choice (“Tất cả”) lists every open loan; clearing the filter returns to it.
+              value: tab === 'open' ? '' : tab,
+              onChange: (v) => setTab(v || 'open'),
+            },
+          ]}
+        />
       </div>
       {tab === 'held' ? (
         <DataTable columns={holdColumns} rows={list.data?.holds} rowKey={(h) => h.id} error={list.error} onRetry={() => list.refetch()} empty={{ icon: BookmarkCheck, title: 'Không có sách đang giữ cho khách' }} />
@@ -632,19 +1004,8 @@ export function LibraryDeskPage() {
       )}
       {dialog?.kind === 'borrow' && <BorrowDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === 'return' && <ReturnDialog {...(dialog.barcode && { initialBarcode: dialog.barcode })} onClose={() => setDialog(null)} />}
-      {dialog?.kind === 'renew' && (
-        <ConfirmDialog
-          title={`Gia hạn “${dialog.loan.title}”?`}
-          body={`Thêm ${fee.data?.loanDays ?? '…'} ngày từ hạn trả hiện tại và thu thêm ${fee.data ? formatVnd(fee.data.fee.amountVnd) : '…'} tại quầy. Còn ${dialog.loan.renewalsLeft} lần gia hạn.`}
-          confirm="Gia hạn"
-          onConfirm={async () => {
-            const r = await post<{ dueAt: string }>(`/api/v1/library/loans/${dialog.loan.id}/renew`);
-            toast.success(`Đã gia hạn đến ${formatDate(r.dueAt)}.`);
-            refresh();
-          }}
-          onClose={() => setDialog(null)}
-        />
-      )}
+      {dialog?.kind === 'renew' && <RenewDialog loan={dialog.loan} fee={fee.data} onClose={() => setDialog(null)} onDone={refresh} />}
+      {dialog?.kind === 'pay' && <PayChargesDialog customerId={dialog.customerId} onClose={() => setDialog(null)} onDone={refresh} />}
       {dialog?.kind === 'lost' && (
         <ConfirmDialog
           title={`Báo mất “${dialog.loan.title}”?`}
@@ -655,8 +1016,10 @@ export function LibraryDeskPage() {
             const r = await post<{ chargeVnd: number }>(`/api/v1/library/loans/${dialog.loan.id}/mark-lost`);
             toast.success(`Đã ghi nhận mất sách – phí ${formatVnd(r.chargeVnd)}.`);
             refresh();
+            // Collect the charge now if the borrower pays at once (FR-LIB-11).
+            if (r.chargeVnd > 0) setTimeout(() => setDialog({ kind: 'pay', customerId: dialog.loan.customerId }), 0);
           }}
-          onClose={() => setDialog(null)}
+          onClose={() => setDialog((d) => (d?.kind === 'lost' ? null : d))}
         />
       )}
       {dialog?.kind === 'unhold' && (
@@ -677,7 +1040,7 @@ export function LibraryDeskPage() {
 }
 
 // =============================================================================================
-// Danh mục & bản sách (FR-LIB-01..04)
+// Quản lý đầu sách: titles and copies (FR-LIB-01..04)
 
 export function LibraryCatalogPage() {
   const navigate = useNavigate();
@@ -686,7 +1049,7 @@ export function LibraryCatalogPage() {
   const [language, setLanguage] = useParam('lang');
   const [status, setStatus] = useParam('status');
   const [category, setCategory] = useParam('category');
-  const [dialog, setDialog] = useState<null | 'new' | 'stocktake'>(null);
+  const [dialog, setDialog] = useState<null | 'new'>(null);
   const list = useQuery({
     queryKey: ['library-titles', q, language, status, category],
     queryFn: () => get<{ items: TitleRow[]; categories: string[] }>('/api/v1/library/titles', { q: q || undefined, language: language || undefined, status: status || undefined, category: category || undefined }),
@@ -720,13 +1083,10 @@ export function LibraryCatalogPage() {
   return (
     <>
       <PageHeader
-        title="Danh mục & bản sách"
+        title="Quản lý đầu sách"
         actions={
           manage && (
             <>
-              <Button variant="secondary" icon={ClipboardCheck} onClick={() => setDialog('stocktake')}>
-                Kiểm kê kệ
-              </Button>
               <Button variant="primary" icon={Plus} onClick={() => setDialog('new')}>
                 Thêm đầu sách
               </Button>
@@ -756,7 +1116,6 @@ export function LibraryCatalogPage() {
         empty={filtered ? { icon: Search, title: 'Không có đầu sách phù hợp', help: 'Thử đổi từ khóa hoặc bộ lọc.' } : { icon: Library, title: 'Thư viện chưa có đầu sách', help: 'Thêm đầu sách rồi thêm bản sách để in tem.' }}
       />
       {dialog === 'new' && <TitleForm title={null} onClose={() => setDialog(null)} onSaved={(id) => navigate(`/library/titles/${id}`)} />}
-      {dialog === 'stocktake' && <StocktakeDialog onClose={() => setDialog(null)} />}
     </>
   );
 }
@@ -930,7 +1289,7 @@ export function LibraryTitlePage() {
         title={d.title}
         breadcrumb={
           <Link to="/library/catalog" className="hover:underline">
-            Danh mục & bản sách
+            Quản lý đầu sách
           </Link>
         }
         subtitle={
@@ -1272,52 +1631,6 @@ function LabelsDialog({ copyIds, onClose }: { copyIds: string[]; onClose: () => 
   );
 }
 
-// Stock-take by shelf (FR-LIB-04): scan everything on the shelf, then compare.
-function StocktakeDialog({ onClose }: { onClose: () => void }) {
-  const [shelf, setShelf] = useState('');
-  const [codes, setCodes] = useState('');
-  type Row = { barcode: string; title: string; shelf: string | null; status: string };
-  const [result, setResult] = useState<{ scanned: number; missing: Row[]; misplaced: Row[]; unknown: string[] } | null>(null);
-  const s = useSubmit(async () => {
-    setResult(await post('/api/v1/library/stocktake', { shelf: shelf || null, barcodes: codes.split(/\s+/).filter(Boolean) }));
-  }, () => undefined);
-  const list = (title: string, rows: Row[], tone: 'warning' | 'danger') =>
-    rows.length > 0 && (
-      <div className="flex flex-col gap-1">
-        <p className="text-sm font-semibold">
-          {title} ({rows.length})
-        </p>
-        <ul className="divide-y divide-paper-300 rounded-md border border-paper-300 text-sm">
-          {rows.map((r) => (
-            <li key={r.barcode} className="flex items-center gap-2 px-3 py-2">
-              <span className="code">{r.barcode}</span>
-              <span className="min-w-0 flex-1 truncate">{r.title}</span>
-              <span className="text-ink-500">{r.shelf ?? '—'}</span>
-              {r.status !== 'available' && <CopyChip status={r.status} />}
-            </li>
-          ))}
-        </ul>
-        <span className="sr-only">{tone}</span>
-      </div>
-    );
-  return (
-    <FormDialog title="Kiểm kê kệ sách" busy={s.busy} error={s.error} disabled={!codes.trim()} onSave={s.run} onClose={onClose} confirm="So sánh">
-      <Field label="Kệ" helper="Để trống để so với cả thư viện." value={shelf} onChange={(e) => setShelf(e.target.value)} />
-      <TextArea label="Mã bản đã quét (mỗi mã một dòng)" rows={6} className="code" value={codes} onChange={(e) => setCodes(e.target.value)} />
-      {result && (
-        <div className="flex flex-col gap-3">
-          <InlineAlert tone={result.missing.length || result.misplaced.length || result.unknown.length ? 'warning' : 'success'}>
-            Đã quét {formatNumber(result.scanned)} mã. {result.missing.length || result.misplaced.length || result.unknown.length ? 'Có chênh lệch, xem bên dưới.' : 'Khớp với dữ liệu.'}
-          </InlineAlert>
-          {list('Thiếu trên kệ', result.missing, 'danger')}
-          {list('Sai chỗ hoặc sai trạng thái', result.misplaced, 'warning')}
-          {result.unknown.length > 0 && <p className="text-sm">Mã không có trong thư viện: <span className="code">{result.unknown.join(', ')}</span></p>}
-        </div>
-      )}
-    </FormDialog>
-  );
-}
-
 // =============================================================================================
 // Customer page, Library section (FR-LIB-15); the customer page has no tabs (Design §12.3)
 
@@ -1325,6 +1638,7 @@ export function CustomerLibrarySection({ customerId }: { customerId: string }) {
   const { data: me } = useMe();
   const qc = useQueryClient();
   const [waive, setWaive] = useState<Charge | null>(null);
+  const [paying, setPaying] = useState(false);
   const [reason, setReason] = useState('');
   const b = useQuery({ queryKey: ['library-borrower', customerId], queryFn: () => get<Borrower>(`/api/v1/library/borrowers/${customerId}`) });
   if (b.error) return <ErrorState error={b.error} onRetry={() => b.refetch()} />;
@@ -1368,7 +1682,7 @@ export function CustomerLibrarySection({ customerId }: { customerId: string }) {
       cell: (c) => (
         <span className="flex flex-col items-start gap-1">
           <StatusChip tone={CHARGE_STATUS[c.status]?.tone ?? 'neutral'}>{CHARGE_STATUS[c.status]?.label ?? c.status}</StatusChip>
-          {c.saleDocNo && <span className="code text-[13px] text-ink-500">{c.saleDocNo}</span>}
+          {c.receiptNo && <span className="code text-[13px] text-ink-500">{c.receiptNo}</span>}
           {c.reason && <span className="text-[13px] text-ink-500">{c.reason}</span>}
         </span>
       ),
@@ -1386,7 +1700,8 @@ export function CustomerLibrarySection({ customerId }: { customerId: string }) {
   return (
     <section className="flex flex-col gap-4">
       <h2 className="text-base font-semibold text-ink-900">Thư viện</h2>
-      <EligibilityCard b={d} />
+      <EligibilityCard b={d} {...(can(me, 'library.lend') && { onPay: () => setPaying(true) })} />
+      {paying && <PayChargesDialog customerId={customerId} onClose={() => setPaying(false)} />}
       <h3 className="text-sm font-semibold">Đang mượn ({d.openLoans.length})</h3>
       <DataTable columns={loanCols} rows={d.openLoans} rowKey={(l) => l.id} minWidth={560} empty={{ icon: Library, title: 'Không có sách đang mượn' }} />
       <h3 className="text-sm font-semibold">Khoản thu thư viện</h3>
