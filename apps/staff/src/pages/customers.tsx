@@ -23,7 +23,7 @@ interface CustomerRow {
   tierName: string | null;
   orders: number;
   ordersVnd: number;
-  lastPurchaseAt: string | null;
+  lastActivityAt: string | null;
 }
 
 /** Default tiers (TDD §4.9), as in the promotion scope picker. */
@@ -34,12 +34,13 @@ export function CustomersPage() {
   const navigate = useNavigate();
   const [q, setQ] = useParam('q');
   const [tier, setTier] = useListParam('tier');
-  const [lastPurchase, setLastPurchase] = useParam('lastPurchase');
+  const [lastActivity, setLastActivity] = useParam('lastActivity');
+  const [services, setServices] = useParam('services');
   const [orders, setOrders] = useListParam('orders');
   const [points, setPoints] = useListParam('points');
   const [creating, setCreating] = useState(false);
-  const query = { q: q || undefined, tier: tier.join(',') || undefined, lastPurchase: lastPurchase || undefined, orders: orders.join(',') || undefined, points: points.join(',') || undefined };
-  const filtered = !!(tier.length || lastPurchase || orders.length || points.length);
+  const query = { q: q || undefined, tier: tier.join(',') || undefined, lastActivity: lastActivity || undefined, services: services || undefined, orders: orders.join(',') || undefined, points: points.join(',') || undefined };
+  const filtered = !!(tier.length || lastActivity || services || orders.length || points.length);
   const list = useQuery({ queryKey: ['customers', query], queryFn: () => get<{ items: CustomerRow[] }>('/api/v1/customers', query) });
   const columns: Column<CustomerRow>[] = [
     { header: 'Khách hàng', cell: (r) => <span className="font-medium">{r.name}</span> },
@@ -48,7 +49,8 @@ export function CustomersPage() {
     { header: 'Điểm', align: 'right', cell: (r) => formatNumber(r.pointsBalance) },
     { header: 'Số đơn', align: 'right', cell: (r) => formatNumber(r.orders) },
     { header: 'Tổng mua', align: 'right', cell: (r) => formatVnd(r.ordersVnd) },
-    { header: 'Mua gần nhất', className: 'whitespace-nowrap', cell: (r) => (r.lastPurchaseAt ? formatDate(r.lastPurchaseAt) : <span className="text-ink-500">Chưa mua</span>) },
+    // Shop and library alike, date only (FR-CRM-02, Design §12.1).
+    { header: 'Hoạt động gần nhất', className: 'whitespace-nowrap', cell: (r) => (r.lastActivityAt ? <span className="num">{formatDate(r.lastActivityAt)}</span> : '—') },
   ];
   return (
     <>
@@ -70,16 +72,27 @@ export function CustomersPage() {
             { label: 'Hạng', options: TIER_OPTIONS, values: tier, onChange: setTier },
             {
               kind: 'single',
-              label: 'Mua gần nhất',
+              label: 'Hoạt động gần nhất',
               options: [
                 { key: '30d', label: '30 ngày qua' },
                 { key: '90d', label: '90 ngày qua' },
                 { key: '180d', label: '6 tháng qua' },
-                { key: 'over180d', label: 'Hơn 6 tháng chưa mua' },
-                { key: 'never', label: 'Chưa mua lần nào' },
+                { key: 'over180d', label: 'Hơn 6 tháng không hoạt động' },
+                { key: 'never', label: 'Chưa hoạt động lần nào' },
               ],
-              value: lastPurchase,
-              onChange: setLastPurchase,
+              value: lastActivity,
+              onChange: setLastActivity,
+            },
+            {
+              kind: 'single',
+              label: 'Dịch vụ sử dụng',
+              // No choice is “Tất cả” (FR-CRM-02, Design §12.1).
+              options: [
+                { key: 'shop', label: 'Chỉ mua hàng' },
+                { key: 'library', label: 'Chỉ thư viện' },
+              ],
+              value: services,
+              onChange: setServices,
             },
             {
               label: 'Số đơn',

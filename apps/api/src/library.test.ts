@@ -438,3 +438,23 @@ describe('loan slips on Mượn / trả (FR-LIB-09a)', () => {
     expect((await call('GET', '/api/v1/library/slips', cashier)).status).toBe(403);
   });
 });
+
+describe('customer list: last activity counts library use (FR-CRM-02)', () => {
+  it('shows a borrower who never bought as active', async () => {
+    const chi = await customer('Chi chỉ mượn', '0912000041');
+    const t = (await call('POST', '/api/v1/library/titles', librarian, { code: 'VN-0501', title: 'Sách hoạt động', language: 'vi' })).body.id;
+    await call('POST', `/api/v1/library/titles/${t}/copies`, librarian, { count: 1, valueVnd: 50000, acquiredVia: 'purchase', shelf: 'F1' });
+    const row = async () => (await call('GET', '/api/v1/customers?q=0912000041', owner)).body.items[0];
+    expect((await row()).lastActivityAt).toBeNull();
+    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: chi, barcodes: ['VN-0501-1'], payment: { method: 'cash' } })).status).toBe(201);
+    const r = await row();
+    expect(r).toMatchObject({ orders: 0 });
+    expect(r.lastActivityAt).toBeTruthy();
+    const ids = async (qs: string) => (await call('GET', `/api/v1/customers?${qs}`, owner)).body.items.map((c: { id: string }) => c.id);
+    expect(await ids('lastActivity=30d&q=0912000041')).toEqual([chi]);
+    expect(await ids('lastActivity=never&q=0912000041')).toEqual([]);
+    // Dịch vụ sử dụng: Chi only borrows; Bình (earlier) only borrows too; a buyer with no loans is shop only.
+    expect(await ids('services=library&q=0912000041')).toEqual([chi]);
+    expect(await ids('services=shop&q=0912000041')).toEqual([]);
+  });
+});

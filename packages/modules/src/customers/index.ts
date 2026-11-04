@@ -118,7 +118,10 @@ const csvRanges = csvField.pipe(z.array(z.string().regex(RANGE, 'Khoảng không
 export const CustomerListQuery = z.object({
   q: z.string().optional(),
   tier: csvField,
-  lastPurchase: z.enum(['30d', '90d', '180d', 'over180d', 'never']).optional(),
+  /** Latest interaction with the shop or the library (FR-CRM-02). */
+  lastActivity: z.enum(['30d', '90d', '180d', 'over180d', 'never']).optional(),
+  /** Services used: purchases only, or library only (FR-CRM-02); omitted for all. */
+  services: z.enum(['shop', 'library']).optional(),
   orders: csvRanges,
   points: csvRanges,
 });
@@ -136,7 +139,7 @@ function inRanges(col: SQL, ranges: string[]): SQL {
 
 /**
  * Customer list (FR-CRM-02): diacritic-insensitive search on name, phone and email, purchase stats
- * from completed counter sales (online orders join in R2) and filters by tier, last purchase, order count and points.
+ * from completed sales, last activity across shop and library, and filters by tier, last activity, order count and points.
  */
 export async function search(ctx: Ctx, input: z.input<typeof CustomerListQuery> = {}, limit = 40) {
   requirePermission(ctx, 'customer.view');
@@ -149,9 +152,14 @@ export async function search(ctx: Ctx, input: z.input<typeof CustomerListQuery> 
   if (f.tier) where.push(sql`t.code in (${sql.join(f.tier.map((x) => sql`${x}`), sql`, `)})`);
   if (f.orders) where.push(inRanges(sql`coalesce(st.orders, 0)`, f.orders));
   if (f.points) where.push(inRanges(sql`c.points_balance`, f.points));
-  if (f.lastPurchase === 'never') where.push(sql`st.last_at is null`);
-  else if (f.lastPurchase === 'over180d') where.push(sql`st.last_at < now() - interval '180 days'`);
-  else if (f.lastPurchase) where.push(sql`st.last_at >= now() - ${`${parseInt(f.lastPurchase)} days`}::interval`);
+  if (f.services) {
+    const bought = sql`(coalesce(st.orders, 0) > 0 or exists (select 1 from orders.web_order o where o.customer_id = c.id and o.status <> 'cancelled'))`;
+    const borrowed = sql`(exists (select 1 from library.loan l where l.customer_id = c.id) or exists (select 1 from library.lib_reservation r where r.customer_id = c.id))`;
+    where.push(f.services === 'shop' ? sql`${bought} and not ${borrowed}` : sql`${borrowed} and not ${bought}`);
+  }
+  if (f.lastActivity === 'never') where.push(sql`act.at is null`);
+  else if (f.lastActivity === 'over180d') where.push(sql`act.at < now() - interval '180 days'`);
+  else if (f.lastActivity) where.push(sql`act.at >= now() - ${`${parseInt(f.lastActivity)} days`}::interval`);
   const rows = await ctx.db.execute<{
     id: string;
     name: string;
@@ -162,16 +170,27 @@ export async function search(ctx: Ctx, input: z.input<typeof CustomerListQuery> 
     tier_name: string | null;
     orders: number | null;
     orders_vnd: string | null;
-    last_at: Date | string | null;
+    last_activity_at: Date | string | null;
   }>(sql`
     select c.id, c.name, c.phone_e164, c.email, c.points_balance, t.code as tier_code, t.name as tier_name,
-           st.orders, st.orders_vnd, st.last_at
+           st.orders, st.orders_vnd, act.at as last_activity_at
     from crm.customer c
     left join crm.tier t on t.id = c.tier_id
     left join lateral (
       select count(*)::int as orders, sum(s.total_vnd) as orders_vnd, max(s.sold_at) as last_at
       from reports.sale_doc s where s.customer_id = c.id
     ) st on true
+    -- Last activity: purchases, orders and pre-orders (not cancelled) and library use (FR-CRM-02).
+    left join lateral (
+      select greatest(
+        st.last_at,
+        (select max(o.created_at) from orders.web_order o where o.customer_id = c.id and o.status <> 'cancelled'),
+        (select max(p.created_at) from orders.preorder p where p.customer_id = c.id and p.status <> 'cancelled'),
+        (select max(greatest(l.loaned_at, coalesce(l.returned_at, l.loaned_at))) from library.loan l where l.customer_id = c.id),
+        (select max(r.queued_at) from library.lib_reservation r where r.customer_id = c.id),
+        (select max(lp.received_at) from library.lib_payment lp where lp.customer_id = c.id)
+      ) as at
+    ) act on true
     where ${and(...where)}
     order by c.name asc
     limit ${limit}`);
@@ -185,7 +204,7 @@ export async function search(ctx: Ctx, input: z.input<typeof CustomerListQuery> 
     tierName: r.tier_name,
     orders: r.orders ?? 0,
     ordersVnd: Number(r.orders_vnd ?? 0),
-    lastPurchaseAt: r.last_at ? new Date(r.last_at).toISOString() : null,
+    lastActivityAt: r.last_activity_at ? new Date(r.last_activity_at).toISOString() : null,
   }));
 }
 

@@ -299,11 +299,13 @@ describe('held carts (FR-POS-03) and sales list (FR-POS-21)', () => {
     const [cust] = (await h.call('GET', '/api/v1/customers?q=0912345678', { cookie: manager })).body.items;
     expect(cust.orders).toBeGreaterThanOrEqual(3);
     expect(cust.ordersVnd).toBeGreaterThan(0);
-    expect(cust.lastPurchaseAt).toBeTruthy();
+    expect(cust.lastActivityAt).toBeTruthy();
     const ids = async (qs: string) => (await h.call('GET', `/api/v1/customers?${qs}`, { cookie: manager })).body.items.map((c: { id: string }) => c.id);
-    expect(await ids('orders=3%2B&lastPurchase=30d')).toContain(cust.id);
+    expect(await ids('orders=3%2B&lastActivity=30d')).toContain(cust.id);
+    expect(await ids('services=shop')).toContain(cust.id);
+    expect(await ids('services=library')).not.toContain(cust.id);
     expect(await ids('orders=0')).not.toContain(cust.id);
-    expect(await ids('lastPurchase=never')).not.toContain(cust.id);
+    expect(await ids('lastActivity=never')).not.toContain(cust.id);
     expect(await ids(`tier=${cust.tierCode}&points=0,1%2B`)).toContain(cust.id);
     expect((await h.call('GET', '/api/v1/customers?orders=abc', { cookie: manager })).status).toBe(400);
     // Several values in one filter combine with OR (TDD §6.2).
