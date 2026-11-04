@@ -3,7 +3,7 @@ import { canTransition, foldText, LIB_LANGUAGES, STOCK_COUNT } from '@bookstore/
 import { and, asc, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
-import { readTable, writeTable } from '../imports/parse.js';
+import { readTable, writeTable } from '../imports/index.js';
 import { AppError, can, errors, nextDocNo, requirePermission, type Ctx, type Tx } from '../platform/index.js';
 
 /**
@@ -248,7 +248,7 @@ export async function uploadCountSheet(ctx: Ctx, id: string, file: { bytes: Uint
   const actor = requirePermission(ctx, 'library.count');
   if (file.mime !== XLSX && file.mime !== 'text/csv') throw new AppError(415, 'unsupported_file_type', 'Chỉ nhận tệp Excel (.xlsx) hoặc CSV.');
   const [head, ...body] = await readTable(file.bytes, file.mime);
-  const col = (name: string) => (head ?? []).findIndex((h) => foldText(h.replace(/^﻿/, '')) === foldText(name));
+  const col = (name: string) => (head ?? []).findIndex((h) => foldText(h.replace(/^\uFEFF/, '')) === foldText(name));
   const iBarcode = col(H_BARCODE);
   const iFound = col(H_FOUND);
   if (iBarcode < 0 || iFound < 0) throw new AppError(400, 'count_sheet_columns', `Tệp cần có cột “${H_BARCODE}” và “${H_FOUND}”. Hãy dùng phiếu đếm tải từ hệ thống.`);

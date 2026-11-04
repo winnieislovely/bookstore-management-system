@@ -252,7 +252,7 @@ describe('damage, loss, reservations and the cash book (FR-LIB-09a, FR-LIB-11, F
       h.app.request(path, { method, headers: { origin: ORIGIN, 'x-bms-request': '1', cookie: librarian, 'content-type': 'text/csv' }, ...(body && { body: body as never }) });
     // Not blind: the sheet carries the system status.
     const csv = await (await req('GET', `/api/v1/library/counts/${id}/sheet?format=csv`)).text();
-    expect(csv.replace(/^﻿/, '').split('\r\n')[0]).toBe('Mã bản,Tên sách,Kệ,Trạng thái hệ thống,Có mặt');
+    expect(csv.replace(/^\uFEFF/, '').split('\r\n')[0]).toBe('Mã bản,Tên sách,Kệ,Trạng thái hệ thống,Có mặt');
     const up = async (text: string) => (await (await req('POST', `/api/v1/library/counts/${id}/sheet`, new TextEncoder().encode(text))).json()) as { error: { code: string } };
     expect((await up('Mã bản,Có mặt\r\nVN-0123-1,2\r\n')).error.code).toBe('count_sheet_invalid');
     expect(await up('Mã bản,Có mặt\r\nVN-0123-1,0\r\n')).toMatchObject({ updated: 1, checked: 1 });

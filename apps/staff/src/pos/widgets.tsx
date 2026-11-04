@@ -10,16 +10,24 @@ import { t } from '../lib/i18n';
 /** `plain`: no divider lines between title, body and buttons (confirmation dialogs, Design §13.8). */
 export function Dialog({ title, onClose, children, size = 'md', footer, plain }: { title: string; onClose?: (() => void) | undefined; children: ReactNode; size?: 'sm' | 'md' | 'lg'; footer?: ReactNode; plain?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Latest onClose without re-running the effect: callers pass a new arrow on every render, and
+  // re-running it pulled focus back to the first button while staff were typing.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLElement>('input, button, [tabindex]')?.focus();
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && onClose?.();
+    // Keep a field that focused itself (autoFocus, e.g. the scan field for a hand scanner);
+    // otherwise focus the first field, then the first control.
+    if (!ref.current?.contains(document.activeElement)) {
+      (ref.current?.querySelector<HTMLElement>('input:not([type=radio]):not([type=checkbox]):not([disabled]), textarea') ?? ref.current?.querySelector<HTMLElement>('button, [tabindex]'))?.focus();
+    }
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current?.();
     document.addEventListener('keydown', esc);
     return () => {
       document.removeEventListener('keydown', esc);
       prev?.focus();
     };
-  }, [onClose]);
+  }, []);
   const w = { sm: 'sm:w-[480px]', md: 'sm:w-[640px]', lg: 'sm:w-[880px]' }[size];
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>

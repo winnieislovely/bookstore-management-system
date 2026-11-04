@@ -9,7 +9,6 @@ import {
   PAYMENT_REF_ALPHABET,
   PAYMENT_REF_LENGTH,
   pointsToReverse,
-  vatIncluded,
   priceCart,
   vnd,
   type CartLineInput,

@@ -103,8 +103,6 @@ const BUILT: Record<string, ReactNode> = {
   '/library': <LibraryDeskPage />,
   '/library/catalog': <LibraryCatalogPage />,
   '/library/counts': <LibraryCountsPage />,
-  // The cash book is part of Mượn / trả now (FR-LIB-09a).
-  '/library/payments': <Navigate to="/library?tab=all" replace />,
   '/reports/library': <LibraryReportPage />,
   '/settings': <SettingsPage />,
   '/import': <ImportPage />,
@@ -131,6 +129,8 @@ const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   { path: 'library/titles/:id', anyOf: ['library.manage', 'library.lend'], element: <LibraryTitlePage /> },
   { path: 'library/counts/:id', anyOf: ['library.count'], element: <LibraryCountDetailPage /> },
   { path: 'library/slips/:id', anyOf: ['library.lend'], element: <LibrarySlipPage /> },
+  // The cash book page is gone; its old link opens every slip on Mượn / trả (FR-LIB-09a).
+  { path: 'library/payments', anyOf: ['library.lend'], element: <Navigate to="/library?tab=all" replace /> },
 ];
 
 const router = createBrowserRouter([

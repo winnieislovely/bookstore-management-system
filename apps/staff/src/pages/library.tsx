@@ -2,7 +2,7 @@ import { barcodeSvg, BORROW_BLOCK_TEXT, discountedLoanFees, dueAfter, escapeXml,
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { AlertOctagon, ArrowLeftRight, BookmarkCheck, CheckCircle2, ChevronDown, Library, Phone, Plus, Printer, ScanBarcode, Search, Truck, User, UserPlus, X } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, SearchBox, SelectField, TextArea, TimeFilter, errText, timeDays, timeLabel, toast, useDebounced, useParam, type Column } from '../components/data';
 import { ProductSearch } from '../components/product-search';
@@ -300,6 +300,8 @@ const paymentBody = (p: DeskPayment) => ({ method: p.method });
 const paymentReady = (_p: DeskPayment) => true;
 
 function PaymentFields({ totalVnd, value, onChange, showTotal = true }: { totalVnd: number; value: DeskPayment; onChange: (p: DeskPayment) => void; showTotal?: boolean }) {
+  // Own radio group per form: the borrow form and the Thu phí dialog can be open together.
+  const name = useId();
   return (
     <div className="flex flex-col gap-3">
       {showTotal && (
@@ -313,7 +315,7 @@ function PaymentFields({ totalVnd, value, onChange, showTotal = true }: { totalV
         <legend className="sr-only">Phương thức thanh toán</legend>
         {(Object.keys(PAYMENT_METHOD) as DeskPayment['method'][]).map((m) => (
           <label key={m} className="inline-flex h-10 items-center gap-2 text-sm">
-            <input type="radio" name="desk-payment" className="size-[18px] accent-navy-700" checked={value.method === m} onChange={() => onChange({ method: m })} />
+            <input type="radio" name={name} className="size-[18px] accent-navy-700" checked={value.method === m} onChange={() => onChange({ method: m })} />
             {PAYMENT_METHOD[m]}
           </label>
         ))}
