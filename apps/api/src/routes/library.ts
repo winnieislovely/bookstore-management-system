@@ -95,6 +95,12 @@ export function libraryRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'get', path: '/api/v1/library/borrowers/:id', access: 'session', summary: 'Eligibility, fee, loans, charges and history of a customer', params: IdParams }, async ({ ctx, params }) =>
     library.borrower(ctx, params.id),
   );
+  defineRoute(app, { method: 'get', path: '/api/v1/library/slips', access: 'library.lend', summary: 'Loan slips with copies, amount and due date', query: library.SlipsQuery }, async ({ ctx, query }) =>
+    library.listSlips(ctx, query),
+  );
+  defineRoute(app, { method: 'get', path: '/api/v1/library/slips/:id', access: 'library.lend', summary: 'One loan slip: copies, receipts, owed charges', params: IdParams }, async ({ ctx, params }) =>
+    library.getSlip(ctx, params.id),
+  );
   defineRoute(app, { method: 'get', path: '/api/v1/library/loans', access: 'library.lend', summary: 'Open, due-soon, overdue loans and held copies', query: library.LoansQuery }, async ({ ctx, query }) =>
     library.listLoans(ctx, query),
   );

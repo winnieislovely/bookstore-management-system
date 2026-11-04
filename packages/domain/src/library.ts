@@ -87,6 +87,28 @@ export function loanFee(lifetimeSpendVnd: number, r: LoanFeeRules): { listVnd: n
   return { listVnd: r.loanFeeVnd, discountPct: r.discountPct, amountVnd: Math.floor((r.loanFeeVnd - off) / 1000) * 1000 };
 }
 
+/** A discount entered by hand at check-out (FR-LIB-18): a percentage of the fees or an amount in VND. */
+export type LoanDiscount = { kind: 'pct' | 'vnd'; value: number };
+
+/**
+ * Per-copy loan fees after a manual discount: `pct` reduces each fee and rounds down to 1,000 VND;
+ * `vnd` comes off the total (never below 0) and is spread over the copies, the first taking the
+ * remainder (TDD §4.8).
+ */
+export function discountedLoanFees(listVnd: number, count: number, d: LoanDiscount): { amounts: number[]; discountPcts: number[] } {
+  if (count <= 0) return { amounts: [], discountPcts: [] };
+  let amounts: number[];
+  if (d.kind === 'pct') {
+    const pct = Math.min(100, Math.max(0, d.value));
+    amounts = Array.from({ length: count }, () => Math.floor((listVnd * (100 - pct)) / 100 / 1000) * 1000);
+  } else {
+    const total = Math.max(0, listVnd * count - Math.max(0, d.value));
+    const each = Math.floor(total / count);
+    amounts = Array.from({ length: count }, (_, i) => each + (i === 0 ? total - each * count : 0));
+  }
+  return { amounts, discountPcts: amounts.map((a) => (listVnd > 0 ? Math.round(((listVnd - a) * 100) / listVnd) : 0)) };
+}
+
 export interface LateFeeRules {
   finePerDayVnd: number;
   graceDays: number;

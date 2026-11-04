@@ -1,14 +1,14 @@
-import { barcodeSvg, BORROW_BLOCK_TEXT, dueAfter, escapeXml, type BorrowBlock } from '@bookstore/domain';
+import { barcodeSvg, BORROW_BLOCK_TEXT, discountedLoanFees, dueAfter, escapeXml, type BorrowBlock, type LoanDiscount } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeftRight, BookmarkCheck, CheckCircle2, Library, Phone, Plus, Printer, ScanBarcode, Search, Truck, User, UserPlus, X } from 'lucide-react';
+import { AlertOctagon, ArrowLeftRight, BookmarkCheck, CheckCircle2, ChevronDown, Library, Phone, Plus, Printer, ScanBarcode, Search, Truck, User, UserPlus, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, SearchBox, SelectField, TextArea, TimeFilter, errText, timeDays, timeLabel, toast, useDebounced, useParam, type Column } from '../components/data';
 import { ProductSearch } from '../components/product-search';
 import { Button, Card, EmptyState, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, patch, post } from '../lib/api';
-import { formatDate, formatNumber, formatPhone, formatVnd } from '../lib/format';
+import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { printHtml } from '../lib/print';
 import { can, useMe } from '../lib/session';
 import { CameraScanner, Dialog, MoneyInput } from '../pos/widgets';
@@ -123,7 +123,15 @@ interface TitleRow {
   copies: number;
   available: number;
   queued: number;
+  onLoan: number;
+  /** Earliest due date of an open loan of the title. */
+  nextDueAt: string | null;
 }
+
+/** A title with no copy on the shelf, reserved on the borrow form (FR-LIB-13). */
+type HoldLine = { titleId: string; code: string; title: string; nextDueAt: string | null; queued: number };
+/** Out of copies but some are lent, so a reservation makes sense. */
+const reservable = (t: TitleRow) => t.available === 0 && t.onLoan > 0;
 
 function CallLink({ phone }: { phone: string | null }) {
   if (!phone) return <span className="text-ink-500">—</span>;
@@ -157,12 +165,38 @@ function DueCell({ loan }: { loan: Pick<Loan, 'dueAt' | 'overdue' | 'daysLate'> 
   );
 }
 
-/** Fee per copy, the list fee struck through when the buyer discount applies (FR-LIB-18). */
-function Fee({ fee }: { fee: Borrower['fee'] }) {
+/** Ưu đãi on the borrow form: a number with a % / ₫ switch (FR-LIB-18, Design §13.8). */
+function DiscountInput({ value, onChange, disabled }: { value: LoanDiscount | null; onChange: (d: LoanDiscount) => void; disabled?: boolean }) {
+  const kind = value?.kind ?? 'vnd';
+  const text = value && value.value > 0 ? formatNumber(value.value) : '';
   return (
-    <span className="whitespace-nowrap num">
-      {fee.discountPct > 0 && <s className="mr-2 text-ink-500">{formatVnd(fee.listVnd)}</s>}
-      <span className="font-semibold">{formatVnd(fee.amountVnd)}</span>
+    <span className="flex w-full items-center justify-between gap-3">
+      {/* The kind is a dropdown on the left, the value on the right (Design §13.8). */}
+      <select
+        className="h-9 rounded-md border border-paper-500 bg-white pr-8 pl-2 text-sm focus:border-navy-700 disabled:bg-paper-100"
+        aria-label="Kiểu ưu đãi"
+        disabled={disabled}
+        value={kind}
+        onChange={(e) => onChange({ kind: e.target.value as LoanDiscount['kind'], value: 0 })}
+      >
+        <option value="vnd">Giảm theo số tiền (₫)</option>
+        <option value="pct">Giảm theo phần trăm (%)</option>
+      </select>
+      <span className="relative">
+      <input
+        className="h-9 w-32 rounded-md border border-paper-500 bg-white pr-7 pl-2 text-right num focus:border-navy-700 disabled:bg-paper-100"
+        inputMode="numeric"
+        aria-label={kind === 'pct' ? 'Ưu đãi theo phần trăm' : 'Ưu đãi theo số tiền'}
+        placeholder="0"
+        disabled={disabled}
+        value={text}
+        onChange={(e) => {
+          const digits = e.target.value.replace(/\D/g, '');
+          onChange({ kind, value: digits ? Number(digits) : 0 });
+        }}
+      />
+      <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-sm text-ink-500">{kind === 'pct' ? '%' : '₫'}</span>
+      </span>
     </span>
   );
 }
@@ -411,21 +445,41 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
     enabled: scanTerm.length >= 2,
     queryFn: () => get<{ items: CopyHit[] }>('/api/v1/library/copies', { q: scanTerm, status: 'available' }),
   });
+  // Titles with no copy on the shelf matching the text, offered as reservations (FR-LIB-13).
+  const outTitles = useQuery({
+    queryKey: ['library-titles', 'reservable', scanTerm],
+    enabled: scanTerm.length >= 2,
+    queryFn: () => get<{ items: TitleRow[] }>('/api/v1/library/titles', { q: scanTerm, limit: 10 }),
+  });
   const [copies, setCopies] = useState<{ barcode: string; title: string; code: string }[]>([]);
+  const [holds, setHolds] = useState<HoldLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<{ totalFeeVnd: number; dueAt: string; count: number } | null>(null);
+  const [done, setDone] = useState<{ totalFeeVnd: number; dueAt: string; count: number; holds: { code: string; title: string; position: number }[] } | null>(null);
   const [payment, setPayment] = useState<DeskPayment>({ method: 'cash' });
   const [payOwed, setPayOwed] = useState(false);
   const b = useQuery({ queryKey: ['library-borrower', customer?.id], enabled: !!customer, queryFn: () => get<Borrower>(`/api/v1/library/borrowers/${customer!.id}`) });
+  // Ưu đãi entered by hand; until then the buyer discount applies (FR-LIB-18). Reset per borrower.
+  const [manual, setManual] = useState<{ customerId: string; d: LoanDiscount } | null>(null);
+  const [discountOpen, setDiscountOpen] = useState(false);
+  const discount: LoanDiscount | null = b.data ? (manual?.customerId === b.data.customer.id ? manual.d : b.data.fee.discountPct > 0 ? { kind: 'pct', value: b.data.fee.discountPct } : { kind: 'vnd', value: 0 }) : null;
+  const listTotal = b.data ? b.data.fee.listVnd * copies.length : 0;
+  const discountTooHigh = !!discount && (discount.kind === 'pct' ? discount.value > 100 : discount.value > listTotal);
+  const feeTotal = b.data && discount && !discountTooHigh ? discountedLoanFees(b.data.fee.listVnd, copies.length, discount).amounts.reduce((a, x) => a + x, 0) : listTotal;
   const pick = (c: CopyHit) => {
     setScan('');
     setError(null);
     if (!copies.some((x) => x.barcode === c.barcode)) setCopies((cs) => [...cs, { barcode: c.barcode, title: c.title, code: c.code }]);
   };
+  const pickHold = (t: TitleRow) => {
+    setScan('');
+    setError(null);
+    if (!holds.some((x) => x.titleId === t.id)) setHolds((hs) => [...hs, { titleId: t.id, code: t.code, title: t.title, nextDueAt: t.nextDueAt, queued: t.queued }]);
+  };
   /**
    * Enter or scan: an exact copy code is added; a title code or title adds its only copy on the
-   * shelf, or leaves the matches listed to pick; otherwise say why nothing can be lent.
+   * shelf, or leaves the matches listed to pick; a title with every copy out becomes a reservation
+   * line (FR-LIB-13); otherwise say why nothing can be lent.
    */
   const add = async (raw = scan) => {
     const text = raw.trim();
@@ -450,28 +504,43 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
         setScan(text);
         return; // the list under the field lets staff choose the copy
       }
-      const titles = (await get<{ items: TitleRow[] }>('/api/v1/library/titles', { q: text, limit: 1 })).items;
+      const titles = (await get<{ items: TitleRow[] }>('/api/v1/library/titles', { q: text, limit: 10 })).items;
+      const out = titles.filter(reservable);
+      if (out.length === 1) return pickHold(out[0]!);
+      if (out.length > 1) {
+        setScan(text);
+        return; // the list under the field lets staff choose the title to reserve
+      }
       const t = titles[0];
       setError(
         !t
           ? `Không tìm thấy sách có mã hoặc tên “${text}”.`
           : t.copies === 0
             ? `Đầu sách ${t.code} “${t.title}” chưa có bản sách nào. Thêm bản ở Quản lý đầu sách trước khi cho mượn.`
-            : `Mọi bản của ${t.code} “${t.title}” đang được mượn, giữ hoặc không dùng được.`,
+            : `Mọi bản của ${t.code} “${t.title}” đang được giữ hoặc không dùng được.`,
       );
     } catch (e) {
       setError(errText(e));
     }
   };
   const suggestions = scanTerm.length >= 2 ? (shelfMatches.data?.items ?? []).filter((c) => !copies.some((x) => x.barcode === c.barcode)) : [];
+  const holdSuggestions = scanTerm.length >= 2 ? (outTitles.data?.items ?? []).filter((t) => reservable(t) && !holds.some((x) => x.titleId === t.id)) : [];
+  /** A form with reservations only is a reservation slip: no fee, no payment (Design §13.8). */
+  const holdsOnly = copies.length === 0 && holds.length > 0;
   const confirm = async () => {
     setBusy(true);
     setError(null);
     try {
       // The loan fee is taken at the desk before the loans are recorded (FR-LIB-07, FR-LIB-09a).
-      const r = await post<{ totalFeeVnd: number; dueAt: string; loans: unknown[] }>('/api/v1/library/loans/checkout', { customerId: customer!.id, barcodes: copies.map((c) => c.barcode), payment: paymentBody(payment) });
-      setDone({ totalFeeVnd: r.totalFeeVnd, dueAt: r.dueAt, count: r.loans.length });
+      const r = await post<{ totalFeeVnd: number; dueAt: string; loans: unknown[]; holds: { code: string; title: string; position: number }[] }>('/api/v1/library/loans/checkout', {
+        customerId: customer!.id,
+        barcodes: copies.map((c) => c.barcode),
+        holdTitleIds: holds.map((h) => h.titleId),
+        ...(copies.length > 0 && { payment: paymentBody(payment), ...(discount && { discount }) }),
+      });
+      setDone({ totalFeeVnd: r.totalFeeVnd, dueAt: r.dueAt, count: r.loans.length, holds: r.holds });
       void qc.invalidateQueries({ queryKey: ['library-loans'] });
+      void qc.invalidateQueries({ queryKey: ['library-titles'] });
     } catch (e) {
       setError(errText(e));
     } finally {
@@ -479,31 +548,53 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
     }
   };
   if (done) {
+    const heading = done.count > 0 ? 'Đã cho mượn' : 'Đã đặt giữ';
     return (
-      <Dialog title="Đã cho mượn" size="sm" onClose={onClose} footer={<Button variant="primary" onClick={onClose}>Xong</Button>}>
+      <Dialog title={heading} size="sm" onClose={onClose} footer={<Button variant="primary" onClick={onClose}>Xong</Button>}>
         <div className="flex flex-col items-center gap-3 text-center">
           <span className="flex size-16 items-center justify-center rounded-full bg-success-50 text-success-700">
             <CheckCircle2 size={36} aria-hidden />
           </span>
-          <p className="text-lg font-semibold">Đã cho mượn</p>
+          <p className="text-lg font-semibold">{heading}</p>
           {/* Labels left, values right (Design §13.8). */}
-          <dl className="grid w-full grid-cols-[1fr_auto] gap-x-3 gap-y-2 text-left text-sm">
-            <dt className="text-ink-700">Số cuốn</dt>
-            <dd className="text-right font-semibold num">{formatNumber(done.count)}</dd>
-            <dt className="text-ink-700">Hạn trả</dt>
-            <dd className="text-right font-semibold num">{formatDate(done.dueAt)}</dd>
-            <dt className="text-ink-700">Phí mượn</dt>
-            <dd className="text-right font-semibold num">{formatVnd(done.totalFeeVnd)}</dd>
-          </dl>
+          {done.count > 0 && (
+            <dl className="grid w-full grid-cols-[1fr_auto] gap-x-3 gap-y-2 text-left text-sm">
+              <dt className="text-ink-700">Số cuốn</dt>
+              <dd className="text-right font-semibold num">{formatNumber(done.count)}</dd>
+              <dt className="text-ink-700">Hạn trả</dt>
+              <dd className="text-right font-semibold num">{formatDate(done.dueAt)}</dd>
+              <dt className="text-ink-700">Phí mượn</dt>
+              <dd className="text-right font-semibold num">{formatVnd(done.totalFeeVnd)}</dd>
+            </dl>
+          )}
+          {done.holds.length > 0 && (
+            <div className={clsx('flex w-full flex-col gap-2 text-left text-sm', done.count > 0 && 'border-t border-paper-300 pt-3')}>
+              {done.count > 0 && <p className="font-semibold">Đặt giữ</p>}
+              <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-2">
+                {done.holds.map((h) => (
+                  <div key={h.code} className="contents">
+                    <dt className="min-w-0 text-ink-700">
+                      {h.title} <span className="text-ink-500">· {h.code}</span>
+                    </dt>
+                    <dd className="text-right font-semibold whitespace-nowrap num">Thứ {h.position} trong hàng chờ</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          )}
         </div>
       </Dialog>
     );
   }
   const data = b.data;
   const due = data ? dueAfter(new Date(), data.loanDays) : null;
+  // Reservations do not count toward the loan limit (FR-LIB-13).
+  const blocks = data ? data.blocks.filter((k) => copies.length > 0 || k !== 'limit_reached') : [];
+  // Copies held for this borrower, offered first (UC-17 step 3).
+  const heldForMe = (data?.reservations ?? []).filter((r) => r.status === 'held' && r.barcode && !copies.some((c) => c.barcode === r.barcode));
   return (
     <Dialog
-      title="Phiếu mượn sách"
+      title={holdsOnly ? 'Phiếu giữ sách' : 'Phiếu mượn sách'}
       size="lg"
       onClose={onClose}
       footer={
@@ -511,7 +602,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
           <Button variant="secondary" onClick={onClose}>
             Hủy
           </Button>
-          <Button variant="primary" loading={busy} disabled={!data || data.blocks.length > 0 || copies.length === 0 || !paymentReady(payment)} onClick={confirm}>
+          <Button variant="primary" loading={busy} disabled={!data || blocks.length > 0 || copies.length + holds.length === 0 || discountTooHigh || !paymentReady(payment)} onClick={confirm}>
             Xác nhận
           </Button>
         </>
@@ -532,6 +623,21 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
         {/* Every section is shown from the start (Design §13.8). */}
         <section className="flex flex-col gap-2">
             <h3 className="text-[13px] font-semibold text-ink-700">2. Thông tin sách mượn</h3>
+            {heldForMe.length > 0 && (
+              <div className="flex flex-col gap-1 rounded-md border border-olive-100 bg-olive-50 px-3 py-2 text-sm">
+                <p className="font-semibold">Sách đang giữ cho khách</p>
+                {heldForMe.map((r) => (
+                  <div key={r.id} className="flex items-center gap-3">
+                    <span className="min-w-0 flex-1">
+                      {r.title} <span className="text-ink-500">· {r.barcode}</span>
+                    </span>
+                    <Button size="sm" variant="secondary" onClick={() => setCopies((cs) => [...cs, { barcode: r.barcode!, title: r.title, code: r.code }])}>
+                      Lấy sách
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
             <form
               className="flex items-center gap-2"
               onSubmit={(e) => {
@@ -550,7 +656,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
                 <ScanBarcode size={20} aria-hidden />
               </button>
             </form>
-            {suggestions.length > 0 && (
+            {suggestions.length + holdSuggestions.length > 0 && (
               <ul className="max-h-56 divide-y divide-paper-300 overflow-y-auto rounded-md border border-paper-300">
                 {suggestions.map((c) => (
                   <li key={c.id}>
@@ -566,6 +672,21 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
                     </button>
                   </li>
                 ))}
+                {holdSuggestions.map((t) => (
+                  <li key={t.id}>
+                    <button type="button" className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-navy-50" onClick={() => pickHold(t)}>
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-medium">{t.title}</span>
+                        <span className="text-ink-500">
+                          {t.code}
+                          {t.nextDueAt ? ` · có lại ${formatDate(t.nextDueAt)}` : ''}
+                        </span>
+                      </span>
+                      <StatusChip tone="neutral">Hết bản</StatusChip>
+                      <BookmarkCheck size={16} className="text-ink-500" aria-label="Đặt giữ" />
+                    </button>
+                  </li>
+                ))}
               </ul>
             )}
             {camera && (
@@ -577,8 +698,8 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
                 onClose={() => setCamera(false)}
               />
             )}
-            {copies.length === 0 && <p className="text-sm text-ink-500">Chưa có sách nào.</p>}
-            {copies.length > 0 && (
+            {copies.length + holds.length === 0 && <p className="text-sm text-ink-500">Chưa có sách nào.</p>}
+            {copies.length + holds.length > 0 && (
               <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
                 {copies.map((c) => (
                   <li key={c.barcode} className="flex items-start gap-3 px-3 py-2 text-sm">
@@ -587,27 +708,73 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
                       {/* The copy's library code, with its loan fee on the same line (Design §13.8). */}
                       <span className="flex items-baseline justify-between gap-3">
                         <span className="text-ink-500">{c.barcode}</span>
-                        {data ? <Fee fee={data.fee} /> : <span className="text-ink-500">—</span>}
+                        {/* Fee before discount; Ưu đãi is applied in Thanh toán (Design §13.8). */}
+                        {data ? <span className="font-semibold whitespace-nowrap num">{formatVnd(data.fee.listVnd)}</span> : <span className="text-ink-500">—</span>}
                       </span>
                     </span>
                     <Button variant="ghost" size="sm" icon={X} aria-label="Bỏ cuốn này" onClick={() => setCopies((cs) => cs.filter((x) => x.barcode !== c.barcode))} />
+                  </li>
+                ))}
+                {/* Reservation lines: no fee (FR-LIB-13, Design §13.8). */}
+                {holds.map((h) => (
+                  <li key={h.titleId} className="flex items-start gap-3 px-3 py-2 text-sm">
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-semibold">{h.title}</span>
+                      <span className="flex items-center justify-between gap-3">
+                        <span className="text-ink-500">{h.code}</span>
+                        <StatusChip tone="accent" icon={BookmarkCheck}>
+                          Đặt giữ
+                        </StatusChip>
+                      </span>
+                      <span className="block text-ink-500">
+                        {h.nextDueAt ? `Dự kiến có lại ${formatDate(h.nextDueAt)} · ` : ''}thứ {h.queued + 1} trong hàng chờ
+                      </span>
+                    </span>
+                    <Button variant="ghost" size="sm" icon={X} aria-label="Bỏ đặt giữ" onClick={() => setHolds((hs) => hs.filter((x) => x.titleId !== h.titleId))} />
                   </li>
                 ))}
               </ul>
             )}
             {data && copies.length + data.openLoans.length > data.maxLoans && <InlineAlert tone="warning">Khách chỉ được mượn tối đa {data.maxLoans} cuốn cùng lúc.</InlineAlert>}
         </section>
+        {!holdsOnly && (
         <section className="flex flex-col gap-2">
             <h3 className="text-[13px] font-semibold text-ink-700">3. Thanh toán</h3>
             {/* Due date and fee sit with the payment, labels left and values right (Design §13.8). */}
-            <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 rounded-md bg-paper-100 px-3 py-2 text-sm">
+            <div className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-2 rounded-md bg-paper-100 px-3 py-2 text-sm">
               <span>Hạn trả</span>
               <span className="text-right font-semibold num">{due ? formatDate(due) : '—'}</span>
-              <span>Tổng phí</span>
-              <span className="text-right font-semibold num">{data && copies.length ? formatVnd(data.fee.amountVnd * copies.length) : '—'}</span>
+              <span>Số lượng</span>
+              <span className="text-right font-semibold num">{formatNumber(copies.length)}</span>
+              <span>Phí mượn</span>
+              <span className="text-right font-semibold num">{data && copies.length ? formatVnd(listTotal) : '—'}</span>
+              {/* Ưu đãi folds open with an arrow to choose % or ₫ and enter the value (Design §13.8). */}
+              <button
+                type="button"
+                className="col-span-2 -mx-1 flex items-center justify-between gap-3 rounded px-1 py-0.5 text-left hover:bg-paper-200"
+                aria-expanded={discountOpen}
+                onClick={() => setDiscountOpen((o) => !o)}
+              >
+                <span className="inline-flex items-center gap-1">
+                  Ưu đãi
+                  <ChevronDown size={16} className={clsx('text-ink-500 transition-transform', discountOpen && 'rotate-180')} aria-hidden />
+                </span>
+                <span className={clsx('font-semibold num', listTotal > feeTotal && !discountTooHigh ? 'text-success-700' : 'text-ink-500')}>
+                  {data && copies.length > 0 && !discountTooHigh && listTotal > feeTotal ? `−${formatVnd(listTotal - feeTotal)}` : '—'}
+                </span>
+              </button>
+              {discountOpen && (
+                <div className="col-span-2">
+                  <DiscountInput value={discount} disabled={!data} onChange={(d) => data && setManual({ customerId: data.customer.id, d })} />
+                </div>
+              )}
+              <span className="font-semibold">Tổng phí mượn</span>
+              <span className="text-right text-base font-semibold num">{data && copies.length ? formatVnd(feeTotal) : '—'}</span>
             </div>
-            <PaymentFields totalVnd={(data?.fee.amountVnd ?? 0) * copies.length} value={payment} onChange={setPayment} showTotal={false} />
+            {discountTooHigh && <InlineAlert tone="danger">Ưu đãi không được lớn hơn phí mượn.</InlineAlert>}
+            <PaymentFields totalVnd={feeTotal} value={payment} onChange={setPayment} showTotal={false} />
         </section>
+        )}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       </div>
     </Dialog>
@@ -660,49 +827,52 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
       setBusy(false);
     }
   };
-  const next = () => {
-    setResult(null);
-    setBarcode('');
-    setCondition('ok');
-  };
   const owed = result ? result.lateFeeVnd + result.damageVnd : 0;
-  return (
-    <Dialog
-      title="Nhận trả sách"
-      size="sm"
-      onClose={onClose}
-      {...(!result && {
-        footer: (
-          <>
-            <Button variant="secondary" onClick={onClose}>
-              Hủy
-            </Button>
-            <Button variant="primary" loading={busy} disabled={!barcode.trim()} onClick={submit}>
-              Xác nhận
-            </Button>
-          </>
-        ),
-      })}
-    >
-      {result ? (
-        <div className="flex flex-col gap-4">
-          <div className={`flex flex-col gap-1 rounded-lg p-4 ${result.daysLate > 0 || result.damageVnd > 0 ? 'bg-danger-50' : 'bg-success-50'}`}>
-            <p className="font-semibold">{result.title}</p>
-            <p className="code text-sm text-ink-700">{result.barcode}</p>
-            <p className="text-sm">
-              {result.customerName} · hạn trả <span className="num">{formatDate(result.dueAt)}</span>
-            </p>
-            {result.daysLate > 0 ? (
-              <p className="font-semibold text-danger-700 num">
-                Trễ {result.daysLate} ngày – phí trả trễ {formatVnd(result.lateFeeVnd)}
-              </p>
-            ) : (
-              <p className="font-semibold text-success-700">Trả đúng hạn</p>
+  if (result) {
+    // A notice like the borrow success screen; Xác nhận ends the return (Design §13.8).
+    const late = result.daysLate > 0;
+    return (
+      <Dialog
+        title="Nhận trả sách thành công"
+        size="sm"
+        onClose={onClose}
+        footer={
+          <Button variant="primary" onClick={onClose}>
+            Xác nhận
+          </Button>
+        }
+      >
+        <div className="flex flex-col items-center gap-4 text-center">
+          <span className="flex size-16 items-center justify-center rounded-full bg-success-50 text-success-700">
+            <CheckCircle2 size={36} aria-hidden />
+          </span>
+          {/* Labels left, values right. */}
+          <dl className="grid w-full grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-left text-sm">
+            <dt className="text-ink-700">Tên sách</dt>
+            <dd className="text-right font-semibold">{result.title}</dd>
+            <dt className="text-ink-700">Mã thư viện</dt>
+            <dd className="text-right font-semibold">{result.barcode}</dd>
+            <dt className="text-ink-700">Tên khách</dt>
+            <dd className="text-right font-semibold">{result.customerName}</dd>
+            <dt className="text-ink-700">Hạn trả</dt>
+            <dd className="text-right font-semibold num">{formatDate(result.dueAt)}</dd>
+            <dt className="text-ink-700">Tình trạng</dt>
+            <dd className={clsx('text-right font-semibold num', late ? 'text-danger-700' : 'text-success-700')}>{late ? `Trễ ${result.daysLate} ngày` : 'Trả đúng hạn'}</dd>
+            {result.lateFeeVnd > 0 && (
+              <>
+                <dt className="text-ink-700">Phí trả trễ</dt>
+                <dd className="text-right font-semibold text-danger-700 num">{formatVnd(result.lateFeeVnd)}</dd>
+              </>
             )}
-            {result.damageVnd > 0 && <p className="font-semibold text-danger-700 num">Sách hỏng – phí {formatVnd(result.damageVnd)}</p>}
-          </div>
+            {result.damageVnd > 0 && (
+              <>
+                <dt className="text-ink-700">Phí sách hỏng</dt>
+                <dd className="text-right font-semibold text-danger-700 num">{formatVnd(result.damageVnd)}</dd>
+              </>
+            )}
+          </dl>
           {owed > 0 && (
-            <Button variant="primary" full onClick={() => setPayFor(result.customerId)}>
+            <Button variant="secondary" full onClick={() => setPayFor(result.customerId)}>
               Thu phí {formatVnd(owed)}
             </Button>
           )}
@@ -712,11 +882,26 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
               Giữ cho {result.hold.customerName} – gọi <CallLink phone={result.hold.customerPhone} /> (giữ đến {formatDate(result.hold.holdUntil)}).
             </InlineAlert>
           )}
-          <Button variant={owed > 0 ? 'secondary' : 'primary'} full onClick={next}>
-            Nhận cuốn khác
-          </Button>
         </div>
-      ) : (
+      </Dialog>
+    );
+  }
+  return (
+    <Dialog
+      title="Nhận trả sách"
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Hủy
+          </Button>
+          <Button variant="primary" loading={busy} disabled={!barcode.trim()} onClick={submit}>
+            Xác nhận
+          </Button>
+        </>
+      }
+    >
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <div className="flex items-end gap-2">
@@ -780,7 +965,6 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
             />
           )}
         </div>
-      )}
     </Dialog>
   );
 }
@@ -791,23 +975,31 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
 export interface LibraryOverviewData {
   copies: number;
   available: number;
+  /** Cash-book receipts less refunds in the period (FR-LIB-15a). */
+  collectedVnd: number;
+  period: 'day' | 'week' | 'month';
+  from: string;
+  to: string;
   onLoan: number;
   overdue: number;
 }
 
+const COLLECTED_LABEL: Record<LibraryOverviewData['period'], string> = { day: 'Đã thu hôm nay', week: 'Đã thu trong tuần', month: 'Đã thu trong tháng' };
+
 export function LibraryOverview({ data }: { data: LibraryOverviewData | undefined }) {
-  const tile = (label: string, value: number | undefined, to: string, tone?: string) => (
+  const tile = (label: string, value: string | undefined, to: string, tone?: string) => (
     <Link to={to} className="flex flex-col gap-1 rounded-lg border border-paper-300 bg-white p-4 hover:border-navy-700">
       <span className="text-sm text-ink-500">{label}</span>
-      {value === undefined ? <Skeleton className="h-8 w-16" /> : <span className={clsx('text-2xl leading-8 font-semibold num', tone)}>{formatNumber(value)}</span>}
+      {value === undefined ? <Skeleton className="h-8 w-16" /> : <span className={clsx('text-2xl leading-8 font-semibold num', tone)}>{value}</span>}
     </Link>
   );
+  const n = (v: number | undefined) => (v === undefined ? undefined : formatNumber(v));
   return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      {tile('Tổng số bản sách', data?.copies, '/library/catalog')}
-      {tile('Còn trên kệ', data?.available, '/library/catalog?status=available', 'text-success-700')}
-      {tile('Đang mượn', data?.onLoan, '/library')}
-      {tile('Quá hạn', data?.overdue, '/library?tab=overdue', data?.overdue ? 'text-danger-700' : undefined)}
+      {tile('Tổng', n(data?.copies), '/library/catalog')}
+      {tile(COLLECTED_LABEL[data?.period ?? 'week'], data && formatVnd(data.collectedVnd), data ? `/library?tab=all&time=${data.from}..${data.to}` : '/library?tab=all', 'text-success-700')}
+      {tile('Đang mượn', n(data?.onLoan), '/library')}
+      {tile('Quá hạn', n(data?.overdue), '/library?tab=overdue', data?.overdue ? 'text-danger-700' : undefined)}
     </div>
   );
 }
@@ -862,60 +1054,236 @@ function RenewDialog({ loan, fee, onClose, onDone }: { loan: Loan; fee: Borrower
 // Mượn / trả: loan lists with call links (FR-LIB-14, Design §13.8)
 
 
+// =============================================================================================
+// Loan slips (FR-LIB-09a, Design §13.8): one row per check-out receipt
+
+interface SlipCounts {
+  open: number;
+  dueSoon: number;
+  overdue: number;
+  returned: number;
+  all: number;
+  held: number;
+}
+
+interface Slip {
+  id: string;
+  /** The check-out receipt number (PT-…); none for loans from before slips. */
+  docNo: string | null;
+  customerId: string;
+  customerName: string;
+  customerPhone: string | null;
+  copies: number;
+  out: number;
+  amountVnd: number;
+  /** Earliest due date of the copies still out. */
+  dueAt: string | null;
+  overdue: boolean;
+  createdAt: string;
+  receivedBy: string | null;
+}
+
+interface SlipPayment {
+  id: string;
+  docNo: string;
+  kind: 'receipt' | 'refund';
+  method: string;
+  amountVnd: number;
+  reason: string | null;
+  receivedAt: string;
+  receivedBy: string | null;
+  refunded: boolean;
+  items: string | null;
+}
+
+interface SlipDetail extends Slip {
+  loans: Loan[];
+  payments: SlipPayment[];
+  owed: { id: string; kind: string; label: string; barcode: string; amountVnd: number }[];
+}
+
+function SlipDialog({
+  id,
+  onClose,
+  onRenew,
+  onReturn,
+  onLost,
+  onPay,
+  onRefund,
+  canRefund,
+}: {
+  id: string;
+  onClose: () => void;
+  onRenew: (loan: Loan) => void;
+  onReturn: (barcode: string) => void;
+  onLost: (loan: Loan) => void;
+  onPay: (customerId: string) => void;
+  onRefund: (payment: SlipPayment) => void;
+  canRefund: boolean;
+}) {
+  const d = useQuery({ queryKey: ['library-loans', 'slip', id], queryFn: () => get<SlipDetail>(`/api/v1/library/slips/${id}`) });
+  const s = d.data;
+  const owedVnd = s ? s.owed.reduce((a, c) => a + c.amountVnd, 0) : 0;
+  return (
+    <Dialog title={s ? `Phiếu mượn ${s.docNo ?? ''}`.trim() : 'Phiếu mượn'} size="lg" onClose={onClose} footer={<Button variant="secondary" onClick={onClose}>Đóng</Button>}>
+      {d.error ? (
+        <ErrorState error={d.error} onRetry={() => d.refetch()} />
+      ) : !s ? (
+        <Skeleton className="h-48" />
+      ) : (
+        <div className="flex flex-col gap-5 text-sm">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+            <dt className="text-ink-500">Khách</dt>
+            <dd className="flex flex-wrap items-center gap-x-3">
+              <Link to={`/customers/${s.customerId}`} className="font-semibold hover:underline">
+                {s.customerName}
+              </Link>
+              <CallLink phone={s.customerPhone} />
+            </dd>
+            <dt className="text-ink-500">Thời gian tạo</dt>
+            <dd className="num">{formatDateTime(s.createdAt)}</dd>
+            <dt className="text-ink-500">Người thu</dt>
+            <dd>{s.receivedBy ?? '—'}</dd>
+          </dl>
+          <section className="flex flex-col gap-2">
+            <h3 className="text-[13px] font-semibold text-ink-700">Sách mượn</h3>
+            <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
+              {s.loans.map((l) => {
+                const out = !l.returnedAt;
+                return (
+                  <li key={l.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2">
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-semibold">{l.title}</span>
+                      <span className="text-ink-500">
+                        {l.barcode} · hạn trả <span className="num">{formatDate(l.dueAt)}</span>
+                      </span>
+                    </span>
+                    {out ? (
+                      l.overdue ? (
+                        <StatusChip tone="danger" icon={AlertOctagon}>
+                          Quá hạn {l.daysLate} ngày
+                        </StatusChip>
+                      ) : (
+                        <StatusChip tone="info">Đang mượn</StatusChip>
+                      )
+                    ) : l.closedAs === 'lost' ? (
+                      <StatusChip tone="danger">Mất</StatusChip>
+                    ) : (
+                      <StatusChip tone="neutral">Đã trả</StatusChip>
+                    )}
+                    {out && (
+                      <span className="flex gap-1">
+                        <Button size="sm" variant="secondary" disabled={l.renewalsLeft === 0 || l.overdue} onClick={() => onRenew(l)}>
+                          Gia hạn
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => onReturn(l.barcode)}>
+                          Nhận trả
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => onLost(l)}>
+                          Báo mất
+                        </Button>
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+          <section className="flex flex-col gap-2">
+            <h3 className="text-[13px] font-semibold text-ink-700">Thanh toán</h3>
+            <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
+              {s.payments.map((p) => (
+                <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+                  <span className="min-w-0 flex-1">
+                    <span className="block">
+                      <span className="code font-medium">{p.docNo}</span> · {p.kind === 'refund' ? `Hoàn tiền${p.reason ? ` – ${p.reason}` : ''}` : (p.items ?? '—')}
+                    </span>
+                    <span className="text-ink-500">
+                      <span className="num">{formatDateTime(p.receivedAt)}</span> · {PAYMENT_METHOD_LABEL[p.method] ?? p.method} · {p.receivedBy ?? '—'}
+                    </span>
+                  </span>
+                  {p.refunded && <StatusChip tone="neutral">Đã hoàn</StatusChip>}
+                  <span className={clsx('font-semibold num', p.amountVnd < 0 && 'text-danger-700')}>{formatVnd(p.amountVnd)}</span>
+                  {canRefund && p.kind === 'receipt' && p.amountVnd > 0 && !p.refunded && (
+                    <Button size="sm" variant="ghost" onClick={() => onRefund(p)}>
+                      Hoàn tiền
+                    </Button>
+                  )}
+                </li>
+              ))}
+              {s.owed.map((c) => (
+                <li key={c.id} className="flex items-center gap-3 px-3 py-2">
+                  <span className="min-w-0 flex-1">
+                    {c.label} <span className="text-ink-500">· {c.barcode}</span>
+                  </span>
+                  <StatusChip tone="warning">Chưa thu</StatusChip>
+                  <span className="font-semibold num">{formatVnd(c.amountVnd)}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold">Đã thu</span>
+              <span className="text-base font-semibold num">{formatVnd(s.amountVnd)}</span>
+            </div>
+            {owedVnd > 0 && (
+              <Button variant="primary" className="self-end" onClick={() => onPay(s.customerId)}>
+                Thu phí {formatVnd(owedVnd)}
+              </Button>
+            )}
+          </section>
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
 export function LibraryDeskPage() {
   const { data: me } = useMe();
   const qc = useQueryClient();
   const [tab, setTab] = useParam('tab', 'open');
   const [q, setQ] = useParam('q');
-  const [dialog, setDialog] = useState<null | { kind: 'borrow' } | { kind: 'return'; barcode?: string } | { kind: 'renew'; loan: Loan } | { kind: 'lost'; loan: Loan } | { kind: 'unhold'; hold: Hold } | { kind: 'pay'; customerId: string }>(null);
+  const [time, setTime] = useParam('time');
+  const [slipId, setSlipId] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<
+    null | { kind: 'borrow' } | { kind: 'return'; barcode?: string } | { kind: 'renew'; loan: Loan } | { kind: 'lost'; loan: Loan } | { kind: 'unhold'; hold: Hold } | { kind: 'pay'; customerId: string } | { kind: 'refund'; payment: SlipPayment }
+  >(null);
+  const [reason, setReason] = useState('');
+  const days = time ? timeDays(time) : null;
+  // Loan slips, one per check-out receipt (FR-LIB-09a); held copies keep their own list.
   const list = useQuery({
-    queryKey: ['library-loans', tab, q],
-    queryFn: () => get<{ counts: { open: number; dueSoon: number; overdue: number; held: number }; items: Loan[]; holds: Hold[] }>('/api/v1/library/loans', { filter: tab, q: q || undefined }),
+    // Also read on Đang giữ, for the counts in the filter.
+    queryKey: ['library-loans', 'slips', tab === 'held' ? 'open' : tab, q, time],
+    queryFn: () => get<{ counts: SlipCounts; items: Slip[] }>('/api/v1/library/slips', { filter: tab === 'held' ? 'open' : tab, q: q || undefined, from: days?.[0], to: days?.[1] }),
+  });
+  const heldList = useQuery({
+    queryKey: ['library-loans', 'held', q],
+    enabled: tab === 'held',
+    queryFn: () => get<{ holds: Hold[] }>('/api/v1/library/loans', { filter: 'held', q: q || undefined }),
   });
   const counts = list.data?.counts;
   const overview = useQuery({ queryKey: ['library-loans', 'overview'], queryFn: () => get<LibraryOverviewData>('/api/v1/library/overview') });
   const refresh = () => void qc.invalidateQueries({ queryKey: ['library-loans'] });
   const fee = useQuery({ queryKey: ['settings-library-fee'], enabled: dialog?.kind === 'renew', queryFn: () => get<Borrower>(`/api/v1/library/borrowers/${(dialog as { loan: Loan }).loan.customerId}`) });
-  const loanColumns: Column<Loan>[] = [
+  const slipColumns: Column<Slip>[] = [
+    { header: 'Số phiếu', className: 'whitespace-nowrap', cell: (s) => <span className="code font-medium">{s.docNo ?? '—'}</span> },
     {
-      header: 'Người mượn',
-      cell: (l) => (
-        <span className="flex flex-col">
-          <Link to={`/customers/${l.customerId}`} className="font-medium hover:underline" onClick={(e) => e.stopPropagation()}>
-            {l.customerName}
-          </Link>
-          <CallLink phone={l.customerPhone} />
-        </span>
+      header: 'Khách',
+      cell: (s) => (
+        <Link to={`/customers/${s.customerId}`} className="font-medium hover:underline" onClick={(e) => e.stopPropagation()}>
+          {s.customerName}
+        </Link>
       ),
     },
+    { header: 'SĐT', className: 'whitespace-nowrap', cell: (s) => <span onClick={(e) => e.stopPropagation()}><CallLink phone={s.customerPhone} /></span> },
+    { header: 'Số sách', align: 'right', cell: (s) => <span className="num">{formatNumber(s.copies)}</span> },
+    { header: 'Số tiền', align: 'right', cell: (s) => <span className="num">{formatVnd(s.amountVnd)}</span> },
     {
-      header: 'Sách',
-      cell: (l) => (
-        <span className="flex flex-col">
-          <span className="line-clamp-2 font-medium">{l.title}</span>
-          <span className="code text-[13px] text-ink-500">{l.barcode}</span>
-        </span>
-      ),
-    },
-    { header: 'Hạn trả', cell: (l) => <DueCell loan={l} /> },
-    { header: 'Phí trễ', align: 'right', cell: (l) => (l.lateFeeVnd ? <span className="text-danger-700">{formatVnd(l.lateFeeVnd)}</span> : '—') },
-    {
-      header: '',
+      header: 'Hạn trả',
       className: 'whitespace-nowrap',
-      cell: (l) => (
-        <span className="flex justify-end gap-1">
-          <Button size="sm" variant="secondary" disabled={l.renewalsLeft === 0 || l.overdue} onClick={() => setDialog({ kind: 'renew', loan: l })}>
-            Gia hạn
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => setDialog({ kind: 'return', barcode: l.barcode })}>
-            Nhận trả
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => setDialog({ kind: 'lost', loan: l })}>
-            Báo mất
-          </Button>
-        </span>
-      ),
+      cell: (s) => (s.dueAt ? <span className={clsx('num', s.overdue && 'font-semibold text-danger-700')}>{formatDate(s.dueAt)}</span> : <span className="text-ink-500">Đã trả hết</span>),
     },
+    { header: 'Thời gian tạo', className: 'whitespace-nowrap', cell: (s) => <span className="num">{formatDateTime(s.createdAt)}</span> },
+    { header: 'Người thu', cell: (s) => s.receivedBy ?? '—' },
   ];
   const holdColumns: Column<Hold>[] = [
     {
@@ -960,18 +1328,19 @@ export function LibraryDeskPage() {
                 Nhận trả
               </Button>
               <Button variant="primary" icon={Plus} onClick={() => setDialog({ kind: 'borrow' })}>
-                Cho mượn
+                Phiếu mượn
               </Button>
             </>
           )
         }
       />
-      <div className="mb-4">
+      {/* One card like the dashboard's (Design §12.5, §13.8). */}
+      <Card title="Tổng quan thư viện" className="mb-4">
         <LibraryOverview data={overview.data} />
-      </div>
-      {/* Lists as a filter beside the search box, not tabs (Design §13.8). */}
+      </Card>
+      {/* Loan slips with a filter beside the search box, not tabs (Design §13.8). */}
       <div className="mb-4 flex items-center gap-2">
-        <SearchBox value={q} onChange={setQ} placeholder="Tìm tên, SĐT khách hoặc tên sách, mã bản…" />
+        <SearchBox value={q} onChange={setQ} placeholder="Tìm số phiếu, tên, SĐT khách hoặc tên sách, mã bản…" />
         <FilterMenu
           groups={[
             {
@@ -980,27 +1349,63 @@ export function LibraryDeskPage() {
               options: [
                 { key: 'due_soon', label: `Sắp đến hạn${counts ? ` (${counts.dueSoon})` : ''}` },
                 { key: 'overdue', label: `Quá hạn${counts ? ` (${counts.overdue})` : ''}` },
+                { key: 'returned', label: `Đã trả hết${counts ? ` (${counts.returned})` : ''}` },
+                { key: 'all', label: `Tất cả${counts ? ` (${counts.all})` : ''}` },
                 { key: 'held', label: `Đang giữ${counts ? ` (${counts.held})` : ''}` },
               ],
-              // No choice (“Tất cả”) lists every open loan; clearing the filter returns to it.
+              // No choice lists slips with a copy still out (“Đang mượn”); clearing the filter returns to it.
               value: tab === 'open' ? '' : tab,
               onChange: (v) => setTab(v || 'open'),
             },
+            { kind: 'custom', label: 'Thời gian', summary: timeLabel(time), active: !!time, onClear: () => setTime(''), content: <TimeFilter value={time} onChange={setTime} /> },
           ]}
         />
       </div>
       {tab === 'held' ? (
-        <DataTable columns={holdColumns} rows={list.data?.holds} rowKey={(h) => h.id} error={list.error} onRetry={() => list.refetch()} empty={{ icon: BookmarkCheck, title: 'Không có sách đang giữ cho khách' }} />
+        <DataTable columns={holdColumns} rows={heldList.data?.holds} rowKey={(h) => h.id} error={heldList.error} onRetry={() => heldList.refetch()} empty={{ icon: BookmarkCheck, title: 'Không có sách đang giữ cho khách' }} />
       ) : (
         <DataTable
-          columns={loanColumns}
+          columns={slipColumns}
           rows={list.data?.items}
-          rowKey={(l) => l.id}
+          rowKey={(s) => s.id}
+          onRow={(s) => setSlipId(s.id)}
           error={list.error}
           onRetry={() => list.refetch()}
-          minWidth={860}
-          empty={q ? { icon: Search, title: 'Không có lượt mượn phù hợp', help: 'Thử đổi từ khóa.' } : { icon: Library, title: tab === 'overdue' ? 'Không có sách quá hạn' : tab === 'due_soon' ? 'Không có sách sắp đến hạn' : 'Chưa có sách nào đang được mượn' }}
+          minWidth={960}
+          empty={
+            q || time
+              ? { icon: Search, title: 'Không có phiếu mượn phù hợp', help: 'Thử đổi từ khóa hoặc bộ lọc.' }
+              : { icon: Library, title: tab === 'overdue' ? 'Không có phiếu quá hạn' : tab === 'due_soon' ? 'Không có phiếu sắp đến hạn' : tab === 'returned' ? 'Chưa có phiếu nào trả hết' : 'Chưa có sách nào đang được mượn' }
+          }
         />
+      )}
+      {slipId && (
+        <SlipDialog
+          id={slipId}
+          onClose={() => setSlipId(null)}
+          onRenew={(loan) => setDialog({ kind: 'renew', loan })}
+          onReturn={(barcode) => setDialog({ kind: 'return', barcode })}
+          onLost={(loan) => setDialog({ kind: 'lost', loan })}
+          onPay={(customerId) => setDialog({ kind: 'pay', customerId })}
+          onRefund={(payment) => setDialog({ kind: 'refund', payment })}
+          canRefund={can(me, 'library.fine_waive')}
+        />
+      )}
+      {dialog?.kind === 'refund' && (
+        <ConfirmDialog
+          title={`Hoàn phiếu ${dialog.payment.docNo} – ${formatVnd(dialog.payment.amountVnd)}?`}
+          body="Trả lại tiền cho khách; các khoản của phiếu này chuyển về chưa thu."
+          confirm="Hoàn tiền"
+          destructive
+          onConfirm={async () => {
+            await post(`/api/v1/library/payments/${dialog.payment.id}/refund`, { reason });
+            setReason('');
+            refresh();
+          }}
+          onClose={() => setDialog(null)}
+        >
+          <TextArea label="Lý do" required value={reason} onChange={(e) => setReason(e.target.value)} />
+        </ConfirmDialog>
       )}
       {dialog?.kind === 'borrow' && <BorrowDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === 'return' && <ReturnDialog {...(dialog.barcode && { initialBarcode: dialog.barcode })} onClose={() => setDialog(null)} />}

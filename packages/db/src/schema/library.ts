@@ -1,6 +1,6 @@
 import { LIB_ACQUIRED_VIA, LIB_CHARGE_KINDS, LIB_CHARGE_STATUSES, LIB_COPY_STATUSES, LIB_LANGUAGES, LIB_PAYMENT_KINDS, LIB_PAYMENT_METHODS, LIB_RESERVATION_STATUSES, LOAN_CLOSED_AS, STOCK_COUNT, statesOf } from '@bookstore/domain';
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, integer, jsonb, pgSchema, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { type AnyPgColumn, boolean, check, index, integer, jsonb, pgSchema, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { customer } from './crm.js';
 import { appUser } from './platform.js';
 import { sale } from './sales.js';
@@ -88,8 +88,11 @@ export const loan = library.table(
     returnCondition: text(),
     createdBy: uuid().references(() => appUser.id),
     closedBy: uuid().references(() => appUser.id),
+    /** The check-out receipt; its number is the loan slip number (FR-LIB-09a). */
+    slipId: uuid().references((): AnyPgColumn => libPayment.id),
   },
   (t) => [
+    index('loan_slip_idx').on(t.slipId),
     // One open loan per copy (TDD §4.8): the final arbiter of two check-outs of one copy.
     uniqueIndex('loan_open_copy_uq').on(t.copyId).where(sql`${t.returnedAt} is null`),
     index('loan_customer_idx').on(t.customerId, t.returnedAt),
@@ -161,7 +164,8 @@ export const libPayment = library.table(
     uniqueIndex('lib_payment_refund_uq').on(t.refundOf).where(sql`${t.refundOf} is not null`),
     check('lib_payment_kind_ck', inList(t.kind, LIB_PAYMENT_KINDS)),
     check('lib_payment_method_ck', inList(t.method, LIB_PAYMENT_METHODS)),
-    check('lib_payment_sign_ck', sql`(${t.kind} = 'receipt') = (${t.amountVnd} > 0)`),
+    // A free loan's slip is a 0 VND receipt (FR-LIB-09a).
+    check('lib_payment_sign_ck', sql`(${t.kind} = 'receipt') = (${t.amountVnd} >= 0)`),
   ],
 );
 

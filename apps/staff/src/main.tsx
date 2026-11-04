@@ -20,7 +20,6 @@ import { CountDetailPage, CountsPage } from './pages/counts';
 import { CustomerDetailPage, CustomersPage } from './pages/customers';
 import { LibraryCatalogPage, LibraryDeskPage, LibraryReportPage, LibraryTitlePage } from './pages/library';
 import { LibraryCountDetailPage, LibraryCountsPage } from './pages/libraryCounts';
-import { LibraryPaymentsPage } from './pages/libraryPayments';
 import { CodPage } from './pages/holds';
 import { OrderDetailPage, OrderNewPage, OrdersPage } from './pages/orders';
 import { ProductDetailPage } from './pages/productDetail';
@@ -104,7 +103,8 @@ const BUILT: Record<string, ReactNode> = {
   '/library': <LibraryDeskPage />,
   '/library/catalog': <LibraryCatalogPage />,
   '/library/counts': <LibraryCountsPage />,
-  '/library/payments': <LibraryPaymentsPage />,
+  // The cash book is part of Mượn / trả now (FR-LIB-09a).
+  '/library/payments': <Navigate to="/library?tab=all" replace />,
   '/reports/library': <LibraryReportPage />,
   '/settings': <SettingsPage />,
   '/import': <ImportPage />,

@@ -11,6 +11,7 @@ import {
   LIB_LANGUAGES,
   LIB_PAYMENT_METHODS,
   loanFee,
+  discountedLoanFees,
   nextLibraryCode,
   normalizeIsbn,
   normalizeLibraryCode,
@@ -176,6 +177,9 @@ export async function listTitles(ctx: Ctx, input: z.input<typeof TitlesQuery>) {
       copies: sql<number>`(select count(*)::int from library.lib_copy c where c.title_id = library.lib_title.id)`,
       available: sql<number>`(select count(*)::int from library.lib_copy c where c.title_id = library.lib_title.id and c.status = 'available')`,
       queued: sql<number>`(select count(*)::int from library.lib_reservation r where r.title_id = library.lib_title.id and r.status = 'queued')`,
+      onLoan: sql<number>`(select count(*)::int from library.lib_copy c where c.title_id = library.lib_title.id and c.status = 'on_loan')`,
+      // Earliest due date of an open loan: when a reserved title should be back (FR-LIB-13).
+      nextDueAt: sql<string | null>`(select min(l.due_at) from library.loan l join library.lib_copy c on c.id = l.copy_id where c.title_id = library.lib_title.id and l.returned_at is null)`,
     })
     .from(t)
     .where(where.length ? and(...where) : undefined)
@@ -539,7 +543,8 @@ export const PaymentSchema = z.object({
 
 /** One receipt for the given unpaid charges of one borrower; they become paid. */
 async function collect(tx: Tx, ctx: Ctx, customerId: string, chargeIds: string[], payment: z.infer<typeof PaymentSchema>) {
-  const rows = await tx.select().from(schema.libCharge).where(inArray(schema.libCharge.id, chargeIds)).for('update');
+  // No charges: the 0 VND receipt of a free loan, which is still the loan slip (FR-LIB-09a).
+  const rows = chargeIds.length ? await tx.select().from(schema.libCharge).where(inArray(schema.libCharge.id, chargeIds)).for('update') : [];
   if (rows.length !== new Set(chargeIds).size) throw errors.notFound('Khoản thu thư viện');
   for (const r of rows) {
     if (r.customerId !== customerId) throw new AppError(422, 'charge_customer', 'Khoản thu là của khách khác.');
@@ -552,7 +557,7 @@ async function collect(tx: Tx, ctx: Ctx, customerId: string, chargeIds: string[]
     .insert(schema.libPayment)
     .values({ docNo, kind: 'receipt', customerId, method: payment.method, amountVnd, ref: payment.ref ?? null, receivedBy: ctx.actor!.userId, receivedAt: now })
     .returning({ id: schema.libPayment.id });
-  await tx.update(schema.libCharge).set({ status: 'paid', paymentId: p!.id, paidAt: now }).where(inArray(schema.libCharge.id, chargeIds));
+  if (chargeIds.length) await tx.update(schema.libCharge).set({ status: 'paid', paymentId: p!.id, paidAt: now }).where(inArray(schema.libCharge.id, chargeIds));
   await audit.record(tx, ctx, { action: 'library.payment', entity: 'lib_payment', entityId: p!.id, after: { docNo, method: payment.method, amountVnd, chargeIds } });
   return { id: p!.id, docNo, amountVnd, method: payment.method };
 }
@@ -580,6 +585,7 @@ export async function refundPayment(ctx: Ctx, paymentId: string, input: z.input<
     const [p] = await tx.select().from(schema.libPayment).where(eq(schema.libPayment.id, paymentId)).for('update');
     if (!p) throw errors.notFound('Phiếu thu');
     if (p.kind !== 'receipt') throw errors.conflict('not_a_receipt', 'Chỉ hoàn được phiếu thu.');
+    if (p.amountVnd === 0) throw errors.conflict('nothing_to_refund', `Phiếu ${p.docNo} là 0 ₫, không có gì để hoàn.`);
     const [done] = await tx.select({ id: schema.libPayment.id }).from(schema.libPayment).where(eq(schema.libPayment.refundOf, p.id));
     if (done) throw errors.conflict('already_refunded', `Phiếu ${p.docNo} đã được hoàn trước đó.`);
     const now = ctx.clock.now();
@@ -659,16 +665,30 @@ export async function listPayments(ctx: Ctx, input: z.input<typeof PaymentsQuery
 // =============================================================================================
 // Check-out, check-in, renewal, loss (FR-LIB-07, 08, 11, 12)
 
-export const CheckoutSchema = z.object({
-  customerId: z.uuid(),
-  /** Loan fees are taken at the desk before the loans are recorded (FR-LIB-07, FR-LIB-09a). */
-  payment: PaymentSchema,
-  barcodes: z
-    .array(z.string().trim().min(1).max(40))
-    .min(1, 'Hãy quét ít nhất một cuốn.')
-    .max(20)
-    .refine((b) => new Set(b.map((x) => x.toUpperCase())).size === b.length, 'Mỗi cuốn chỉ quét một lần.'),
-});
+export const CheckoutSchema = z
+  .object({
+    customerId: z.uuid(),
+    /** Loan fees are taken at the desk before the loans are recorded (FR-LIB-07, FR-LIB-09a); not needed for reservations only. */
+    payment: PaymentSchema.optional(),
+    /** Entered by hand; replaces the automatic buyer discount (FR-LIB-18). */
+    discount: z
+      .object({ kind: z.enum(['pct', 'vnd']), value: z.number().int().min(0) })
+      .refine((d) => d.kind !== 'pct' || d.value <= 100, { message: 'Ưu đãi tối đa 100%.' })
+      .optional(),
+    barcodes: z
+      .array(z.string().trim().min(1).max(40))
+      .max(20)
+      .default([])
+      .refine((b) => new Set(b.map((x) => x.toUpperCase())).size === b.length, 'Mỗi cuốn chỉ quét một lần.'),
+    /** Titles with no copy on the shelf, reserved on the same form (FR-LIB-13). */
+    holdTitleIds: z
+      .array(z.uuid())
+      .max(20)
+      .default([])
+      .refine((t) => new Set(t).size === t.length, 'Mỗi đầu sách chỉ đặt giữ một lần.'),
+  })
+  .refine((d) => d.barcodes.length + d.holdTitleIds.length > 0, { message: 'Hãy thêm ít nhất một cuốn.', path: ['barcodes'] })
+  .refine((d) => d.barcodes.length === 0 || !!d.payment, { message: 'Chọn phương thức thanh toán.', path: ['payment'] });
 
 async function raiseCharge(tx: Tx, ctx: Ctx, v: { customerId: string; loanId: string | null; kind: 'loan_fee' | 'late_fee' | 'lost' | 'damage'; listVnd: number; discountPct?: number; amountVnd: number }) {
   if (v.amountVnd <= 0) return null;
@@ -689,7 +709,8 @@ export async function checkout(ctx: Ctx, input: z.input<typeof CheckoutSchema>) 
     const [cust] = await tx.select({ id: schema.customer.id, name: schema.customer.name }).from(schema.customer).where(eq(schema.customer.id, data.customerId)).for('update');
     if (!cust) throw errors.notFound('Khách hàng');
     const state = await borrowerState(tx, cust.id, now);
-    const blocks = borrowBlocks(state, r['library.max_loans'], data.barcodes.length);
+    // Reservations do not count toward the loan limit; it is checked when the copy is collected (FR-LIB-13).
+    const blocks = borrowBlocks(state, r['library.max_loans'], data.barcodes.length).filter((b) => data.barcodes.length > 0 || b !== 'limit_reached');
     if (blocks.length) {
       throw new AppError(422, 'borrow_blocked', blocks.map((b) => BORROW_BLOCK_TEXT[b]).join(' '), { blocks, ...state, maxLoans: r['library.max_loans'] });
     }
@@ -704,6 +725,10 @@ export async function checkout(ctx: Ctx, input: z.input<typeof CheckoutSchema>) 
     const titleOf = new Map(titles.map((t) => [t.id, t]));
     const byBarcode = new Map(locked.map((c) => [c.barcode.toUpperCase(), { c, title: titleOf.get(c.titleId)!.title, code: titleOf.get(c.titleId)!.code }]));
     const fee = loanFee(await lifetimeSpend(tx, cust.id), feeRules(r));
+    if (data.discount?.kind === 'vnd' && data.discount.value > fee.listVnd * data.barcodes.length) {
+      throw new AppError(422, 'discount_too_high', 'Ưu đãi không được lớn hơn phí mượn.');
+    }
+    const manual = data.discount ? discountedLoanFees(fee.listVnd, data.barcodes.length, data.discount) : null;
     const dueAt = dueAfter(now, r['library.loan_days']);
     const out = [];
     const feeIds: string[] = [];
@@ -724,13 +749,20 @@ export async function checkout(ctx: Ctx, input: z.input<typeof CheckoutSchema>) 
       const [loan] = await tx.insert(schema.loan).values({ copyId: c.id, customerId: cust.id, loanedAt: now, dueAt, createdBy: actor.userId }).returning({ id: schema.loan.id });
       await tx.update(schema.libCopy).set({ status: 'on_loan', updatedAt: now }).where(eq(schema.libCopy.id, c.id));
       if (hold) await tx.update(schema.libReservation).set({ status: 'collected' }).where(eq(schema.libReservation.id, hold.id));
-      const ch = await raiseCharge(tx, ctx, { customerId: cust.id, loanId: loan!.id, kind: 'loan_fee', ...fee });
+      const i: number = out.length;
+      const copyFee: { listVnd: number; discountPct: number; amountVnd: number } = manual ? { listVnd: fee.listVnd, discountPct: manual.discountPcts[i]!, amountVnd: manual.amounts[i]! } : fee;
+      const ch = await raiseCharge(tx, ctx, { customerId: cust.id, loanId: loan!.id, kind: 'loan_fee', ...copyFee });
       if (ch) feeIds.push(ch.id);
-      out.push({ loanId: loan!.id, barcode: c.barcode, code: x.code, title: x.title, dueAt, feeVnd: fee.amountVnd, listFeeVnd: fee.listVnd });
+      out.push({ loanId: loan!.id, barcode: c.barcode, code: x.code, title: x.title, dueAt, feeVnd: copyFee.amountVnd, listFeeVnd: fee.listVnd });
     }
-    const receipt = feeIds.length ? await collect(tx, ctx, cust.id, feeIds, data.payment) : null;
-    await audit.record(tx, ctx, { action: 'library.checkout', entity: 'customer', entityId: cust.id, after: { barcodes: out.map((o) => o.barcode), dueAt, feeVnd: fee.amountVnd, receipt: receipt?.docNo } });
-    return { customerId: cust.id, customerName: cust.name, dueAt, discountPct: fee.discountPct, loans: out, totalFeeVnd: out.reduce((a, o) => a + o.feeVnd, 0), receiptNo: receipt?.docNo ?? null };
+    // Every check-out issues a receipt, 0 VND for a free loan; its number is the loan slip (FR-LIB-09a).
+    const receipt = out.length ? await collect(tx, ctx, cust.id, feeIds, data.payment ?? { method: 'cash' }) : null;
+    if (receipt) await tx.update(schema.loan).set({ slipId: receipt.id }).where(inArray(schema.loan.id, out.map((o) => o.loanId)));
+    // Titles with no copy on the shelf are reserved on the same form (FR-LIB-13, UC-17 3b).
+    const holds = [];
+    for (const titleId of data.holdTitleIds) holds.push(await reserveTx(tx, ctx, actor.userId, titleId, cust.id));
+    await audit.record(tx, ctx, { action: 'library.checkout', entity: 'customer', entityId: cust.id, after: { barcodes: out.map((o) => o.barcode), holds: holds.map((h) => h.code), dueAt, feeVnd: fee.amountVnd, discount: data.discount ?? null, receipt: receipt?.docNo } });
+    return { customerId: cust.id, customerName: cust.name, dueAt, discountPct: fee.discountPct, loans: out, holds, totalFeeVnd: out.reduce((a, o) => a + o.feeVnd, 0), receiptNo: receipt?.docNo ?? null };
   });
 }
 
@@ -936,7 +968,21 @@ export async function reserve(ctx: Ctx, input: z.input<typeof ReserveSchema>) {
   const actor = requirePermission(ctx, 'library.lend');
   const data = ReserveSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
-    const [t] = await tx.select({ id: schema.libTitle.id, title: schema.libTitle.title }).from(schema.libTitle).where(eq(schema.libTitle.id, data.titleId)).for('update');
+    const [cust] = await tx.select({ id: schema.customer.id }).from(schema.customer).where(eq(schema.customer.id, data.customerId)).for('update');
+    if (!cust) throw errors.notFound('Khách hàng');
+    // Borrowers with overdue loans or unpaid charges cannot reserve (FR-LIB-13).
+    const blocks = borrowBlocks(await borrowerState(tx, cust.id, ctx.clock.now()), Number.MAX_SAFE_INTEGER, 0);
+    if (blocks.length) throw new AppError(422, 'borrow_blocked', blocks.map((b) => BORROW_BLOCK_TEXT[b]).join(' '), { blocks });
+    const h = await reserveTx(tx, ctx, actor.userId, data.titleId, cust.id);
+    return { id: h.id, status: 'queued', position: h.position };
+  });
+}
+
+/** Queue one reservation of a title with no copy on the shelf; the caller has checked the borrower. */
+async function reserveTx(tx: Tx, ctx: Ctx, userId: string, titleId: string, customerId: string) {
+  const data = { titleId, customerId };
+  {
+    const [t] = await tx.select({ id: schema.libTitle.id, title: schema.libTitle.title, code: schema.libTitle.code }).from(schema.libTitle).where(eq(schema.libTitle.id, data.titleId)).for('update');
     if (!t) throw errors.notFound('Đầu sách');
     const [avail] = await tx.execute<{ n: number }>(sql`select count(*)::int as n from library.lib_copy where title_id = ${t.id}::uuid and status = 'available'`);
     if (avail!.n > 0) throw errors.conflict('title_available', `“${t.title}” đang có bản trên kệ, cho mượn luôn thay vì đặt giữ.`);
@@ -949,11 +995,12 @@ export async function reserve(ctx: Ctx, input: z.input<typeof ReserveSchema>) {
     if (dup) throw errors.conflict('already_reserved', 'Khách đã đặt giữ cuốn này.');
     const [row] = await tx
       .insert(schema.libReservation)
-      .values({ titleId: t.id, customerId: data.customerId, queuedAt: ctx.clock.now(), createdBy: actor.userId })
+      .values({ titleId: t.id, customerId: data.customerId, queuedAt: ctx.clock.now(), createdBy: userId })
       .returning({ id: schema.libReservation.id });
     await audit.record(tx, ctx, { action: 'library.reserve', entity: 'lib_reservation', entityId: row!.id, after: data });
-    return { id: row!.id, status: 'queued' };
-  });
+    const [pos] = await tx.execute<{ n: number }>(sql`select count(*)::int as n from library.lib_reservation where title_id = ${t.id}::uuid and status = 'queued'`);
+    return { id: row!.id, titleId: t.id, title: t.title, code: t.code, position: pos!.n };
+  }
 }
 
 export async function cancelReservation(ctx: Ctx, id: string) {
@@ -985,6 +1032,155 @@ export async function expireHolds(ctx: Ctx): Promise<number> {
 
 // =============================================================================================
 // Loan lists and the morning reminder (FR-LIB-14)
+
+// =============================================================================================
+// Loan slips (FR-LIB-09a): one row per check-out receipt, with its copies and every charge paid for them
+
+export const SlipsQuery = z.object({
+  filter: z.enum(['open', 'due_soon', 'overdue', 'returned', 'all']).default('open'),
+  q: z.string().trim().max(100).optional(),
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+});
+
+/** Slips: loans grouped by slip; loans from before slips without a receipt are slips of their own. */
+const SLIPS = sql`
+  with s as (
+    select coalesce(l.slip_id, l.id) as id, l.slip_id, l.customer_id,
+           count(*)::int as copies,
+           count(*) filter (where l.returned_at is null)::int as out,
+           min(l.due_at) filter (where l.returned_at is null) as due_at,
+           min(l.loaned_at) as loaned_at,
+           (array_agg(l.created_by))[1] as created_by
+    from library.loan l group by coalesce(l.slip_id, l.id), l.slip_id, l.customer_id
+  )
+  select s.id, s.slip_id, s.customer_id, s.copies, s.out, s.due_at, p.doc_no,
+         coalesce(p.received_at, s.loaned_at) as created_at,
+         coalesce(u.display_name, u2.display_name) as received_by,
+         cu.name as customer_name, cu.phone_e164 as customer_phone, cu.search_text,
+         (select coalesce(sum(ch.amount_vnd), 0) from library.lib_charge ch join library.loan l2 on l2.id = ch.loan_id
+           where ch.status = 'paid' and coalesce(l2.slip_id, l2.id) = s.id) as amount_vnd
+  from s
+  join crm.customer cu on cu.id = s.customer_id
+  left join library.lib_payment p on p.id = s.slip_id
+  left join platform.app_user u on u.id = p.received_by
+  left join platform.app_user u2 on u2.id = s.created_by`;
+
+type SlipRow = {
+  id: string;
+  slip_id: string | null;
+  customer_id: string;
+  copies: number;
+  out: number;
+  due_at: Date | string | null;
+  doc_no: string | null;
+  created_at: Date | string;
+  received_by: string | null;
+  customer_name: string;
+  customer_phone: string | null;
+  amount_vnd: string;
+};
+
+const slipView = (s: SlipRow, now: Date) => {
+  const dueAt = s.due_at ? asDate(s.due_at) : null;
+  return {
+    id: s.id,
+    docNo: s.doc_no,
+    customerId: s.customer_id,
+    customerName: s.customer_name,
+    customerPhone: s.customer_phone,
+    copies: s.copies,
+    out: s.out,
+    amountVnd: Number(s.amount_vnd),
+    dueAt,
+    overdue: !!dueAt && isOverdue(dueAt, now),
+    createdAt: asDate(s.created_at),
+    receivedBy: s.received_by,
+  };
+};
+
+export async function listSlips(ctx: Ctx, input: z.input<typeof SlipsQuery>) {
+  requirePermission(ctx, 'library.lend');
+  const q = SlipsQuery.parse(input);
+  const now = ctx.clock.now();
+  const r = await rules(ctx, ctx.db);
+  const soon = dueAfter(now, r['library.remind_days']);
+  const where: SQL[] = [];
+  if (q.filter === 'open') where.push(sql`out > 0`);
+  if (q.filter === 'returned') where.push(sql`out = 0`);
+  if (q.filter === 'overdue') where.push(sql`due_at < ${tsParam(now)}`);
+  if (q.filter === 'due_soon') where.push(sql`due_at >= ${tsParam(now)} and due_at <= ${tsParam(soon)}`);
+  if (q.from) where.push(sql`created_at >= ${tsParam(new Date(`${q.from}T00:00:00+07:00`))}`);
+  if (q.to) where.push(sql`created_at < ${tsParam(new Date(new Date(`${q.to}T00:00:00+07:00`).getTime() + 86_400_000))}`);
+  if (q.q) {
+    const folded = foldText(q.q);
+    const digits = q.q.replace(/\D/g, '');
+    where.push(sql`(upper(coalesce(doc_no, '')) like ${`%${q.q.toUpperCase()}%`} or search_text like ${`%${folded}%`}
+      ${digits.length >= 4 ? sql`or customer_phone like ${`%${digits.slice(-9)}%`}` : sql``}
+      or exists (select 1 from library.loan l join library.lib_copy c on c.id = l.copy_id join library.lib_title t on t.id = c.title_id
+                 where coalesce(l.slip_id, l.id) = x.id and (t.search_text like ${`%${folded}%`} or upper(c.barcode) = upper(${q.q}))))`);
+  }
+  const rows = await ctx.db.execute<SlipRow>(sql`select * from (${SLIPS}) x ${where.length ? sql`where ${sql.join(where, sql` and `)}` : sql``} order by created_at desc, doc_no desc nulls last limit 300`);
+  const [c] = await ctx.db.execute<{ open: number; due_soon: number; overdue: number; returned: number; all: number }>(sql`
+    select count(*) filter (where out > 0)::int as open,
+           count(*) filter (where due_at >= ${tsParam(now)} and due_at <= ${tsParam(soon)})::int as due_soon,
+           count(*) filter (where due_at < ${tsParam(now)})::int as overdue,
+           count(*) filter (where out = 0)::int as returned,
+           count(*)::int as all
+    from (${SLIPS}) x`);
+  const [held] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from library.lib_reservation where status = 'held'`);
+  return { counts: { open: c!.open, dueSoon: c!.due_soon, overdue: c!.overdue, returned: c!.returned, all: c!.all, held: held!.n }, items: rows.map((s) => slipView(s, now)) };
+}
+
+/** One slip: its copies, the receipts and refunds for them, and what is still owed (FR-LIB-09a). */
+export async function getSlip(ctx: Ctx, id: string) {
+  requirePermission(ctx, 'library.lend');
+  const now = ctx.clock.now();
+  const r = await rules(ctx, ctx.db);
+  const [s] = await ctx.db.execute<SlipRow>(sql`select * from (${SLIPS}) x where id = ${id}::uuid`);
+  if (!s) throw errors.notFound('Phiếu mượn');
+  const loans = await ctx.db.execute<LoanRow>(sql`
+    select ${LOAN_ROW} from library.loan l
+    join library.lib_copy c on c.id = l.copy_id join library.lib_title t on t.id = c.title_id join crm.customer cu on cu.id = l.customer_id
+    where coalesce(l.slip_id, l.id) = ${id}::uuid order by l.loaned_at, c.barcode`);
+  const charges = await ctx.db.execute<{ id: string; kind: string; amount_vnd: number; status: string; payment_id: string | null; barcode: string }>(sql`
+    select ch.id, ch.kind, ch.amount_vnd, ch.status, ch.payment_id, c.barcode from library.lib_charge ch
+    join library.loan l on l.id = ch.loan_id join library.lib_copy c on c.id = l.copy_id
+    where coalesce(l.slip_id, l.id) = ${id}::uuid order by ch.created_at`);
+  const paidBy = [...new Set(charges.map((c) => c.payment_id).filter((x): x is string => !!x)), ...(s.slip_id ? [s.slip_id] : [])];
+  const payments = paidBy.length
+    ? await ctx.db.execute<{ id: string; doc_no: string; kind: string; method: string; amount_vnd: string; reason: string | null; received_at: Date | string; received_by: string | null; refund_of: string | null; refunded: boolean }>(sql`
+        select p.id, p.doc_no, p.kind, p.method, p.amount_vnd, p.reason, p.received_at, u.display_name as received_by, p.refund_of,
+               exists (select 1 from library.lib_payment x where x.refund_of = p.id) as refunded
+        from library.lib_payment p left join platform.app_user u on u.id = p.received_by
+        where p.id in (${sql.join(paidBy.map((x) => sql`${x}::uuid`), sql`, `)}) or p.refund_of in (${sql.join(paidBy.map((x) => sql`${x}::uuid`), sql`, `)})
+        order by p.received_at, p.doc_no`)
+    : [];
+  const itemsOf = (paymentId: string) => {
+    const mine = charges.filter((c) => c.payment_id === paymentId);
+    if (!mine.length) return paymentId === s.slip_id ? 'Phiếu mượn' : null;
+    const byKind = new Map<string, number>();
+    for (const c of mine) byKind.set(c.kind, (byKind.get(c.kind) ?? 0) + 1);
+    return [...byKind].map(([k, n]) => `${CHARGE_TEXT[k] ?? k}${n > 1 ? ` ×${n}` : ''}`).join(', ');
+  };
+  return {
+    ...slipView(s, now),
+    loans: loans.map((l) => loanView(l, now, r)),
+    payments: payments.map((p) => ({
+      id: p.id,
+      docNo: p.doc_no,
+      kind: p.kind,
+      method: p.method,
+      amountVnd: Number(p.amount_vnd),
+      reason: p.reason,
+      receivedAt: asDate(p.received_at),
+      receivedBy: p.received_by,
+      refunded: p.refunded,
+      items: p.kind === 'refund' ? null : itemsOf(p.id),
+    })),
+    owed: charges.filter((c) => c.status === 'unpaid').map((c) => ({ id: c.id, kind: c.kind, label: CHARGE_TEXT[c.kind] ?? c.kind, barcode: c.barcode, amountVnd: Number(c.amount_vnd) })),
+  };
+}
 
 export const LoansQuery = z.object({
   filter: z.enum(['open', 'due_soon', 'overdue', 'held']).default('open'),
@@ -1085,18 +1281,33 @@ export async function report(ctx: Ctx, input: z.input<typeof ReportSchema>) {
 
 /** Overdue loans for the dashboard (FR-RPT-01). */
 /** Library overview now (FR-LIB-15a): copies in the collection (all but lost), available, open and overdue loans. */
-export async function overviewTx(tx: Tx, now: Date) {
-  const [r] = await tx.execute<{ copies: number; available: number; on_loan: number; overdue: number }>(sql`
+/** Store days (UTC+7) from the start of the day, week (Monday) or month containing `now`, to today. */
+export function overviewPeriod(period: 'day' | 'week' | 'month', now: Date) {
+  const day = new Date(now.getTime() + 7 * 3600_000); // store wall clock, read with getUTC*
+  const start = new Date(day);
+  if (period === 'week') start.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
+  if (period === 'month') start.setUTCDate(1);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  return { from: iso(start), to: iso(day) };
+}
+
+export async function overviewTx(ctx: Pick<Ctx, 'db' | 'crypto'>, tx: Tx, now: Date) {
+  const period = (await settings.snapshot(ctx, tx))['library.overview_period'];
+  const { from, to } = overviewPeriod(period, now);
+  const start = new Date(`${from}T00:00:00+07:00`);
+  const [r] = await tx.execute<{ copies: number; available: number; on_loan: number; overdue: number; collected: string }>(sql`
     select (select count(*)::int from library.lib_copy where status <> 'lost') as copies,
            (select count(*)::int from library.lib_copy where status = 'available') as available,
            (select count(*)::int from library.loan where returned_at is null) as on_loan,
-           (select count(*)::int from library.loan where returned_at is null and due_at < ${tsParam(now)}) as overdue`);
-  return { copies: r!.copies, available: r!.available, onLoan: r!.on_loan, overdue: r!.overdue };
+           (select count(*)::int from library.loan where returned_at is null and due_at < ${tsParam(now)}) as overdue,
+           (select coalesce(sum(amount_vnd), 0) from library.lib_payment where received_at >= ${tsParam(start)} and received_at <= ${tsParam(now)}) as collected`);
+  // Receipts less refunds (refunds are negative) in the library cash book (FR-LIB-15a, FR-LIB-09a).
+  return { copies: r!.copies, available: r!.available, collectedVnd: Number(r!.collected), period, from, to, onLoan: r!.on_loan, overdue: r!.overdue };
 }
 
 export async function overview(ctx: Ctx) {
   requireAny(ctx);
-  return overviewTx(ctx.db, ctx.clock.now());
+  return overviewTx(ctx, ctx.db, ctx.clock.now());
 }
 
 export async function overdueForDashboard(tx: Tx, now: Date) {

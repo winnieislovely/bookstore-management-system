@@ -66,6 +66,8 @@ export const SETTINGS = {
   /** Loan-fee discount for buyers (FR-LIB-18); 0 % turns it off. */
   'library.fee_discount_spend_vnd': { schema: int(0), default: 5000000 },
   'library.fee_discount_pct': { schema: int(0, 100), default: 10 },
+  /** Period of the “Đã thu” figure in the library overview (FR-LIB-15a). */
+  'library.overview_period': { schema: z.enum(['day', 'week', 'month']), default: 'week' },
   /** No deposit (FR-LIB-09); the deposit ledger is built if the policy changes. */
   'library.deposit_vnd': { schema: int(0), default: 0 },
   'hr.ot_multiplier_weekday_bp': { schema: int(10000, 100000), default: 15000 },

@@ -148,6 +148,13 @@
       "when": 1793779760777,
       "tag": "0020_r4_library_cash_book",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793798548104,
+      "tag": "0021_r4_library_slips",
+      "breakpoints": true
     }
   ]
 }

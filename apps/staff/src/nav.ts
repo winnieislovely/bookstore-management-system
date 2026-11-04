@@ -62,7 +62,6 @@ export const NAV: NavGroup[] = [
       { path: '/library', label: 'nav.libraryDesk', icon: ArrowLeftRight, anyOf: ['library.lend'], badge: 'libraryOverdue' },
       { path: '/library/catalog', label: 'nav.libraryCatalog', icon: Library, anyOf: ['library.manage', 'library.lend'] },
       { path: '/library/counts', label: 'nav.libraryCounts', icon: ClipboardList, anyOf: ['library.count'] },
-      { path: '/library/payments', label: 'nav.libraryPayments', icon: Wallet, anyOf: ['library.lend'] },
     ],
   },
   {
