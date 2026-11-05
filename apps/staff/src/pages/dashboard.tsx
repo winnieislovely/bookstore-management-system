@@ -325,7 +325,7 @@ function Kpi({ label, value, compact, unit, to, tone }: { label: string; value: 
       )}
     </>
   );
-  const box = '@container flex min-w-0 flex-col justify-between rounded-lg border border-paper-300 bg-white px-1.5 py-2.5 sm:p-4';
+  const box = '@container flex min-w-0 flex-col justify-between rounded-lg border border-paper-300 bg-white px-1.5 py-2.5 sm:p-4 xl:p-3';
   return to ? (
     <Link to={to} className={clsx(box, 'hover:border-navy-700')}>
       {body}
@@ -371,7 +371,21 @@ function topRounded(x: number, y: number, w: number, h: number, r: number) {
 }
 
 /** Stacked Bán hàng / Thư viện bars (left axis) with Đơn bán / Phiếu mượn lines (right axis), Design §12.5. */
+/** Live pixel size of an element, so the chart can draw at its real size (Design §12.5). */
+function useElementSize() {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setSize({ w: Math.round(e!.contentRect.width), h: Math.round(e!.contentRect.height) }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return [setEl, size] as const;
+}
+
 function TrendChart({ data, show }: { data: TrendRow[]; show: SeriesState }) {
+  const [plotRef, size] = useElementSize();
   const bars = (['sales', 'library'] as const).filter((k) => show[k]);
   const lines = (['orders', 'slips'] as const).filter((k) => show[k]);
   if (!bars.length && !lines.length) return <p className="text-ink-500">{t('dashboard.trend.pickOne')}</p>;
@@ -384,8 +398,9 @@ function TrendChart({ data, show }: { data: TrendRow[]; show: SeriesState }) {
   const maxO = Math.max(2, Math.ceil(Math.max(...data.flatMap((d) => lines.map((k) => count(d, k))), 0) / 2) * 2);
   const padL = bars.length ? 64 : 12;
   const padR = lines.length ? 36 : 12;
-  const w = 640;
-  const h = 180;
+  // Drawn in real pixels: the plot fills its box (min 224 px high), so axis text keeps its size.
+  const w = size.w || 640;
+  const h = (size.h || 224) - 24;
   const top = 12;
   const plotW = w - padL - padR;
   const bw = plotW / data.length;
@@ -399,8 +414,9 @@ function TrendChart({ data, show }: { data: TrendRow[]; show: SeriesState }) {
       ...lines.map((k) => `${SERIES[k].label}: ${formatNumber(count(d, k))}`),
     ].join('\n');
   return (
-    <figure>
-      <svg viewBox={`0 0 ${w} ${h + 24}`} className="h-56 w-full" role="img" aria-label={`${t('dashboard.trend')}: ${data.map((d) => tip(d).replaceAll('\n', ', ')).join('; ')}`}>
+    <figure className="flex flex-1 flex-col">
+      <div ref={plotRef} className="relative min-h-56 flex-1 xl:max-h-[420px] xl:min-h-40">
+      <svg viewBox={`0 0 ${w} ${h + 24}`} width={w} height={h + 24} className="absolute inset-0 size-full" role="img" aria-label={`${t('dashboard.trend')}: ${data.map((d) => tip(d).replaceAll('\n', ', ')).join('; ')}`}>
         {[0, 0.5, 1].map((f) => (
           <g key={f}>
             <line x1={padL} x2={w - padR} y1={y(f, 1)} y2={y(f, 1)} stroke="var(--color-paper-300)" strokeDasharray={f ? '3 3' : undefined} />
@@ -454,6 +470,7 @@ function TrendChart({ data, show }: { data: TrendRow[]; show: SeriesState }) {
           {periodLabel(data[data.length - 1]!.key)}
         </text>
       </svg>
+      </div>
       <figcaption className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-700">
         {bars.map((k) => (
           <span key={k} className="inline-flex items-center gap-1.5">
@@ -485,7 +502,7 @@ function TrendCard() {
     <Card
       title={t('dashboard.trend')}
       subtitle={rangeSubtext(range)}
-      className="col-span-12 xl:col-span-8"
+      className="col-span-12 flex flex-col xl:col-span-7"
       action={<TrendFilter series={series} onSeries={setSeries} range={range} onRange={setRange} />}
     >
       {err ? (
@@ -528,7 +545,7 @@ function ChannelCard() {
   const err = rangeError(range);
   const q = useQuery({ ...salesQuery('channel', range), enabled: !err });
   return (
-    <Card title={t('dashboard.byChannel')} className="col-span-12 xl:col-span-4" action={<RangeFilter value={range} onChange={setRange} />}>
+    <Card title={t('dashboard.byChannel')} className="col-span-12" action={<RangeFilter value={range} onChange={setRange} />}>
       {err ? <p className="text-ink-500">{err}</p> : q.isError ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : q.data ? <ChannelBars data={q.data.rows} /> : <Skeleton className="h-48" />}
     </Card>
   );
@@ -540,7 +557,7 @@ const th = 'pb-2 text-left text-xs font-medium text-ink-500';
 function LibraryCard({ data, overdue }: { data: LibraryOverviewData; overdue: Dashboard['overdueLoans'] }) {
   const navigate = useNavigate();
   return (
-    <Card title="Tổng quan thư viện" subtitle={LIBRARY_PERIOD[data.period]} className="col-span-12 max-sm:px-2">
+    <Card title="Tổng quan thư viện" subtitle={LIBRARY_PERIOD[data.period]} className="max-sm:px-2 xl:flex-1 xl:p-4">
       <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
         <Kpi label="Doanh thu" value={formatVnd(data.collectedVnd)} compact={formatVndCompact(data.collectedVnd)} to={`/library?tab=all&time=${data.from}..${data.to}`} />
         <Kpi label="Đang mượn" value={formatNumber(data.onLoan)} unit="cuốn" to="/library" />
@@ -592,7 +609,8 @@ export function DashboardPage() {
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       ) : (
         <div className="grid grid-cols-12 gap-6">
-          <Card title={t('dashboard.summary')} subtitle={t('dashboard.summary.today')} className="col-span-12 max-sm:px-2">
+          <div className="col-span-12 flex flex-col gap-6 xl:col-span-5">
+          <Card title={t('dashboard.summary')} subtitle={t('dashboard.summary.today')} className="max-sm:px-2 xl:flex-1 xl:p-4">
             <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
               <Kpi label={t('dashboard.kpi.revenue')} value={d && formatVnd(d.grossVnd)} compact={d && formatVndCompact(d.grossVnd)} />
               <Kpi label={t('dashboard.kpi.orders')} value={d && formatNumber(d.orders)} />
@@ -600,6 +618,7 @@ export function DashboardPage() {
             </div>
           </Card>
           {q.data?.libraryOverview && <LibraryCard data={q.data.libraryOverview} overdue={q.data.overdueLoans} />}
+          </div>
           <TrendCard />
           <ChannelCard />
           <Card title={t('dashboard.bestsellers')} className="col-span-12 lg:col-span-6">
