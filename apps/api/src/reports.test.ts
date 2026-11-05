@@ -91,6 +91,19 @@ describe('dashboard (FR-RPT-01)', () => {
     expect(Object.keys(d)).not.toContain('failedEinvoices');
     expect((await get('/api/v1/reports/dashboard', cashier)).status).toBe(403);
   });
+
+  it('gives units on hand by product type, without bundles, to users who see stock', async () => {
+    const d = (await get('/api/v1/reports/dashboard', manager)).body;
+    const [onHand] = await h.t.sql`select coalesce(sum(on_hand), 0)::int as n from inventory.stock_level`;
+    expect(d.productMix.map((m: { kind: string }) => m.kind)).toEqual(['book', 'stationery', 'other']);
+    // All three test products are books.
+    expect(d.productMix).toEqual([
+      { kind: 'book', units: onHand!.n },
+      { kind: 'stationery', units: 0 },
+      { kind: 'other', units: 0 },
+    ]);
+    expect((await get('/api/v1/reports/dashboard', viewer)).body).not.toHaveProperty('productMix');
+  });
 });
 
 describe('revenue trend (FR-RPT-01)', () => {

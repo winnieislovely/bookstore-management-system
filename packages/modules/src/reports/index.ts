@@ -93,8 +93,20 @@ export async function dashboard(ctx: Ctx) {
         group by v.id, i.id having coalesce(sum(s.on_hand - s.reserved), 0) <= v.min_stock
         order by available limit 10`)
     : null;
+  // Units on hand by product type; bundles are made of other items, so they are left out (FR-RPT-01).
+  const productMix = can(actor, 'inventory.view')
+    ? await ctx.db.execute<{ kind: string; units: number }>(sql`
+        select i.kind, coalesce(sum(s.on_hand), 0)::int as units
+        from catalog.item i join catalog.item_variant v on v.item_id = i.id
+        left join inventory.stock_level s on s.variant_id = v.id
+        where i.kind in ('book', 'stationery', 'other') and v.status = 'active'
+        group by i.kind`)
+    : null;
   return {
     today: dayT,
+    ...(productMix && {
+      productMix: (['book', 'stationery', 'other'] as const).map((kind) => ({ kind, units: Math.max(0, productMix.find((r) => r.kind === kind)?.units ?? 0) })),
+    }),
     bestsellers: bestsellers.map((b) => ({ variantId: b.variant_id, sku: b.sku, title: b.title, units: b.units, grossVnd: n(b.gross) })),
     ...(lowStock && { lowStock: lowStock.map((l) => ({ variantId: l.variant_id, sku: l.sku, title: l.title, available: l.available, minStock: l.min_stock })) }),
     // Events (R3) join the dashboard in their release.
@@ -151,11 +163,26 @@ export const SalesReportSchema = RangeSchema.extend({
   groupBy: z.enum(['day', 'month', 'channel', 'item', 'customer']).default('day'),
 });
 
+const CHANNEL_LABELS: [string, string][] = [
+  ['counter', 'Tại quầy'],
+  ['website', 'Website'],
+  ['facebook', 'Facebook'],
+  ['zalo', 'Zalo'],
+  ['instagram', 'Instagram'],
+  ['tiktok', 'TikTok'],
+  ['marketplace', 'Sàn TMĐT'],
+  ['phone', 'Điện thoại'],
+  ['other', 'Khác'],
+];
+function channelLabel(col: SQL): SQL {
+  return sql`(case ${col} ${sql.join(CHANNEL_LABELS.map(([k, v]) => sql`when ${k} then ${v}`), sql` `)} else ${col} end)`;
+}
+
 const SALES_GROUPS = {
   day: { label: 'Ngày', key: sql`to_char(l.sold_at at time zone ${TZ}, 'YYYY-MM-DD')`, rkey: sql`to_char(r.returned_at at time zone ${TZ}, 'YYYY-MM-DD')` },
   month: { label: 'Tháng', key: sql`to_char(l.sold_at at time zone ${TZ}, 'YYYY-MM')`, rkey: sql`to_char(r.returned_at at time zone ${TZ}, 'YYYY-MM')` },
-  // Counter sales and online orders by source (FR-SOC-02, BR-29).
-  channel: { label: 'Kênh', key: sql`l.channel`, rkey: sql`r.channel` },
+  // Counter sales and online orders by source (FR-SOC-02, BR-29), labelled for the table and export.
+  channel: { label: 'Kênh', key: channelLabel(sql`l.channel`), rkey: channelLabel(sql`r.channel`) },
   customer: {
     label: 'Khách hàng',
     key: sql`coalesce((select c.name from crm.customer c where c.id = l.customer_id), 'Khách lẻ')`,

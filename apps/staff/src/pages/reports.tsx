@@ -35,6 +35,8 @@ const SALES: ReportDef[] = [
   { key: 'sales-period', label: 'Theo thời gian', report: 'sales', params: {}, range: true, period: true },
   { key: 'sales-item', label: 'Theo sản phẩm', report: 'sales', params: { groupBy: 'item' }, range: true },
   { key: 'sales-customer', label: 'Theo khách hàng', report: 'sales', params: { groupBy: 'customer' }, range: true },
+  // By channel moved here from the dashboard (FR-RPT-02, FR-SOC-02).
+  { key: 'sales-channel', label: 'Theo kênh', report: 'sales', params: { groupBy: 'channel' }, range: true },
 ];
 
 // Purchasing reports sit with inventory (Design §12.6): only stock-ins remain.

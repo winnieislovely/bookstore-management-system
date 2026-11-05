@@ -127,14 +127,29 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field({ l
 // ---------------------------------------------------------------------------------------------
 // Cards, chips, badges (§10.5, §10.7)
 
-export function Card({ title, subtitle, action, children, className }: { title?: string; subtitle?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
+/** `headerNowrap` keeps the action on the title's row; the title is cut with an ellipsis instead. */
+export function Card({
+  title,
+  subtitle,
+  action,
+  children,
+  className,
+  headerNowrap,
+}: {
+  title?: string;
+  subtitle?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  headerNowrap?: boolean;
+}) {
   return (
     <section className={clsx('rounded-lg border border-paper-300 bg-white p-4 sm:p-6', className)}>
       {(title || action) && (
-        <header className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <header className={clsx('mb-4 flex items-center justify-between gap-2', headerNowrap ? 'flex-nowrap' : 'flex-wrap')}>
           {title && (
-            <div>
-              <h2 className="text-base font-semibold text-ink-900">{title}</h2>
+            <div className={clsx(headerNowrap && 'min-w-0')}>
+              <h2 className={clsx('text-base font-semibold text-ink-900', headerNowrap && 'truncate')}>{title}</h2>
               {subtitle && <p className="mt-0.5 text-sm text-ink-500">{subtitle}</p>}
             </div>
           )}

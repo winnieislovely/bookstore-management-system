@@ -1,7 +1,6 @@
-import { ORDER_SOURCE } from '../components/order-ui';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ListFilter } from 'lucide-react';
+import { ArrowUpRight, ListFilter } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Button, Card, ErrorState, PageHeader, Skeleton } from '../components/ui';
@@ -26,25 +25,10 @@ interface Dashboard {
   lowStock?: { variantId: string; sku: string; title: string; available: number; minStock: number }[];
   /** Overdue library loans, for users who lend (FR-RPT-01). */
   libraryOverview?: LibraryOverviewData;
+  /** Units on hand by product type, for users who see stock (FR-RPT-01). */
+  productMix?: { kind: MixKind; units: number }[];
   overdueLoans: { loanId: string; title: string; code: string; customerName: string; customerPhone: string | null; dueAt: string; daysLate: number }[];
 }
-interface SalesRow {
-  key: string;
-  orders: number;
-  grossVnd: number;
-}
-
-const CHANNEL_LABEL: Record<string, string> = { counter: 'Tại quầy', ...ORDER_SOURCE };
-/** Fixed channel colours for charts only (Design §4.7). */
-const CHANNEL_COLOR: Record<string, string> = {
-  counter: 'var(--color-navy-700)',
-  website: 'var(--color-sea-500)',
-  facebook: 'var(--color-olive-600)',
-  zalo: 'var(--color-chart-4)',
-  instagram: 'var(--color-sky-300)',
-  tiktok: 'var(--color-ink-700)',
-};
-
 // ---------------------------------------------------------------------------------------------
 // Date ranges in store time (Design §12.5): presets plus a custom range, max 366 days (TDD §4.11).
 
@@ -179,30 +163,6 @@ function RangeSection({ value, onPick }: { value: RangeState; onPick: (r: RangeS
   );
 }
 
-/** Filter pill labelled with the range; picking closes the popover (Doanh thu theo kênh, Design §12.5). */
-function RangeFilter({ value, onChange }: { value: RangeState; onChange: (r: RangeState) => void }) {
-  const { open, setOpen, box } = usePopover();
-  const panelId = useId();
-  return (
-    <div ref={box} className="relative">
-      <Button size="sm" icon={ListFilter} aria-haspopup="dialog" aria-expanded={open} aria-controls={panelId} aria-label={`${t('dashboard.range.label')}: ${rangeLabel(value)}`} onClick={() => setOpen(!open)}>
-        {rangeLabel(value)}
-      </Button>
-      {open && (
-        <div id={panelId} role="dialog" aria-label={t('dashboard.range.label')} className={popoverPanel}>
-          <RangeSection
-            value={value}
-            onPick={(r) => {
-              onChange(r);
-              setOpen(false);
-            }}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------------------------
 // Revenue trend: shop and library (FR-RPT-01, Design §12.5)
 
@@ -287,10 +247,6 @@ function TrendFilter({ series, onSeries, range, onRange }: { series: SeriesState
   );
 }
 
-function salesQuery(groupBy: string, r: RangeState) {
-  return { queryKey: ['dashboard', 'sales', groupBy, r.from, r.to], queryFn: () => get<{ rows: SalesRow[] }>(`/api/v1/reports/sales?groupBy=${groupBy}&from=${r.from}&to=${r.to}`) };
-}
-
 // ---------------------------------------------------------------------------------------------
 
 function greeting(name: string) {
@@ -325,7 +281,7 @@ function Kpi({ label, value, compact, unit, to, tone }: { label: string; value: 
       )}
     </>
   );
-  const box = '@container flex min-w-0 flex-col justify-between rounded-lg border border-paper-300 bg-white px-1.5 py-2.5 sm:p-4 xl:p-3';
+  const box = '@container flex min-w-0 flex-col justify-between rounded-lg border border-navy-700/30 bg-white px-1.5 py-2.5 sm:p-4 xl:p-3';
   return to ? (
     <Link to={to} className={clsx(box, 'hover:border-navy-700')}>
       {body}
@@ -518,40 +474,97 @@ function TrendCard() {
   );
 }
 
-function ChannelBars({ data }: { data: SalesRow[] }) {
-  const total = data.reduce((a, d) => a + d.grossVnd, 0);
-  if (!total) return <p className="text-ink-500">{t('dashboard.noData')}</p>;
+// ---------------------------------------------------------------------------------------------
+const th = 'pb-2 text-left text-xs font-medium text-ink-500';
+
+// Tổng quan tồn kho: units on hand by product type (FR-RPT-01, Design §12.5)
+
+type MixKind = 'book' | 'stationery' | 'other';
+const MIX: Record<MixKind, { label: string; color: string }> = {
+  book: { label: 'Sách', color: 'var(--color-chart-1)' },
+  stationery: { label: 'Văn phòng phẩm', color: 'var(--color-chart-2)' },
+  other: { label: 'Khác', color: 'var(--color-chart-3)' },
+};
+
+/** Donut with 2 px gaps and rounded ends; segments shorter than the ring width keep square ends. */
+function Donut({ data, total }: { data: { kind: MixKind; units: number }[]; total: number }) {
+  const size = 168;
+  const stroke = 16;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const shown = data.filter((d) => d.units > 0);
+  const gap = shown.length > 1 ? 2 : 0;
+  let offset = 0;
   return (
-    <ul className="flex flex-col gap-3">
-      {data.map((d) => (
-        <li key={d.key}>
-          <div className="mb-1 flex justify-between text-sm">
-            <span className="text-ink-700">{CHANNEL_LABEL[d.key] ?? d.key}</span>
-            <span className="num text-ink-900">
-              {formatVnd(d.grossVnd)} · {Math.round((d.grossVnd / total) * 100)}%
-            </span>
-          </div>
-          <div className="h-2 rounded-full bg-paper-200">
-            <div className="h-2 rounded-full" style={{ width: `${(d.grossVnd / total) * 100}%`, background: CHANNEL_COLOR[d.key] ?? 'var(--color-paper-500)' }} />
-          </div>
-        </li>
-      ))}
-    </ul>
+    <div className="relative size-36 shrink-0 sm:size-42">
+      <svg viewBox={`0 0 ${size} ${size}`} className="size-full -rotate-90" aria-hidden>
+        {shown.map((d) => {
+          const arc = (d.units / total) * c;
+          const round = shown.length > 1 && arc - gap > stroke;
+          // Round caps add half the ring width at each end, so the drawn dash is shortened to match.
+          const dash = shown.length === 1 ? c : Math.max(round ? arc - gap - stroke : arc - gap, 0.5);
+          const start = offset + (round ? stroke / 2 : 0) + gap / 2;
+          offset += arc;
+          return (
+            <circle
+              key={d.kind}
+              cx={size / 2}
+              cy={size / 2}
+              r={r}
+              fill="none"
+              stroke={MIX[d.kind].color}
+              strokeWidth={stroke}
+              strokeLinecap={round ? 'round' : 'butt'}
+              strokeDasharray={`${dash} ${c - dash}`}
+              strokeDashoffset={-start}
+            >
+              <title>{`${MIX[d.kind].label}: ${formatNumber(d.units)} · ${Math.round((d.units / total) * 100)}%`}</title>
+            </circle>
+          );
+        })}
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-xl leading-7 font-semibold num text-ink-900 sm:text-2xl sm:leading-8">{formatNumber(total)}</span>
+        <span className="text-xs text-ink-500">sản phẩm</span>
+      </div>
+    </div>
   );
 }
 
-function ChannelCard() {
-  const [range, setRange] = useRange('channel', '30d');
-  const err = rangeError(range);
-  const q = useQuery({ ...salesQuery('channel', range), enabled: !err });
+function ProductMixCard({ data, className }: { data: { kind: MixKind; units: number }[]; className: string }) {
+  const navigate = useNavigate();
+  const total = data.reduce((a, d) => a + d.units, 0);
   return (
-    <Card title={t('dashboard.byChannel')} className="col-span-12" action={<RangeFilter value={range} onChange={setRange} />}>
-      {err ? <p className="text-ink-500">{err}</p> : q.isError ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : q.data ? <ChannelBars data={q.data.rows} /> : <Skeleton className="h-48" />}
+    <Card
+      title="Tổng quan tồn kho"
+      className={className}
+      headerNowrap
+      action={
+        <Button variant="tonal" size="sm" className="size-8 shrink-0 px-0! pointer-coarse:size-11" aria-label="Chi tiết" title="Chi tiết" onClick={() => navigate('/products')}>
+          <ArrowUpRight size={18} strokeWidth={2.5} className="shrink-0" aria-hidden />
+        </Button>
+      }
+    >
+      {total ? (
+        <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-5">
+          <Donut data={data} total={total} />
+          <ul className="flex min-w-max flex-1 flex-col gap-3" aria-label="Số lượng tồn kho theo loại">
+            {data.map((d) => (
+              <li key={d.kind} className="flex items-center gap-2.5 text-sm">
+                <span className="size-2.5 shrink-0 rounded-full" style={{ background: MIX[d.kind].color }} aria-hidden />
+                <span className="flex-1 whitespace-nowrap pr-4 text-ink-700">{MIX[d.kind].label}</span>
+                <span className="num text-ink-500">{formatNumber(d.units)}</span>
+                <span className="w-11 text-right num font-semibold text-ink-900">{Math.round((d.units / total) * 100)}%</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="text-ink-500">{t('dashboard.noData')}</p>
+      )}
     </Card>
   );
 }
-
-const th = 'pb-2 text-left text-xs font-medium text-ink-500';
 
 /** Tổng quan thư viện on the dashboard: built like Tổng quan cửa hàng, three tiles (Design §12.5, FR-LIB-15a). */
 function LibraryCard({ data, overdue }: { data: LibraryOverviewData; overdue: Dashboard['overdueLoans'] }) {
@@ -620,15 +633,15 @@ export function DashboardPage() {
           {q.data?.libraryOverview && <LibraryCard data={q.data.libraryOverview} overdue={q.data.overdueLoans} />}
           </div>
           <TrendCard />
-          <ChannelCard />
-          <Card title={t('dashboard.bestsellers')} className="col-span-12 lg:col-span-6">
+          {q.data?.productMix && <ProductMixCard data={q.data.productMix} className="col-span-12 xl:col-span-4 xl:p-4" />}
+          <Card title={t('dashboard.bestsellers')} className="col-span-12 xl:col-span-4 xl:p-4">
             {q.data?.bestsellers.length ? (
               <table className="w-full table-fixed text-sm">
                 <thead>
                   <tr className="border-b border-paper-300">
                     <th scope="col" className={`${th} w-8`}>#</th>
                     <th scope="col" className={th}>{t('dashboard.col.product')}</th>
-                    <th scope="col" className={`${th} w-32`}>{t('dashboard.col.sku')}</th>
+                    <th scope="col" className={`${th} w-32 xl:hidden`}>{t('dashboard.col.sku')}</th>
                     <th scope="col" className={`${th} w-16 text-right`}>{t('dashboard.col.sold')}</th>
                   </tr>
                 </thead>
@@ -636,8 +649,8 @@ export function DashboardPage() {
                   {q.data.bestsellers.map((b, i) => (
                     <tr key={b.variantId}>
                       <td className="py-2 text-ink-500 num">{i + 1}</td>
-                      <td className="truncate py-2">{b.title}</td>
-                      <td className="code truncate py-2 text-xs text-ink-500">{b.sku}</td>
+                      <td className="truncate py-2" title={b.title}>{b.title}</td>
+                      <td className="code truncate py-2 text-xs text-ink-500 xl:hidden">{b.sku}</td>
                       <td className="py-2 text-right num">{formatNumber(b.units)}</td>
                     </tr>
                   ))}
@@ -648,22 +661,22 @@ export function DashboardPage() {
             )}
           </Card>
           {q.data?.lowStock && (
-            <Card title={t('dashboard.lowStock')} className="col-span-12 lg:col-span-6">
+            <Card title={t('dashboard.lowStock')} className="col-span-12 xl:col-span-4 xl:p-4">
               {q.data.lowStock.length ? (
                 <>
                   <table className="w-full table-fixed text-sm">
                     <thead>
                       <tr className="border-b border-paper-300">
                         <th scope="col" className={th}>{t('dashboard.col.product')}</th>
-                        <th scope="col" className={`${th} w-32`}>{t('dashboard.col.sku')}</th>
+                        <th scope="col" className={`${th} w-32 xl:hidden`}>{t('dashboard.col.sku')}</th>
                         <th scope="col" className={`${th} w-28 text-right`}>{t('dashboard.col.stock')}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-paper-300">
                       {q.data.lowStock.map((l) => (
                         <tr key={l.variantId}>
-                          <td className="truncate py-2">{l.title}</td>
-                          <td className="code truncate py-2 text-xs text-ink-500">{l.sku}</td>
+                          <td className="truncate py-2" title={l.title}>{l.title}</td>
+                          <td className="code truncate py-2 text-xs text-ink-500 xl:hidden">{l.sku}</td>
                           <td className="py-2 text-right num text-warning-700">
                             {formatNumber(l.available)} / {formatNumber(l.minStock)}
                           </td>

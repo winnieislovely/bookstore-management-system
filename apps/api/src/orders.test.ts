@@ -398,7 +398,7 @@ describe('reports, customers and COD (FR-SOC-02, FR-CRM-03, FR-ORD-11, BR-29)', 
     const from = new Date(h.clock.now().getTime() - 3 * 86_400_000 + 7 * 3600_000).toISOString().slice(0, 10);
     const r = await h.call('GET', `/api/v1/reports/sales?from=${from}&to=${day}&groupBy=channel`, { cookie: owner });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
-    const fb = r.body.rows.find((x: { key: string }) => x.key === 'facebook');
+    const fb = r.body.rows.find((x: { key: string }) => x.key === 'Facebook');
     expect(fb.orders).toBeGreaterThanOrEqual(4);
     expect(fb.returnsVnd).toBe(100000);
     const [done] = await h.t.sql`select count(*)::int as n from orders.web_order where done_at is not null`;
