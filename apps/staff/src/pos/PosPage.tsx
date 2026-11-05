@@ -69,7 +69,7 @@ function FullScreenMessage({ tone, text }: { tone: 'danger' | 'info'; text: stri
       <div className="max-w-md">
         <InlineAlert tone={tone}>{text}</InlineAlert>
         <Link to="/" className="mt-4 inline-block text-navy-700 underline">
-          Thoát POS
+          Thoát
         </Link>
       </div>
     </div>
@@ -82,7 +82,7 @@ function PosShell({ title, children }: { title: string; children: React.ReactNod
       <header className="on-navy flex h-14 items-center justify-between bg-navy-700 px-4 text-white">
         <span className="font-semibold">{title}</span>
         <Link to="/" className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm text-white/80 hover:bg-navy-800">
-          <LogOut size={18} aria-hidden /> Thoát POS
+          <LogOut size={18} aria-hidden /> Thoát
         </Link>
       </header>
       <main className="flex flex-1 items-start justify-center p-4 sm:items-center">{children}</main>
@@ -94,15 +94,11 @@ function PosShell({ title, children }: { title: string; children: React.ReactNod
 function RegisterScreen({ me, onDone }: { me: Me; onDone: (d: DeviceInfo) => void }) {
   const registers = useQuery({ queryKey: ['registers'], queryFn: () => get<{ items: { id: string; code: string; name: string }[] }>('/api/v1/pos/registers') });
   const [registerId, setRegisterId] = useState('');
-  const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const first = registers.data?.items[0];
-    if (first && !registerId) {
-      setRegisterId(first.id);
-      setCode(first.code);
-    }
+    if (first && !registerId) setRegisterId(first.id);
   }, [registers.data, registerId]);
   if (!can(me, 'pos.offline.manage')) {
     return (
@@ -114,7 +110,7 @@ function RegisterScreen({ me, onDone }: { me: Me; onDone: (d: DeviceInfo) => voi
     );
   }
   return (
-    <PosShell title="Đăng ký máy bán hàng">
+    <PosShell title="Đăng ký quầy">
       <form
         className="flex w-full max-w-md flex-col gap-5 rounded-lg border border-paper-300 bg-white p-6"
         onSubmit={async (e: FormEvent) => {
@@ -122,7 +118,7 @@ function RegisterScreen({ me, onDone }: { me: Me; onDone: (d: DeviceInfo) => voi
           setBusy(true);
           setError(null);
           try {
-            const d = await registerDevice(registerId, code.trim().toUpperCase());
+            const d = await registerDevice(registerId);
             await kvSet('registerCode', registers.data?.items.find((r) => r.id === registerId)?.code ?? '');
             onDone(d);
           } catch (err) {
@@ -132,10 +128,9 @@ function RegisterScreen({ me, onDone }: { me: Me; onDone: (d: DeviceInfo) => voi
           }
         }}
       >
-        <p className="text-ink-700">Máy được đăng ký sẽ lưu danh mục để bán được cả khi mất mạng, và đồng bộ khi có mạng lại.</p>
+        <h2 className="text-lg font-semibold text-ink-900">Đăng ký quầy</h2>
         <label className="flex flex-col gap-1">
-          <span className="text-[13px] font-medium text-ink-700">Quầy</span>
-          <select className="h-12 rounded-md border border-paper-500 bg-white px-3" value={registerId} onChange={(e) => setRegisterId(e.target.value)}>
+          <select className="h-12 rounded-md border border-paper-500 bg-white px-3" aria-label="Quầy" value={registerId} onChange={(e) => setRegisterId(e.target.value)}>
             {registers.data?.items.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.code} · {r.name}
@@ -143,10 +138,9 @@ function RegisterScreen({ me, onDone }: { me: Me; onDone: (d: DeviceInfo) => voi
             ))}
           </select>
         </label>
-        <Field label="Mã thiết bị" required helper="1–6 chữ hoa hoặc số, dùng làm tiền tố số đơn ngoại tuyến (ví dụ Q1-000123)." value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
-        <Button type="submit" variant="primary" size="lg" full loading={busy} disabled={!registerId || !/^[A-Z0-9]{1,6}$/.test(code)}>
-          Đăng ký máy này
+        <Button type="submit" variant="primary" size="lg" full loading={busy} disabled={!registerId}>
+          Xác nhận
         </Button>
       </form>
     </PosShell>
@@ -725,7 +719,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
               Đóng ca
             </Button>
             <Link to="/" className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-paper-500 text-sm font-medium hover:bg-navy-50">
-              <LogOut size={20} aria-hidden /> Thoát POS
+              <LogOut size={20} aria-hidden /> Thoát
             </Link>
           </div>
         </Dialog>

@@ -11,7 +11,7 @@ import {
   House,
   Monitor,
   Receipt,
-  ScanBarcode,
+  ShoppingCart,
   ScrollText,
   Truck,
   Settings,
@@ -49,7 +49,7 @@ export const NAV: NavGroup[] = [
   {
     label: 'nav.group.store',
     items: [
-      { path: '/pos', label: 'nav.selling', icon: ScanBarcode, anyOf: ['sale.create'] },
+      { path: '/pos', label: 'nav.selling', icon: ShoppingCart, anyOf: ['sale.create'] },
       { path: '/orders', label: 'nav.orders', icon: Truck, anyOf: ['online.manage'], badge: 'shipmentsWaiting' },
       { path: '/sales', label: 'nav.sales', icon: Receipt, anyOf: ['sale.create', 'sale.view_all', 'online.manage', 'online.confirm'], badge: ['ordersNeedingAction', 'einvoicesFailed'] },
       { path: '/customers', label: 'nav.customers', icon: Users, anyOf: ['customer.view'] },

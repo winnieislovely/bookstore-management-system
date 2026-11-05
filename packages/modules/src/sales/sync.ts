@@ -24,13 +24,26 @@ const MAX_SKEW_MS = 5 * 60_000;
 
 export const RegisterDeviceSchema = z.object({
   registerId: z.uuid(),
-  deviceCode: z
-    .string()
-    .trim()
-    .regex(/^[A-Z0-9]{1,6}$/, 'Mã thiết bị gồm 1–6 chữ hoa hoặc số.'),
   /** ECDSA P-256 public key, SPKI DER, base64. */
   publicKey: z.string().min(80).max(400),
 });
+
+/**
+ * Device code from the register code (TDD §7.2): upper-case letters and digits, at most 5 characters
+ * (`Q1`); when taken by another device – active or revoked, whose offline numbers must stay unique –
+ * B, C, … Z is appended (`Q1B`), and `M` + a number is the last resort. Codes stay within 1–6 characters.
+ */
+export function deviceCodeFor(registerCode: string, taken: Set<string>): string {
+  const base = registerCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
+  if (base) {
+    if (!taken.has(base)) return base;
+    for (let c = 66; c <= 90; c++) {
+      const code = base + String.fromCharCode(c);
+      if (!taken.has(code)) return code;
+    }
+  }
+  for (let i = 1; ; i++) if (!taken.has(`M${i}`)) return `M${i}`;
+}
 
 function importKey(spkiBase64: string) {
   const key = createPublicKey({ key: Buffer.from(spkiBase64, 'base64'), format: 'der', type: 'spki' });
@@ -45,15 +58,19 @@ export async function registerDevice(ctx: Ctx, input: z.input<typeof RegisterDev
   const data = RegisterDeviceSchema.parse(input);
   importKey(data.publicKey);
   return ctx.db.transaction(async (tx) => {
-    const [dupe] = await tx.select({ id: schema.posDevice.id }).from(schema.posDevice).where(eq(schema.posDevice.deviceCode, data.deviceCode));
-    if (dupe) throw errors.conflict('duplicate_device_code', `Mã thiết bị ${data.deviceCode} đã được dùng.`);
+    const [reg] = await tx.select({ code: schema.register.code }).from(schema.register).where(eq(schema.register.id, data.registerId));
+    if (!reg) throw errors.notFound('Không tìm thấy quầy.');
+    // Serialise registrations so two devices never pick the same code.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('pos_device_code'))`);
+    const taken = new Set((await tx.select({ code: schema.posDevice.deviceCode }).from(schema.posDevice)).map((r) => r.code));
+    const deviceCode = deviceCodeFor(reg.code, taken);
     const cfg = await settings.snapshot(ctx, tx);
     const now = ctx.clock.now();
     const [d] = await tx
       .insert(schema.posDevice)
-      .values({ ...data, lastSeenAt: now, leaseExpiresAt: new Date(now.getTime() + cfg['pos.offline_lease_hours'] * 3600_000) })
+      .values({ ...data, deviceCode, lastSeenAt: now, leaseExpiresAt: new Date(now.getTime() + cfg['pos.offline_lease_hours'] * 3600_000) })
       .returning();
-    await audit.record(tx, ctx, { action: 'pos_device.register', entity: 'pos_device', entityId: d!.id, after: { deviceCode: data.deviceCode, registerId: data.registerId } });
+    await audit.record(tx, ctx, { action: 'pos_device.register', entity: 'pos_device', entityId: d!.id, after: { deviceCode, registerId: data.registerId } });
     return { id: d!.id, deviceCode: d!.deviceCode, leaseExpiresAt: d!.leaseExpiresAt };
   });
 }

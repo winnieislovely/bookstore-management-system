@@ -186,7 +186,9 @@ describe('offline returns of device sales (TDD §7.1)', () => {
     const keys = (await webcrypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])) as webcrypto.CryptoKeyPair;
     const spki = Buffer.from(await webcrypto.subtle.exportKey('spki', keys.publicKey)).toString('base64');
     await h.call('POST', `/api/v1/pos/shifts/close`, { cookie: cashier, body: { shiftId, countedVnd: 0, varianceReason: 'Chuyển sang thiết bị' } });
-    expect((await h.call('POST', '/api/v1/pos/devices', { cookie: manager, body: { registerId, deviceCode: 'T1', publicKey: spki } })).status).toBe(201);
+    const reg = await h.call('POST', '/api/v1/pos/devices', { cookie: manager, body: { registerId, publicKey: spki } });
+    expect(reg.status, JSON.stringify(reg.body)).toBe(201);
+    const code = reg.body.deviceCode as string;
     const users = (await h.call('GET', '/api/v1/admin/users', { cookie: owner })).body.items;
     const cashierId = users.find((u: { username: string }) => u.username === 'thu').id;
     const sync = async (events: unknown[]) => {
@@ -196,7 +198,7 @@ describe('offline returns of device sales (TDD §7.1)', () => {
       const sig = Buffer.from(await webcrypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keys.privateKey, new TextEncoder().encode(msg))).toString('base64');
       const res = await h.app.request('/pos/v1/sync', {
         method: 'POST',
-        headers: { origin: ORIGIN, cookie: cashier, 'content-type': 'application/json', 'x-device-code': 'T1', 'x-device-timestamp': ts, 'x-device-signature': sig },
+        headers: { origin: ORIGIN, cookie: cashier, 'content-type': 'application/json', 'x-device-code': code, 'x-device-timestamp': ts, 'x-device-signature': sig },
         body: raw as never,
       });
       return ((await res.json()) as { results: { status: string; code?: string; exceptions?: string[] }[] }).results;
@@ -212,14 +214,14 @@ describe('offline returns of device sales (TDD §7.1)', () => {
         clientEventId: randomUUID(),
         seq: 2,
         type: 'sale.completed',
-        payload: { docNo: 'T1-000001', clientShiftId, cashierId, soldAt: now, lines: [line], payments: [{ method: 'cash', amountVnd: 196000 }], subtotalVnd: 196000, discountVnd: 0, totalVnd: 196000, vatVnd: 0 },
+        payload: { docNo: `${code}-000001`, clientShiftId, cashierId, soldAt: now, lines: [line], payments: [{ method: 'cash', amountVnd: 196000 }], subtotalVnd: 196000, discountVnd: 0, totalVnd: 196000, vatVnd: 0 },
       },
-      { ...base, clientEventId: randomUUID(), seq: 3, type: 'sale.returned', payload: { saleDocNo: 'T1-000001', clientShiftId, lines: [{ lineNo: 1, qty: 1, restock: true }], refundMethod: 'cash', by: cashierId, at: now } },
+      { ...base, clientEventId: randomUUID(), seq: 3, type: 'sale.returned', payload: { saleDocNo: `${code}-000001`, clientShiftId, lines: [{ lineNo: 1, qty: 1, restock: true }], refundMethod: 'cash', by: cashierId, at: now } },
       { ...base, clientEventId: randomUUID(), seq: 4, type: 'sale.returned', payload: { saleDocNo: 'HD-2026-00001', clientShiftId, lines: [{ lineNo: 1, qty: 1, restock: true }], refundMethod: 'cash', by: cashierId, at: now } },
-      { ...base, clientEventId: randomUUID(), seq: 5, type: 'sale.returned', payload: { saleDocNo: 'T1-000001', clientShiftId, lines: [{ lineNo: 1, qty: 5, restock: true }], refundMethod: 'cash', by: cashierId, at: now } },
+      { ...base, clientEventId: randomUUID(), seq: 5, type: 'sale.returned', payload: { saleDocNo: `${code}-000001`, clientShiftId, lines: [{ lineNo: 1, qty: 5, restock: true }], refundMethod: 'cash', by: cashierId, at: now } },
     ]);
     expect(results.map((r) => r.code ?? r.status)).toEqual(['accepted', 'accepted', 'accepted', 'sale_not_on_device', 'return_exceeds_sold']);
-    const [ret] = await h.t.sql`select r.refund_vnd from sales.sale_return r join sales.sale s on s.id = r.sale_id where s.doc_no = 'T1-000001'`;
+    const [ret] = await h.t.sql`select r.refund_vnd from sales.sale_return r join sales.sale s on s.id = r.sale_id where s.doc_no = ${`${code}-000001`}`;
     expect(Number(ret!.refund_vnd)).toBe(98000);
     expect(await jobs.integrityCheck(h.ctx())).toEqual([]);
   });

@@ -93,10 +93,16 @@ const sale = (docNo: string, lines: ReturnType<typeof line>[], payments: unknown
 describe('device registration and authentication (TDD §7.2)', () => {
   it('only managers register devices; requests must be signed', async () => {
     const spki = Buffer.from(await webcrypto.subtle.exportKey('spki', keys.publicKey)).toString('base64');
-    expect((await h.call('POST', '/api/v1/pos/devices', { cookie: cashier, body: { registerId, deviceCode: 'Q1', publicKey: spki } })).status).toBe(403);
-    const r = await h.call('POST', '/api/v1/pos/devices', { cookie: manager, body: { registerId, deviceCode: 'Q1', publicKey: spki } });
+    expect((await h.call('POST', '/api/v1/pos/devices', { cookie: cashier, body: { registerId, publicKey: spki } })).status).toBe(403);
+    const r = await h.call('POST', '/api/v1/pos/devices', { cookie: manager, body: { registerId, publicKey: spki } });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
+    // The code comes from the register code (TDD §7.2).
+    expect(r.body.deviceCode).toBe('Q1');
     deviceId = r.body.id;
+    // A second device on the same register gets the next free code.
+    const other = (await webcrypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])) as webcrypto.CryptoKeyPair;
+    const otherSpki = Buffer.from(await webcrypto.subtle.exportKey('spki', other.publicKey)).toString('base64');
+    expect((await h.call('POST', '/api/v1/pos/devices', { cookie: manager, body: { registerId, publicKey: otherSpki } })).body.deviceCode).toBe('Q1B');
     expect((await h.app.request('/pos/v1/bootstrap', { headers: { cookie: cashier } })).status).toBe(401);
     expect((await deviceCall('GET', '/pos/v1/bootstrap', cashier, undefined, { tamper: true })).body.error.code).toBe('device_signature_invalid');
     expect((await deviceCall('GET', '/pos/v1/bootstrap', cashier, undefined, { code: 'ZZ' })).body.error.code).toBe('device_unknown');

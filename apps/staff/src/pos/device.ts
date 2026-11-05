@@ -35,11 +35,11 @@ function toHex(buf: ArrayBuffer): string {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** Register this browser as a POS device (needs `pos.offline.manage`). */
-export async function registerDevice(registerId: string, deviceCode: string): Promise<DeviceInfo> {
+/** Register this browser as a POS device (needs `pos.offline.manage`); the server assigns the device code (TDD §7.2). */
+export async function registerDevice(registerId: string): Promise<DeviceInfo> {
   const pair = await keyPair();
   const spki = await crypto.subtle.exportKey('spki', pair.publicKey);
-  const r = await post<{ id: string; deviceCode: string }>('/api/v1/pos/devices', { registerId, deviceCode, publicKey: toBase64(spki) });
+  const r = await post<{ id: string; deviceCode: string }>('/api/v1/pos/devices', { registerId, publicKey: toBase64(spki) });
   const info = { id: r.id, deviceCode: r.deviceCode, registerId };
   await kvSet('device', info);
   return info;
