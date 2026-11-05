@@ -127,12 +127,17 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field({ l
 // ---------------------------------------------------------------------------------------------
 // Cards, chips, badges (§10.5, §10.7)
 
-export function Card({ title, action, children, className }: { title?: string; action?: ReactNode; children: ReactNode; className?: string }) {
+export function Card({ title, subtitle, action, children, className }: { title?: string; subtitle?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <section className={clsx('rounded-lg border border-paper-300 bg-white p-4 sm:p-6', className)}>
       {(title || action) && (
         <header className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          {title && <h2 className="text-base font-semibold text-ink-900">{title}</h2>}
+          {title && (
+            <div>
+              <h2 className="text-base font-semibold text-ink-900">{title}</h2>
+              {subtitle && <p className="mt-0.5 text-sm text-ink-500">{subtitle}</p>}
+            </div>
+          )}
           {action}
         </header>
       )}

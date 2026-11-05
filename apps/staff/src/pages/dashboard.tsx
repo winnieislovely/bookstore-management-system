@@ -3,13 +3,13 @@ import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { Check, ListFilter } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Button, Card, ErrorState, PageHeader, Skeleton } from '../components/ui';
 import { get } from '../lib/api';
 import { formatDate, formatNumber, formatVnd, formatVndCompact } from '../lib/format';
 import { t } from '../lib/i18n';
 import { useMe } from '../lib/session';
-import { LibraryOverview, type LibraryOverviewData } from './library';
+import { type LibraryOverviewData } from './library';
 
 /** Dashboard (FR-RPT-01, Design §12.5): today's figures, range-filtered charts and lists — no alert tiles. */
 
@@ -210,14 +210,43 @@ function greeting(name: string) {
   return t(key, { name });
 }
 
-function Kpi({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-paper-300 bg-white p-4 sm:p-6">
-      <p className="text-[13px] text-ink-500">{label}</p>
-      <p className="mt-1 text-2xl leading-8 font-semibold num text-ink-900">{value}</p>
-    </div>
+/**
+ * One summary tile. Tiles are equal width at every size; text is sized to the tile (container query units)
+ * so the row fits a phone. `compact` (if given) replaces the value below `sm`,
+ * `unit` is a small muted suffix after the amount (“/đơn”, “cuốn”), and `to` makes the tile a link (Design §12.5).
+ */
+function Kpi({ label, value, compact, unit, to, tone }: { label: string; value: string | undefined; compact?: string | undefined; unit?: string; to?: string; tone?: string | undefined }) {
+  const body = (
+    <>
+      <p className="text-[clamp(11px,9.5cqi,14px)] leading-[1.4] text-ink-500">{label}</p>
+      {value === undefined ? (
+        <Skeleton className="mt-1 h-[1.4em] w-14 text-[clamp(11px,13cqi,20px)]" />
+      ) : (
+        <p className={clsx('mt-1 truncate text-[clamp(11px,13cqi,20px)] leading-[1.4] font-semibold num', tone ?? 'text-ink-900')}>
+          {compact && compact !== value ? (
+            <>
+              <span className="sm:hidden" aria-hidden>{compact}</span>
+              <span className="max-sm:sr-only">{value}</span>
+            </>
+          ) : (
+            value
+          )}
+          {unit && <span className={clsx('text-[max(10px,0.7em)] font-normal text-ink-500', unit.startsWith('/') ? 'ml-0.5' : 'ml-1')}>{unit}</span>}
+        </p>
+      )}
+    </>
+  );
+  const box = '@container flex min-w-0 flex-col justify-between rounded-lg border border-paper-300 bg-white px-1.5 py-2.5 sm:p-4';
+  return to ? (
+    <Link to={to} className={clsx(box, 'hover:border-navy-700')}>
+      {body}
+    </Link>
+  ) : (
+    <div className={box}>{body}</div>
   );
 }
+
+const LIBRARY_PERIOD: Record<LibraryOverviewData['period'], string> = { day: 'Số liệu hôm nay', week: 'Số liệu tuần này', month: 'Số liệu tháng này' };
 
 /** Every day (or month) in the range, so empty periods show as zero. */
 function fillPeriods(rows: SalesRow[], from: string, to: string, byMonth: boolean): SalesRow[] {
@@ -348,18 +377,54 @@ function ChannelCard() {
 
 const th = 'pb-2 text-left text-xs font-medium text-ink-500';
 
+/** Tổng quan thư viện on the dashboard: built like Tổng quan cửa hàng, three tiles (Design §12.5, FR-LIB-15a). */
+function LibraryCard({ data, overdue }: { data: LibraryOverviewData; overdue: Dashboard['overdueLoans'] }) {
+  const navigate = useNavigate();
+  return (
+    <Card title="Tổng quan thư viện" subtitle={LIBRARY_PERIOD[data.period]} className="col-span-12 max-sm:px-2">
+      <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
+        <Kpi label="Doanh thu" value={formatVnd(data.collectedVnd)} compact={formatVndCompact(data.collectedVnd)} to={`/library?tab=all&time=${data.from}..${data.to}`} />
+        <Kpi label="Đang mượn" value={formatNumber(data.onLoan)} unit="cuốn" to="/library" />
+        <Kpi label="Quá hạn" value={formatNumber(data.overdue)} unit="cuốn" to="/library?tab=overdue" tone={data.overdue ? 'text-danger-700' : undefined} />
+      </div>
+      {!!overdue.length && (
+        <>
+          <h3 className="mt-6 mb-2 text-sm font-semibold">Sách mượn quá hạn</h3>
+          <table className="w-full table-fixed text-sm">
+            <thead>
+              <tr className="border-b border-paper-300">
+                <th scope="col" className={th}>Sách</th>
+                <th scope="col" className={th}>Người mượn</th>
+                <th scope="col" className={`${th} w-24 text-right`}>Trễ</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-paper-300">
+              {overdue.map((l) => (
+                <tr key={l.loanId}>
+                  <td className="truncate py-2">{l.title}</td>
+                  <td className="truncate py-2">{l.customerName}</td>
+                  <td className="py-2 text-right num text-danger-700">{formatNumber(l.daysLate)} ngày</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-4 flex justify-end">
+            <Button variant="tonal" size="sm" onClick={() => navigate('/library?tab=overdue')}>
+              {t('dashboard.viewDetails')}
+            </Button>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 export function DashboardPage() {
   const { data: me } = useMe();
   const navigate = useNavigate();
   const q = useQuery({ queryKey: ['dashboard'], queryFn: () => get<Dashboard>('/api/v1/reports/dashboard'), refetchInterval: 60_000 });
   const today = new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
-  const kpis = q.data
-    ? [
-        { label: t('dashboard.kpi.revenue'), value: formatVnd(q.data.today.grossVnd) },
-        { label: t('dashboard.kpi.orders'), value: formatNumber(q.data.today.orders) },
-        { label: t('dashboard.basket'), value: formatVnd(q.data.today.averageBasketVnd) },
-      ]
-    : null;
+  const d = q.data?.today;
 
   return (
     <>
@@ -368,11 +433,14 @@ export function DashboardPage() {
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       ) : (
         <div className="grid grid-cols-12 gap-6">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="col-span-12 md:col-span-6 xl:col-span-4">
-              {kpis ? <Kpi {...kpis[i]!} /> : <Skeleton className="h-[100px]" />}
+          <Card title={t('dashboard.summary')} subtitle={t('dashboard.summary.today')} className="col-span-12 max-sm:px-2">
+            <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
+              <Kpi label={t('dashboard.kpi.revenue')} value={d && formatVnd(d.grossVnd)} compact={d && formatVndCompact(d.grossVnd)} />
+              <Kpi label={t('dashboard.kpi.orders')} value={d && formatNumber(d.orders)} />
+              <Kpi label={t('dashboard.kpi.basket')} value={d && formatVnd(d.averageBasketVnd)} compact={d && formatVndCompact(d.averageBasketVnd)} unit={t('dashboard.kpi.perOrder')} />
             </div>
-          ))}
+          </Card>
+          {q.data?.libraryOverview && <LibraryCard data={q.data.libraryOverview} overdue={q.data.overdueLoans} />}
           <TrendCard />
           <ChannelCard />
           <Card title={t('dashboard.bestsellers')} className="col-span-12 lg:col-span-6">
@@ -433,39 +501,6 @@ export function DashboardPage() {
                 </>
               ) : (
                 <p className="text-ink-500">{t('dashboard.noData')}</p>
-              )}
-            </Card>
-          )}
-          {q.data?.libraryOverview && (
-            <Card title="Tổng quan thư viện" className="col-span-12">
-              <LibraryOverview data={q.data.libraryOverview} />
-              {!!q.data.overdueLoans.length && (
-                <>
-              <h3 className="mt-6 mb-2 text-sm font-semibold">Sách mượn quá hạn</h3>
-              <table className="w-full table-fixed text-sm">
-                <thead>
-                  <tr className="border-b border-paper-300">
-                    <th scope="col" className={th}>Sách</th>
-                    <th scope="col" className={th}>Người mượn</th>
-                    <th scope="col" className={`${th} w-24 text-right`}>Trễ</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-paper-300">
-                  {q.data.overdueLoans.map((l) => (
-                    <tr key={l.loanId}>
-                      <td className="truncate py-2">{l.title}</td>
-                      <td className="truncate py-2">{l.customerName}</td>
-                      <td className="py-2 text-right num text-danger-700">{formatNumber(l.daysLate)} ngày</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="mt-4 flex justify-end">
-                <Button variant="tonal" size="sm" onClick={() => navigate('/library?tab=overdue')}>
-                  {t('dashboard.viewDetails')}
-                </Button>
-              </div>
-                </>
               )}
             </Card>
           )}
