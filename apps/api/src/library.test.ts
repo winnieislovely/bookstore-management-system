@@ -279,6 +279,10 @@ describe('damage, loss, reservations and the cash book (FR-LIB-09a, FR-LIB-11, F
     expect(ov.collectedVnd).toBe(book.totals.all);
     expect(new Date(`${ov.from}T00:00:00Z`).getUTCDay()).toBe(1);
     expect((await call('GET', '/api/v1/reports/dashboard', owner)).body.libraryOverview).toEqual(ov);
+    // The dashboard trend carries the same library revenue, plus loan slips (FR-RPT-01).
+    const trend = (await call('GET', `/api/v1/reports/trend?from=${ov.from}&to=${ov.to}`, owner)).body.rows as { libraryVnd: number; librarySlips: number }[];
+    expect(trend.reduce((a, r) => a + r.libraryVnd, 0)).toBe(ov.collectedVnd);
+    expect(trend.reduce((a, r) => a + r.librarySlips, 0)).toBeGreaterThan(0);
     expect((await call('PUT', '/api/v1/admin/settings', owner, { 'library.overview_period': 'day' })).status).toBe(204);
     expect((await call('GET', '/api/v1/library/overview', librarian)).body).toMatchObject({ period: 'day', from: ov.to, to: ov.to });
     expect((await call('GET', '/api/v1/library/overview', cashier)).status).toBe(403);

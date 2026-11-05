@@ -1,7 +1,7 @@
 import { ORDER_SOURCE } from '../components/order-ui';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { Check, ListFilter } from 'lucide-react';
+import { ListFilter } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Button, Card, ErrorState, PageHeader, Skeleton } from '../components/ui';
@@ -108,13 +108,13 @@ function rangeError(r: RangeState): string | null {
 
 const shortDate = (day: string) => `${day.slice(8, 10)}/${day.slice(5, 7)}`;
 const rangeLabel = (r: RangeState) => (r.preset === 'custom' ? `${shortDate(r.from)} – ${formatDate(r.to)}` : t(`dashboard.range.${r.preset}`));
+/** The range as a card subtext: “30 ngày qua”, or the custom dates. */
+const rangeSubtext = (r: RangeState) => (r.preset === 'custom' ? rangeLabel(r) : t(`dashboard.range.${r.preset}Past`));
 
-/** Filter pill that opens a range popover: presets apply at once, a custom range on “Áp dụng” (Design §12.5). */
-function RangeFilter({ value, onChange }: { value: RangeState; onChange: (r: RangeState) => void }) {
+/** Open state for a header popover: closes on Escape or a click outside. */
+function usePopover() {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState({ from: value.from, to: value.to });
   const box = useRef<HTMLDivElement>(null);
-  const panelId = useId();
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false);
@@ -126,71 +126,160 @@ function RangeFilter({ value, onChange }: { value: RangeState; onChange: (r: Ran
       document.removeEventListener('keydown', esc);
     };
   }, [open]);
-  const draftError = rangeError({ preset: 'custom', ...draft });
-  const input = 'h-10 w-full rounded-md border border-paper-500 bg-white px-3 text-sm focus:border-navy-700 max-sm:text-base';
+  return { open, setOpen, box };
+}
 
+const popoverPanel = 'absolute right-0 z-30 mt-2 w-[280px] max-w-[calc(100vw-2rem)] rounded-lg border border-paper-300 bg-white p-2 shadow-md';
+const groupTitle = 'px-3 pt-2 pb-1 text-xs font-semibold text-ink-500';
+
+/** Radio group: 7 ngày / 30 ngày apply at once, Tùy chọn applies its dates on “Áp dụng” (Design §12.5). */
+function RangeSection({ value, onPick }: { value: RangeState; onPick: (r: RangeState) => void }) {
+  // The radio choice is local: Tùy chọn only takes effect on “Áp dụng”.
+  const [choice, setChoice] = useState<Preset>(value.preset);
+  const [draft, setDraft] = useState({ from: value.from, to: value.to });
+  const name = useId();
+  const draftError = rangeError({ preset: 'custom', ...draft });
+  const input = 'h-10 w-full rounded-md border border-paper-500 bg-white px-1.5 text-xs focus:border-navy-700 [&::-webkit-calendar-picker-indicator]:ml-0.5 [&::-webkit-calendar-picker-indicator]:w-3';
+  return (
+    <div role="radiogroup" aria-label={t('dashboard.range.label')}>
+      {PRESETS.map((p) => (
+        <label key={p} className="flex h-10 cursor-pointer items-center gap-3 rounded-md px-3 text-sm hover:bg-navy-50">
+          <input
+            type="radio"
+            name={name}
+            className="size-4 accent-navy-700"
+            checked={choice === p}
+            onChange={() => {
+              setChoice(p);
+              if (p !== 'custom') onPick({ preset: p, ...presetRange(p, value) });
+            }}
+          />
+          {t(`dashboard.range.${p}`)}
+        </label>
+      ))}
+      {choice === 'custom' && (
+        <div className="px-2 pt-1 pb-2">
+          <div className="grid grid-cols-2 gap-1.5">
+            <label className="flex min-w-0 flex-col gap-1 text-xs text-ink-700">
+              {t('dashboard.range.from')}
+              <input type="date" className={input} value={draft.from} max={draft.to || undefined} onChange={(e) => setDraft({ ...draft, from: e.target.value })} />
+            </label>
+            <label className="flex min-w-0 flex-col gap-1 text-xs text-ink-700">
+              {t('dashboard.range.to')}
+              <input type="date" className={input} value={draft.to} min={draft.from || undefined} onChange={(e) => setDraft({ ...draft, to: e.target.value })} />
+            </label>
+          </div>
+          {draftError && draft.from && draft.to && <p className="mt-2 text-xs text-danger-700">{draftError}</p>}
+          <Button variant="primary" size="sm" full className="mt-3" disabled={!!draftError} onClick={() => onPick({ preset: 'custom', ...draft })}>
+            {t('dashboard.range.apply')}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Filter pill labelled with the range; picking closes the popover (Doanh thu theo kênh, Design §12.5). */
+function RangeFilter({ value, onChange }: { value: RangeState; onChange: (r: RangeState) => void }) {
+  const { open, setOpen, box } = usePopover();
+  const panelId = useId();
   return (
     <div ref={box} className="relative">
-      <Button
-        size="sm"
-        icon={ListFilter}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={panelId}
-        aria-label={`${t('dashboard.range.label')}: ${rangeLabel(value)}`}
-        onClick={() => {
-          setDraft({ from: value.from, to: value.to });
-          setOpen(!open);
-        }}
-      >
+      <Button size="sm" icon={ListFilter} aria-haspopup="dialog" aria-expanded={open} aria-controls={panelId} aria-label={`${t('dashboard.range.label')}: ${rangeLabel(value)}`} onClick={() => setOpen(!open)}>
         {rangeLabel(value)}
       </Button>
       {open && (
-        <div id={panelId} role="dialog" aria-label={t('dashboard.range.label')} className="absolute right-0 z-30 mt-2 w-[280px] max-w-[calc(100vw-2rem)] rounded-lg border border-paper-300 bg-white p-2 shadow-md">
-          <ul>
-            {PRESETS.filter((p) => p !== 'custom').map((p) => (
-              <li key={p}>
-                <button
-                  type="button"
-                  className={clsx('flex h-10 w-full items-center justify-between rounded-md px-3 text-left text-sm hover:bg-navy-50', value.preset === p && 'font-semibold text-navy-700')}
-                  aria-pressed={value.preset === p}
-                  onClick={() => {
-                    onChange({ preset: p, ...presetRange(p, value) });
-                    setOpen(false);
-                  }}
-                >
-                  {t(`dashboard.range.${p}`)}
-                  {value.preset === p && <Check size={16} aria-hidden />}
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-2 border-t border-paper-300 px-3 pt-3 pb-2">
-            <p className="mb-2 text-xs font-semibold text-ink-500">{t('dashboard.range.custom')}</p>
-            <div className="grid grid-cols-2 gap-2">
-              <label className="flex flex-col gap-1 text-xs text-ink-700">
-                {t('dashboard.range.from')}
-                <input type="date" className={input} value={draft.from} max={draft.to || undefined} onChange={(e) => setDraft({ ...draft, from: e.target.value })} />
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-ink-700">
-                {t('dashboard.range.to')}
-                <input type="date" className={input} value={draft.to} min={draft.from || undefined} onChange={(e) => setDraft({ ...draft, to: e.target.value })} />
-              </label>
-            </div>
-            {draftError && draft.from && draft.to && <p className="mt-2 text-xs text-danger-700">{draftError}</p>}
-            <Button
-              variant="primary"
-              size="sm"
-              full
-              className="mt-3"
-              disabled={!!draftError}
-              onClick={() => {
-                onChange({ preset: 'custom', ...draft });
-                setOpen(false);
-              }}
-            >
-              {t('dashboard.range.apply')}
-            </Button>
+        <div id={panelId} role="dialog" aria-label={t('dashboard.range.label')} className={popoverPanel}>
+          <RangeSection
+            value={value}
+            onPick={(r) => {
+              onChange(r);
+              setOpen(false);
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Revenue trend: shop and library (FR-RPT-01, Design §12.5)
+
+type Series = 'sales' | 'library' | 'orders' | 'slips';
+type SeriesState = Record<Series, boolean>;
+const SERIES_GROUPS: { title: string; items: Series[] }[] = [
+  { title: 'Doanh thu', items: ['sales', 'library'] },
+  { title: 'Số đơn', items: ['orders', 'slips'] },
+];
+const SERIES: Record<Series, { label: string; color: string }> = {
+  sales: { label: 'Bán hàng', color: 'var(--color-navy-700)' },
+  library: { label: 'Thư viện', color: 'var(--color-olive-600)' },
+  orders: { label: 'Đơn bán', color: 'var(--color-sea-500)' },
+  slips: { label: 'Phiếu mượn', color: 'var(--color-chart-4)' },
+};
+const ALL_SERIES: SeriesState = { sales: true, library: true, orders: true, slips: true };
+
+/** Which series are shown, kept for the browser session. */
+function useSeries(): [SeriesState, (s: SeriesState) => void] {
+  const key = 'dashboard.trend.series';
+  const [state, setState] = useState<SeriesState>(() => {
+    try {
+      const saved = sessionStorage.getItem(key);
+      if (saved) return { ...ALL_SERIES, ...(JSON.parse(saved) as Partial<SeriesState>) };
+    } catch {
+      /* storage unavailable: show everything */
+    }
+    return ALL_SERIES;
+  });
+  const set = (s: SeriesState) => {
+    setState(s);
+    try {
+      sessionStorage.setItem(key, JSON.stringify(s));
+    } catch {
+      /* ignore */
+    }
+  };
+  return [state, set];
+}
+
+function Checkbox({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="flex h-10 cursor-pointer items-center gap-3 rounded-md px-3 text-sm hover:bg-navy-50">
+      <input type="checkbox" className="size-4 accent-navy-700" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      {label}
+    </label>
+  );
+}
+
+/** “Lọc”: series to show (Doanh thu, Số đơn) and the time range; changes apply at once (Design §12.5). */
+function TrendFilter({ series, onSeries, range, onRange }: { series: SeriesState; onSeries: (s: SeriesState) => void; range: RangeState; onRange: (r: RangeState) => void }) {
+  const { open, setOpen, box } = usePopover();
+  const panelId = useId();
+  const filtered = Object.values(series).some((v) => !v);
+  return (
+    <div ref={box} className="relative">
+      <Button size="sm" icon={ListFilter} aria-haspopup="dialog" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(!open)} className="relative">
+        {t('dashboard.filter')}
+        {filtered && <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-white bg-navy-700" role="img" aria-label={t('dashboard.filter.active')} />}
+      </Button>
+      {open && (
+        <div id={panelId} role="dialog" aria-label={t('dashboard.filter')} className={clsx(popoverPanel, 'max-h-[70vh] overflow-y-auto')}>
+          {SERIES_GROUPS.map((g, gi) => {
+            const on = g.items.filter((k) => series[k]).length;
+            return (
+              <div key={g.title} role="group" aria-labelledby={`${panelId}-${gi}`} className={clsx(gi > 0 && 'mt-1 border-t border-paper-300 pt-1')}>
+                <p id={`${panelId}-${gi}`} className={groupTitle}>{g.title}</p>
+                <Checkbox label="Tất cả" checked={on === g.items.length} onChange={(v) => onSeries({ ...series, ...Object.fromEntries(g.items.map((k) => [k, v])) })} />
+                {g.items.map((k) => (
+                  <Checkbox key={k} label={SERIES[k].label} checked={series[k]} onChange={(v) => onSeries({ ...series, [k]: v })} />
+                ))}
+              </div>
+            );
+          })}
+          <div className="mt-1 border-t border-paper-300 pt-1">
+            <p className={groupTitle}>Thời gian</p>
+            <RangeSection value={range} onPick={onRange} />
           </div>
         </div>
       )}
@@ -248,31 +337,53 @@ function Kpi({ label, value, compact, unit, to, tone }: { label: string; value: 
 
 const LIBRARY_PERIOD: Record<LibraryOverviewData['period'], string> = { day: 'Số liệu hôm nay', week: 'Số liệu tuần này', month: 'Số liệu tháng này' };
 
+interface TrendRow {
+  key: string;
+  salesVnd: number;
+  salesOrders: number;
+  libraryVnd: number;
+  librarySlips: number;
+}
+
 /** Every day (or month) in the range, so empty periods show as zero. */
-function fillPeriods(rows: SalesRow[], from: string, to: string, byMonth: boolean): SalesRow[] {
+function fillTrend(rows: TrendRow[], from: string, to: string, byMonth: boolean): TrendRow[] {
   const map = new Map(rows.map((r) => [r.key, r]));
-  const out: SalesRow[] = [];
+  const zero = (key: string): TrendRow => ({ key, salesVnd: 0, salesOrders: 0, libraryVnd: 0, librarySlips: 0 });
+  const out: TrendRow[] = [];
   if (byMonth) {
     for (let m = from.slice(0, 7); m <= to.slice(0, 7); ) {
-      out.push(map.get(m) ?? { key: m, orders: 0, grossVnd: 0 });
+      out.push(map.get(m) ?? zero(m));
       const [y, mo] = m.split('-').map(Number) as [number, number];
       m = mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`;
     }
   } else {
-    for (let d = from; d <= to; d = addDays(d, 1)) out.push(map.get(d) ?? { key: d, orders: 0, grossVnd: 0 });
+    for (let d = from; d <= to; d = addDays(d, 1)) out.push(map.get(d) ?? zero(d));
   }
   return out;
 }
 
 const periodLabel = (key: string) => (key.length === 7 ? `${key.slice(5)}/${key.slice(0, 4)}` : formatDate(key));
 
-/** Revenue trend: navy bars (revenue, left axis) with a sea line for order count (right axis), Design §12.5. */
-function TrendChart({ data }: { data: SalesRow[] }) {
-  if (!data.some((d) => d.grossVnd || d.orders)) return <p className="text-ink-500">{t('dashboard.noData')}</p>;
-  const maxV = Math.max(...data.map((d) => d.grossVnd), 1);
-  const maxO = Math.max(...data.map((d) => d.orders), 1);
-  const padL = 64;
-  const padR = 36;
+/** A bar segment with only its top corners rounded. */
+function topRounded(x: number, y: number, w: number, h: number, r: number) {
+  const rr = Math.max(0, Math.min(r, w / 2, h));
+  return `M${x},${y + h} V${y + rr} Q${x},${y} ${x + rr},${y} H${x + w - rr} Q${x + w},${y} ${x + w},${y + rr} V${y + h} Z`;
+}
+
+/** Stacked Bán hàng / Thư viện bars (left axis) with Đơn bán / Phiếu mượn lines (right axis), Design §12.5. */
+function TrendChart({ data, show }: { data: TrendRow[]; show: SeriesState }) {
+  const bars = (['sales', 'library'] as const).filter((k) => show[k]);
+  const lines = (['orders', 'slips'] as const).filter((k) => show[k]);
+  if (!bars.length && !lines.length) return <p className="text-ink-500">{t('dashboard.trend.pickOne')}</p>;
+  const amount = (d: TrendRow, k: 'sales' | 'library') => (k === 'sales' ? d.salesVnd : d.libraryVnd);
+  const count = (d: TrendRow, k: 'orders' | 'slips') => (k === 'orders' ? d.salesOrders : d.librarySlips);
+  const stack = (d: TrendRow) => bars.reduce((a, k) => a + amount(d, k), 0);
+  if (!data.some((d) => stack(d) || lines.some((k) => count(d, k)))) return <p className="text-ink-500">{t('dashboard.noData')}</p>;
+  const maxV = Math.max(...data.map(stack), 1);
+  // An even maximum keeps the middle gridline label a whole number of orders.
+  const maxO = Math.max(2, Math.ceil(Math.max(...data.flatMap((d) => lines.map((k) => count(d, k))), 0) / 2) * 2);
+  const padL = bars.length ? 64 : 12;
+  const padR = lines.length ? 36 : 12;
   const w = 640;
   const h = 180;
   const top = 12;
@@ -280,51 +391,80 @@ function TrendChart({ data }: { data: SalesRow[] }) {
   const bw = plotW / data.length;
   const y = (v: number, max: number) => h - (v / max) * (h - top);
   const cx = (i: number) => padL + i * bw + bw / 2;
-  const line = data.map((d, i) => `${i ? 'L' : 'M'}${cx(i)},${y(d.orders, maxO)}`).join(' ');
-  const last = data[data.length - 1]!;
+  const tip = (d: TrendRow) =>
+    [
+      periodLabel(d.key),
+      ...bars.map((k) => `${SERIES[k].label}: ${formatVnd(amount(d, k))}`),
+      ...(bars.length > 1 ? [`Tổng: ${formatVnd(stack(d))}`] : []),
+      ...lines.map((k) => `${SERIES[k].label}: ${formatNumber(count(d, k))}`),
+    ].join('\n');
   return (
     <figure>
-      <svg
-        viewBox={`0 0 ${w} ${h + 24}`}
-        className="h-56 w-full"
-        role="img"
-        aria-label={`${t('dashboard.trend')}: ${data.map((d) => `${periodLabel(d.key)} ${formatVnd(d.grossVnd)}, ${t('dashboard.ordersCount', { n: formatNumber(d.orders) })}`).join('; ')}`}
-      >
+      <svg viewBox={`0 0 ${w} ${h + 24}`} className="h-56 w-full" role="img" aria-label={`${t('dashboard.trend')}: ${data.map((d) => tip(d).replaceAll('\n', ', ')).join('; ')}`}>
         {[0, 0.5, 1].map((f) => (
           <g key={f}>
-            <line x1={padL} x2={w - padR} y1={y(f * maxV, maxV)} y2={y(f * maxV, maxV)} stroke="var(--color-paper-300)" strokeDasharray={f ? '3 3' : undefined} />
-            <text x={padL - 6} y={y(f * maxV, maxV) + 4} textAnchor="end" fontSize="11" fill="var(--color-ink-500)" className="num">
-              {formatVndCompact(Math.round(f * maxV))}
-            </text>
-            <text x={w - padR + 6} y={y(f * maxO, maxO) + 4} fontSize="11" fill="var(--color-sea-700)" className="num">
-              {formatNumber(Math.round(f * maxO))}
-            </text>
+            <line x1={padL} x2={w - padR} y1={y(f, 1)} y2={y(f, 1)} stroke="var(--color-paper-300)" strokeDasharray={f ? '3 3' : undefined} />
+            {!!bars.length && (
+              <text x={padL - 6} y={y(f, 1) + 4} textAnchor="end" fontSize="11" fill="var(--color-ink-500)" className="num">
+                {formatVndCompact(Math.round(f * maxV))}
+              </text>
+            )}
+            {!!lines.length && (
+              <text x={w - padR + 6} y={y(f, 1) + 4} fontSize="11" fill="var(--color-ink-500)" className="num">
+                {formatNumber(Math.round(f * maxO))}
+              </text>
+            )}
           </g>
         ))}
         {data.map((d, i) => {
-          const bh = h - y(d.grossVnd, maxV);
+          let base = h;
+          const segs = bars.map((k) => ({ k, v: amount(d, k) })).filter((s) => s.v > 0);
+          const x = padL + i * bw + bw * 0.15;
+          const bwid = bw * 0.7;
           return (
-            <rect key={d.key} x={padL + i * bw + bw * 0.15} y={h - bh} width={bw * 0.7} height={bh} rx="2" fill="var(--color-navy-700)">
-              <title>{`${periodLabel(d.key)}: ${formatVnd(d.grossVnd)} · ${t('dashboard.ordersCount', { n: formatNumber(d.orders) })}`}</title>
-            </rect>
+            <g key={d.key}>
+              {segs.map((s, si) => {
+                const sh = h - y(s.v, maxV);
+                base -= sh;
+                return si === segs.length - 1 ? (
+                  <path key={s.k} d={topRounded(x, base, bwid, sh, 3)} fill={SERIES[s.k].color} />
+                ) : (
+                  <rect key={s.k} x={x} y={base} width={bwid} height={sh} fill={SERIES[s.k].color} />
+                );
+              })}
+            </g>
           );
         })}
-        <path d={line} fill="none" stroke="var(--color-sea-500)" strokeWidth="2" strokeLinejoin="round" />
-        {data.length <= 92 && data.map((d, i) => <circle key={d.key} cx={cx(i)} cy={y(d.orders, maxO)} r="2.5" fill="var(--color-sea-500)" />)}
+        {lines.map((k) => (
+          <g key={k}>
+            <path d={data.map((d, i) => `${i ? 'L' : 'M'}${cx(i)},${y(count(d, k), maxO)}`).join(' ')} fill="none" stroke={SERIES[k].color} strokeWidth="2" strokeLinejoin="round" />
+            {data.length <= 92 && data.map((d, i) => <circle key={d.key} cx={cx(i)} cy={y(count(d, k), maxO)} r="2.5" fill={SERIES[k].color} />)}
+          </g>
+        ))}
+        {/* Full-height hover targets carry the per-period tooltip. */}
+        {data.map((d, i) => (
+          <rect key={d.key} x={padL + i * bw} y={top} width={bw} height={h - top} fill="transparent">
+            <title>{tip(d)}</title>
+          </rect>
+        ))}
         <text x={padL} y={h + 18} fontSize="12" fill="var(--color-ink-500)">
           {periodLabel(data[0]!.key)}
         </text>
         <text x={w - padR} y={h + 18} fontSize="12" textAnchor="end" fill="var(--color-ink-500)">
-          {periodLabel(last.key)}
+          {periodLabel(data[data.length - 1]!.key)}
         </text>
       </svg>
-      <figcaption className="mt-2 flex flex-wrap gap-4 text-xs text-ink-700">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="size-2.5 rounded-sm bg-navy-700" aria-hidden /> {t('dashboard.revenue')}
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-0.5 w-4 rounded bg-sea-500" aria-hidden /> {t('dashboard.orders')}
-        </span>
+      <figcaption className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-700">
+        {bars.map((k) => (
+          <span key={k} className="inline-flex items-center gap-1.5">
+            <span className="size-2.5 rounded-sm" style={{ background: SERIES[k].color }} aria-hidden /> {SERIES[k].label}
+          </span>
+        ))}
+        {lines.map((k) => (
+          <span key={k} className="inline-flex items-center gap-1.5">
+            <span className="h-0.5 w-4 rounded" style={{ background: SERIES[k].color }} aria-hidden /> {SERIES[k].label}
+          </span>
+        ))}
       </figcaption>
     </figure>
   );
@@ -332,12 +472,31 @@ function TrendChart({ data }: { data: SalesRow[] }) {
 
 function TrendCard() {
   const [range, setRange] = useRange('trend', '30d');
+  const [series, setSeries] = useSeries();
   const err = rangeError(range);
   const byMonth = !err && daysBetween(range.from, range.to) > 92;
-  const q = useQuery({ ...salesQuery(byMonth ? 'month' : 'day', range), enabled: !err });
+  const groupBy = byMonth ? 'month' : 'day';
+  const q = useQuery({
+    queryKey: ['dashboard', 'trend', groupBy, range.from, range.to],
+    queryFn: () => get<{ rows: TrendRow[] }>(`/api/v1/reports/trend?groupBy=${groupBy}&from=${range.from}&to=${range.to}`),
+    enabled: !err,
+  });
   return (
-    <Card title={t('dashboard.trend')} className="col-span-12 xl:col-span-8" action={<RangeFilter value={range} onChange={setRange} />}>
-      {err ? <p className="text-ink-500">{err}</p> : q.isError ? <ErrorState error={q.error} onRetry={() => q.refetch()} /> : q.data ? <TrendChart data={fillPeriods(q.data.rows, range.from, range.to, byMonth)} /> : <Skeleton className="h-56" />}
+    <Card
+      title={t('dashboard.trend')}
+      subtitle={rangeSubtext(range)}
+      className="col-span-12 xl:col-span-8"
+      action={<TrendFilter series={series} onSeries={setSeries} range={range} onRange={setRange} />}
+    >
+      {err ? (
+        <p className="text-ink-500">{err}</p>
+      ) : q.isError ? (
+        <ErrorState error={q.error} onRetry={() => q.refetch()} />
+      ) : q.data ? (
+        <TrendChart data={fillTrend(q.data.rows, range.from, range.to, byMonth)} show={series} />
+      ) : (
+        <Skeleton className="h-56" />
+      )}
     </Card>
   );
 }

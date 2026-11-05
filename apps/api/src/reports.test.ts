@@ -93,6 +93,17 @@ describe('dashboard (FR-RPT-01)', () => {
   });
 });
 
+describe('revenue trend (FR-RPT-01)', () => {
+  it('gives shop revenue and order count per period, for anyone with report.view', async () => {
+    const day = (await get(`/api/v1/reports/trend?${range}`, viewer)).body;
+    expect(day.rows).toEqual([{ key: TODAY, salesVnd: 233000, salesOrders: 2, libraryVnd: 0, librarySlips: 0 }]);
+    const month = (await get(`/api/v1/reports/trend?from=2026-10-01&to=${TODAY}&groupBy=month`, manager)).body;
+    expect(month.rows).toEqual([{ key: '2026-10', salesVnd: 233000, salesOrders: 2, libraryVnd: 0, librarySlips: 0 }]);
+    expect((await get(`/api/v1/reports/trend?${range}`, cashier)).status).toBe(403);
+    expect((await get(`/api/v1/reports/trend?from=2025-01-01&to=${TODAY}`, manager)).status).toBe(400);
+  });
+});
+
 describe('sales report (FR-RPT-02)', () => {
   it('groups by item with VAT, returns, net and margin (profit permission)', async () => {
     const r = (await get(`/api/v1/reports/sales?${range}&groupBy=item`, manager)).body;

@@ -105,6 +105,46 @@ export async function dashboard(ctx: Ctx) {
 }
 
 // =============================================================================================
+// Dashboard revenue trend (FR-RPT-01, TDD §4.11): shop and library, by day or month
+
+export const TrendSchema = RangeSchema.extend({ groupBy: z.enum(['day', 'month']).default('day') });
+
+export interface TrendRow {
+  key: string;
+  salesVnd: number;
+  salesOrders: number;
+  libraryVnd: number;
+  librarySlips: number;
+}
+
+/**
+ * Shop sales (gross of sale documents by sale date) and library revenue (cash-book receipts less
+ * refunds by receipt date) with sales-order and loan-slip counts. Library fees are not taken at the
+ * POS, so the two never overlap. Only periods with activity are returned.
+ */
+export async function trend(ctx: Ctx, input: z.input<typeof TrendSchema>): Promise<{ rows: TrendRow[] }> {
+  requirePermission(ctx, 'report.view');
+  const q = TrendSchema.parse(input);
+  const { start, end } = storeRange(q.from, q.to);
+  const fmt = q.groupBy === 'month' ? 'YYYY-MM' : 'YYYY-MM-DD';
+  const res = await ctx.db.execute<{ key: string; sales: string; orders: number; lib: string; slips: number }>(sql`
+    with s as (
+      select to_char(d.sold_at at time zone ${TZ}, ${fmt}) as key, sum(d.total_vnd) as sales, count(*)::int as orders
+      from reports.sale_doc d
+      where d.sold_at >= ${tsParam(start)} and d.sold_at < ${tsParam(end)} group by 1),
+    l as (
+      select to_char(p.received_at at time zone ${TZ}, ${fmt}) as key, sum(p.amount_vnd) as lib,
+             count(*) filter (where p.kind = 'receipt' and exists (select 1 from library.loan x where x.slip_id = p.id))::int as slips
+      from library.lib_payment p
+      where p.received_at >= ${tsParam(start)} and p.received_at < ${tsParam(end)} group by 1)
+    select coalesce(s.key, l.key) as key, coalesce(s.sales, 0) as sales, coalesce(s.orders, 0) as orders,
+           coalesce(l.lib, 0) as lib, coalesce(l.slips, 0) as slips
+    from s full join l on l.key = s.key
+    order by 1`);
+  return { rows: res.map((r) => ({ key: r.key, salesVnd: n(r.sales), salesOrders: r.orders, libraryVnd: n(r.lib), librarySlips: r.slips })) };
+}
+
+// =============================================================================================
 // Sales (FR-RPT-02)
 
 export const SalesReportSchema = RangeSchema.extend({

@@ -7,6 +7,9 @@ import { defineRoute } from '../http/route.js';
 /** Reports, exports and menu badges (TDD §6.2, FR-RPT, FR-ADM-08). */
 export function reportRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'get', path: '/api/v1/reports/dashboard', access: 'report.view', summary: 'Dashboard figures' }, async ({ ctx }) => reports.dashboard(ctx));
+  defineRoute(app, { method: 'get', path: '/api/v1/reports/trend', access: 'report.view', summary: 'Dashboard revenue trend (shop and library)', query: reports.TrendSchema }, async ({ ctx, query }) =>
+    reports.trend(ctx, query),
+  );
   defineRoute(app, { method: 'get', path: '/api/v1/reports/sales', access: 'report.view', summary: 'Sales report', query: reports.SalesReportSchema }, async ({ ctx, query }) =>
     reports.sales(ctx, query),
   );
