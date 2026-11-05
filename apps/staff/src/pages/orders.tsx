@@ -4,8 +4,8 @@ import clsx from 'clsx';
 import { ArrowLeft, Calculator, CheckCircle, HandCoins, MoreHorizontal, Package, PackageCheck, Plus, RefreshCw, Store, Trash2, Truck, Undo2, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ConfirmDialog, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, SelectionBar, TextArea, TimeFilter, timeLabel, timeRange, toast, useDebounced, useListParam, useParam, type Column } from '../components/data';
-import { Combobox, CopyCode, ORDER_SOURCE, ORDER_STATUS, OrderStatusChip, PaymentChip, REVIEW_REASON, StatusTimeline, type TimelineEntry } from '../components/order-ui';
+import { ConfirmDialog, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useDebounced, useListParam, useParam, type Column } from '../components/data';
+import { Combobox, CopyCode, ORDER_SOURCE, OrderStatusChip, PaymentChip, REVIEW_REASON, StatusTimeline, type TimelineEntry } from '../components/order-ui';
 import { ProductSearch, hitTitle, type ProductHit } from '../components/product-search';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton } from '../components/ui';
 import { ApiError, api, get, post } from '../lib/api';
@@ -13,7 +13,7 @@ import { formatDateTime, formatNumber, formatPhone, formatRelative, formatVnd } 
 import { can, useMe } from '../lib/session';
 import { Dialog, MoneyInput } from '../pos/widgets';
 
-/** Orders & delivery – “Giao hàng” (FR-ORD-01..13, FR-SOC-03, Design §12.9, §12.3, §12.4). */
+/** Delivery – “Giao hàng”: confirmed carrier orders and social-order entry (FR-ORD-01/02/10/11, FR-SOC-03, Design §12.9, §12.3, §12.4). */
 
 interface OrderRow {
   id: string;
@@ -33,25 +33,22 @@ interface OrderRow {
   trackingNo: string | null;
 }
 
-const STATUS_KEYS = Object.keys(ORDER_STATUS);
 const CONFIRMABLE = new Set(['new', 'pending_review']);
+/** Delivery stages (FR-ORD-01). */
+const STAGES: Record<string, string> = { waiting: 'Chờ tạo vận đơn', shipping: 'Đang giao', delivered: 'Đã giao', failed: 'Giao thất bại / hoàn về' };
 
 export function OrdersPage() {
   const navigate = useNavigate();
-  const { data: me } = useMe();
   const [q, setQ] = useParam('q');
-  const [status, setStatus] = useListParam('status');
+  const [stage, setStage] = useListParam('stage');
   const [source, setSource] = useListParam('source');
   const [time, setTime] = useParam('time');
   const [page, setPage] = useParam('page', '1');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [bulkBusy, setBulkBusy] = useState(false);
-  const qc = useQueryClient();
-  const query = { q: q || undefined, status: status.join(',') || undefined, source: source.join(',') || undefined, ...timeRange(time), page: Number(page), limit: 40 };
+  const query = { scope: 'delivery', q: q || undefined, stage: stage.join(',') || undefined, source: source.join(',') || undefined, ...timeRange(time), page: Number(page), limit: 40 };
   // The list refreshes itself while open (20-second polling, TDD §4.5 fallback; FR-ORD-03).
   const list = useQuery({
     queryKey: ['orders', query],
-    queryFn: () => get<{ items: OrderRow[]; total: number; counts: Record<string, number> }>('/api/v1/orders', query),
+    queryFn: () => get<{ items: OrderRow[]; total: number; stages?: Record<string, number> }>('/api/v1/orders', query),
     refetchInterval: 20_000,
   });
   const [, tick] = useState(0);
@@ -61,7 +58,6 @@ export function OrdersPage() {
   }, []);
 
   const rows = list.data?.items;
-  const picked = (rows ?? []).filter((r) => selected.has(r.id));
   const columns: Column<OrderRow>[] = [
     {
       header: 'Mã đơn',
@@ -87,25 +83,10 @@ export function OrdersPage() {
     { header: 'Tổng tiền', align: 'right', cell: (r) => formatVnd(r.totalVnd) },
     { header: 'Thanh toán', cell: (r) => <PaymentChip method={r.paymentMethod} paidAt={r.paidAt} status={r.status} /> },
     { header: 'Trạng thái', cell: (r) => <OrderStatusChip status={r.status} reasons={r.reviewReasons} /> },
+    { header: 'Vận đơn', cell: (r) => (r.trackingNo ? <span className="code">{r.trackingNo}</span> : <span className="text-ink-500">—</span>) },
     { header: 'Thời gian', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.createdAt) },
   ];
-  const counts = list.data?.counts ?? {};
-
-  const bulkConfirm = async () => {
-    setBulkBusy(true);
-    try {
-      const r = await post<{ confirmed: number; results: { id: string; ok: boolean; message?: string }[] }>('/api/v1/orders/bulk-confirm', { ids: picked.map((p) => p.id) });
-      const failed = r.results.filter((x) => !x.ok);
-      if (r.confirmed) toast.success(`Đã xác nhận ${r.confirmed} đơn.`);
-      for (const f of failed.slice(0, 3)) toast.error(f.message ?? 'Không xác nhận được.');
-      setSelected(new Set(failed.map((f) => f.id)));
-      await qc.invalidateQueries({ queryKey: ['orders'] });
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setBulkBusy(false);
-    }
-  };
+  const stages = list.data?.stages ?? {};
 
   return (
     <>
@@ -124,7 +105,7 @@ export function OrdersPage() {
               Đối soát COD
             </Button>
             <Button variant="primary" icon={Plus} onClick={() => navigate('/orders/new')}>
-              Tạo đơn
+              Tạo đơn giao
             </Button>
           </>
         }
@@ -133,24 +114,12 @@ export function OrdersPage() {
         <SearchBox value={q} onChange={setQ} placeholder="Tìm mã đơn, người nhận, SĐT, mã vận đơn…" />
         <FilterMenu
           groups={[
-            { label: 'Trạng thái', options: STATUS_KEYS.map((k) => ({ key: k, label: ORDER_STATUS[k]!.label, count: counts[k] ?? 0 })), values: status, onChange: setStatus },
+            { label: 'Giai đoạn', options: Object.entries(STAGES).map(([k, label]) => ({ key: k, label, count: stages[k] ?? 0 })), values: stage, onChange: setStage },
             { label: 'Kênh', options: ORDER_SOURCES.map((k) => ({ key: k, label: ORDER_SOURCE[k]! })), values: source, onChange: setSource },
             { kind: 'custom', label: 'Thời gian', summary: timeLabel(time), active: !!time, onClear: () => setTime(''), content: <TimeFilter value={time} onChange={setTime} /> },
           ]}
         />
       </div>
-      {picked.length > 0 && (
-        <SelectionBar
-          items={picked.map((p) => ({ key: p.id, label: p.recipient.name, code: p.docNo }))}
-          onRemove={(k) => setSelected(new Set([...selected].filter((x) => x !== k)))}
-          onClear={() => setSelected(new Set())}
-          actions={
-            <Button size="sm" variant="primary" icon={CheckCircle} loading={bulkBusy} disabled={!picked.some((p) => CONFIRMABLE.has(p.status))} onClick={bulkConfirm}>
-              Xác nhận đơn
-            </Button>
-          }
-        />
-      )}
       <DataTable
         columns={columns}
         rows={rows}
@@ -158,9 +127,8 @@ export function OrdersPage() {
         onRow={(r) => navigate(`/orders/${r.id}`)}
         error={list.error}
         onRetry={() => list.refetch()}
-        minWidth={980}
-        {...(can(me, 'online.manage') && { selection: { selected, onChange: setSelected } })}
-        empty={{ icon: Truck, title: q || status.length || source.length || time ? 'Không có đơn phù hợp' : 'Chưa có đơn online nào', help: 'Đơn từ website, mạng xã hội và điện thoại sẽ hiện ở đây.' }}
+        minWidth={1040}
+        empty={{ icon: Truck, title: q || stage.length || source.length || time ? 'Không có đơn phù hợp' : 'Chưa có đơn cần giao', help: 'Đơn đã xác nhận cần giao qua đơn vị vận chuyển sẽ hiện ở đây. Đơn mạng xã hội tạo bằng nút Tạo đơn giao.' }}
       />
       <Pager page={Number(page)} hasMore={(rows?.length ?? 0) === 40} {...(list.data && { total: list.data.total })} onPage={(p) => setPage(String(p))} />
     </>
@@ -291,7 +259,7 @@ export function OrderNewPage() {
     if (!f.phone.trim() || !f.name.trim()) return setError('Cần nhập số điện thoại và tên người nhận.');
     setBusy(true);
     try {
-      const r = await api<{ id: string; docNo: string }>('POST', '/api/v1/orders', {
+      const r = await api<{ id: string; docNo: string; status: string }>('POST', '/api/v1/orders', {
         headers: { 'idempotency-key': crypto.randomUUID() },
         body: {
           ...body,
@@ -303,8 +271,19 @@ export function OrderNewPage() {
           note: f.note.trim() || null,
         },
       });
-      toast.success(`Đã tạo đơn ${r.docNo}.`);
+      // “Tạo đơn giao”: the order is confirmed at once and its GHN shipment is created in the same step (FR-ORD-02).
+      if (f.delivery === 'ship' && r.status === 'confirmed') {
+        try {
+          await post(`/api/v1/orders/${r.id}/shipment`, { carrier: 'ghn' });
+          toast.success(`Đã tạo đơn ${r.docNo} và vận đơn.`);
+        } catch (e) {
+          toast.error(`Đã tạo đơn ${r.docNo} nhưng chưa tạo được vận đơn: ${(e as Error).message} Hãy tạo vận đơn từ đơn này.`);
+        }
+      } else {
+        toast.success(`Đã tạo đơn ${r.docNo}.`);
+      }
       void qc.invalidateQueries({ queryKey: ['orders'] });
+      void qc.invalidateQueries({ queryKey: ['order-list'] });
       navigate(`/orders/${r.id}`);
     } catch (e) {
       setError(e instanceof ApiError && e.code === 'approval_required' ? 'Giảm giá vượt hạn mức của bạn. Hãy giảm bớt hoặc nhờ quản lý tạo đơn.' : (e as Error).message);
@@ -323,7 +302,7 @@ export function OrderNewPage() {
             <ArrowLeft size={16} aria-hidden /> Giao hàng
           </Link>
         }
-        title="Tạo đơn"
+        title="Tạo đơn giao"
       />
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex min-w-0 flex-col gap-6">
@@ -549,7 +528,7 @@ export function OrderNewPage() {
           Hủy
         </Button>
         <Button variant="primary" icon={Plus} loading={busy} onClick={save}>
-          Tạo đơn
+          Tạo đơn giao
         </Button>
       </div>
     </div>
@@ -628,7 +607,12 @@ export function OrderDetailPage() {
   const refresh = async () => {
     await order.refetch();
     void qc.invalidateQueries({ queryKey: ['orders'] });
+    void qc.invalidateQueries({ queryKey: ['order-list'] });
   };
+  // Cashiers may confirm website orders but do not work deliveries (FR-ORD-03, SRS Appendix A).
+  const works = can(me, 'online.manage');
+  // Unconfirmed and store-pickup orders live on Đơn hàng; the rest are followed on Giao hàng.
+  const onOrders = CONFIRMABLE.has(o.status) || o.delivery === 'pickup' || o.status === 'cancelled';
   const act = async (path: string, ok: string) => {
     setBusy(true);
     try {
@@ -662,6 +646,8 @@ export function OrderDetailPage() {
         Xác nhận đơn
       </Button>
     );
+  } else if (!works) {
+    primary = null;
   } else if (o.status === 'confirmed') {
     primary = (
       <Button variant="primary" icon={Package} loading={busy} onClick={() => act('pack', 'Đã chuyển sang đóng gói.')}>
@@ -724,13 +710,13 @@ export function OrderDetailPage() {
     <>
       <PageHeader
         breadcrumb={
-          <Link to="/orders" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Giao hàng
+          <Link to={onOrders ? '/sales' : '/orders'} className="inline-flex items-center gap-1 hover:underline">
+            <ArrowLeft size={16} aria-hidden /> {onOrders ? 'Đơn hàng' : 'Giao hàng'}
           </Link>
         }
         title={o.docNo}
         actions={primary}
-        menu={(cancellable || returnable || o.status === 'return_requested') && <Button variant="ghost" icon={MoreHorizontal} aria-label="Thao tác khác" onClick={() => setDialog('menu')} />}
+        menu={works && (cancellable || returnable || o.status === 'return_requested') && <Button variant="ghost" icon={MoreHorizontal} aria-label="Thao tác khác" onClick={() => setDialog('menu')} />}
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <OrderStatusChip status={o.status} reasons={o.reviewReasons} />

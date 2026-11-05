@@ -43,6 +43,13 @@ type OrderRow = typeof schema.webOrder.$inferSelect;
 const money = z.number().int().min(0);
 const REF = 'web_order';
 
+/** Viewing and confirming an order: online staff, or anyone allowed to confirm website orders (FR-ORD-03). */
+function requireOrderAccess(ctx: Ctx) {
+  if (!ctx.actor) throw errors.unauthenticated();
+  if (!can(ctx.actor, 'online.manage') && !can(ctx.actor, 'online.confirm')) throw errors.forbidden('online.confirm');
+  return ctx.actor;
+}
+
 /** `a,b` (or an already-split array) → ["a", "b"], each checked against the allowed values; empty → undefined. */
 const csvEnum = <T extends string>(values: readonly [T, ...T[]]) =>
   z
@@ -419,7 +426,12 @@ export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof Creat
     failedDeliveries: await failedDeliveries(tx, phoneE164),
     settings: { highValueVnd: cfg['order.review_high_value_vnd'], failedDeliveries: cfg['order.review_failed_deliveries'] },
   });
-  const status = initialOrderStatus(reasons);
+  // A social or phone order keyed by staff (“Tạo đơn giao”) is confirmed at once – no review and no
+  // transfer check before the shipment (FR-ORD-02). It needs its stock held; otherwise it waits for
+  // stock like any order. Website orders go through review and confirmation on Orders (FR-ORD-03).
+  const staffConfirmed = opts.createdBy !== null && data.source !== 'website' && allReserved;
+  const status = staffConfirmed ? 'confirmed' : initialOrderStatus(reasons);
+  if (staffConfirmed) reasons.length = 0;
   await tx.update(schema.webOrder).set({ status, reviewReasons: reasons }).where(eq(schema.webOrder.id, orderId));
   await tx.insert(schema.orderEvent).values({ orderId, fromStatus: null, toStatus: status, actorId: opts.createdBy, at: now, reason: reasons.length ? reasons.join(',') : null });
 
@@ -452,6 +464,9 @@ export const OrdersQuery = z.object({
   q: z.string().trim().max(100).optional(),
   status: csvEnum(Object.keys(WEB_ORDER) as [OrderStatus, ...OrderStatus[]]),
   source: csvEnum(ORDER_SOURCES),
+  /** The Delivery screen: confirmed orders shipped by carrier, by stage (FR-ORD-01). */
+  scope: z.enum(['all', 'delivery']).default('all'),
+  stage: csvEnum(['waiting', 'shipping', 'delivered', 'failed'] as const),
   from: z.iso.datetime().optional(),
   to: z.iso.datetime().optional(),
   page: z.coerce.number().int().min(1).default(1),
@@ -467,6 +482,7 @@ export async function listOrders(ctx: Ctx, input: z.input<typeof OrdersQuery>) {
   const o = schema.webOrder;
   const where: SQL[] = [];
   if (q.source) where.push(inArray(o.source, q.source));
+  if (q.scope === 'delivery') where.push(sql`${o.delivery} = 'ship' and ${o.status} not in ('new', 'pending_review', 'cancelled')`);
   if (q.from) where.push(gte(o.createdAt, new Date(q.from)));
   if (q.to) where.push(lte(o.createdAt, new Date(q.to)));
   if (q.q) {
@@ -480,7 +496,14 @@ export async function listOrders(ctx: Ctx, input: z.input<typeof OrdersQuery>) {
   }
   const base = where.length ? and(...where) : undefined;
   const counts = await ctx.db.select({ status: o.status, n: sql<number>`count(*)::int` }).from(o).where(base).groupBy(o.status);
-  const filtered = q.status ? and(base, inArray(o.status, q.status)) : base;
+  const stageOf = sql<string>`(case
+      when ${o.status} in ('confirmed', 'packing') then 'waiting'
+      when ${o.status} = 'shipping' then 'shipping'
+      when ${o.status} = 'done' then 'delivered'
+      else 'failed' end)`;
+  const stageCounts = q.scope === 'delivery' ? await ctx.db.select({ stage: stageOf, n: sql<number>`count(*)::int` }).from(o).where(base).groupBy(stageOf) : [];
+  let filtered = q.status ? and(base, inArray(o.status, q.status)) : base;
+  if (q.stage) filtered = and(filtered, sql`${stageOf} in (${sql.join(q.stage.map((x) => sql`${x}`), sql`, `)})`);
   const items = await ctx.db
     .select({
       id: o.id,
@@ -506,11 +529,17 @@ export async function listOrders(ctx: Ctx, input: z.input<typeof OrdersQuery>) {
     .limit(q.limit)
     .offset((q.page - 1) * q.limit);
   const [total] = await ctx.db.select({ n: sql<number>`count(*)::int` }).from(o).where(filtered);
-  return { items, page: q.page, total: total?.n ?? 0, counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) as Partial<Record<OrderStatus, number>> };
+  return {
+    items,
+    page: q.page,
+    total: total?.n ?? 0,
+    counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) as Partial<Record<OrderStatus, number>>,
+    ...(q.scope === 'delivery' && { stages: Object.fromEntries(stageCounts.map((c) => [c.stage, c.n])) as Record<string, number> }),
+  };
 }
 
 export async function getOrder(ctx: Ctx, id: string, opts: { markRead?: boolean } = { markRead: true }) {
-  requirePermission(ctx, 'online.manage');
+  requireOrderAccess(ctx);
   const [o] = await ctx.db.select().from(schema.webOrder).where(eq(schema.webOrder.id, id));
   if (!o) throw errors.notFound('Đơn hàng');
   if (opts.markRead && !o.readAt) await ctx.db.update(schema.webOrder).set({ readAt: ctx.clock.now() }).where(eq(schema.webOrder.id, id));
@@ -605,7 +634,7 @@ async function confirmTx(tx: Tx, ctx: Ctx, o: OrderRow): Promise<void> {
 }
 
 export async function confirm(ctx: Ctx, id: string) {
-  requirePermission(ctx, 'online.manage');
+  requireOrderAccess(ctx);
   return ctx.db.transaction(async (tx) => {
     const o = await lockOrder(tx, id);
     await confirmTx(tx, ctx, o);
@@ -617,7 +646,7 @@ export const BulkConfirmSchema = z.object({ ids: z.array(z.uuid()).min(1).max(10
 
 /** Confirm several orders, each in its own transaction, with a result per order (FR-ORD-13). */
 export async function bulkConfirm(ctx: Ctx, input: z.input<typeof BulkConfirmSchema>) {
-  requirePermission(ctx, 'online.manage');
+  requireOrderAccess(ctx);
   const { ids } = BulkConfirmSchema.parse(input);
   const results: { id: string; ok: boolean; code?: string; message?: string }[] = [];
   for (const id of ids) {
@@ -858,6 +887,7 @@ export async function handover(ctx: Ctx, id: string, input: z.input<typeof Hando
 }
 
 
+export * from './all.js';
 export * from './delivery.js';
 export * from './returns.js';
 export * from './preorders.js';

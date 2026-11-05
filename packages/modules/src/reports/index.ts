@@ -588,10 +588,15 @@ export async function badges(ctx: Ctx) {
     const [r] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from sales.einvoice_job where status = 'failed'`);
     out.einvoicesFailed = r!.n;
   }
-  // Orders needing action on “Giao hàng” (Design §12.9, FR-ORD-05).
-  if (can(ctx.actor, 'online.manage')) {
+  // Online orders waiting for confirmation or a return decision, on “Đơn hàng” (Design §12.9, FR-ORD-03).
+  if (can(ctx.actor, 'online.manage') || can(ctx.actor, 'online.confirm')) {
     const [r] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.web_order where status in ('new', 'pending_review', 'return_requested')`);
     out.ordersNeedingAction = r!.n;
+  }
+  // Confirmed carrier orders waiting for their shipment, on “Giao hàng” (FR-ORD-01).
+  if (can(ctx.actor, 'online.manage')) {
+    const [r] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.web_order where delivery = 'ship' and status in ('confirmed', 'packing')`);
+    out.shipmentsWaiting = r!.n;
   }
   // Pre-orders past the holding period, on the POS “Đặt trước” button (FR-ORD-16).
   if (can(ctx.actor, 'sale.create')) {

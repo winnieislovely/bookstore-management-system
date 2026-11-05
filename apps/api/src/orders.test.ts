@@ -23,7 +23,7 @@ async function level(variantId: string) {
 async function create(body: Record<string, unknown>, cookie = online) {
   const r = await h.call('POST', '/api/v1/orders', {
     cookie,
-    body: { source: 'facebook', recipient: { name: 'Nguyễn Văn An', phone: '0912345678' }, delivery: 'ship', address: ward('1A0101'), paymentMethod: 'cod', lines: [{ variantId: book, qty: 1 }], ...body },
+    body: { source: 'website', recipient: { name: 'Nguyễn Văn An', phone: '0912345678' }, delivery: 'ship', address: ward('1A0101'), paymentMethod: 'cod', lines: [{ variantId: book, qty: 1 }], ...body },
   });
   return r;
 }
@@ -92,12 +92,13 @@ describe('address data and channels', () => {
 });
 
 describe('creating orders', () => {
-  it('creates a COD chat order, finds or creates the customer and stores the chat handle (FR-ORD-02, FR-SOC-03)', async () => {
+  it('creates a COD chat order confirmed at once, finds or creates the customer and stores the chat handle (FR-ORD-02, FR-SOC-03)', async () => {
     const before = await level(book);
-    const r = await create({ contactHandle: 'fb.com/an.nguyen', sourceRef: 'https://m.me/an.nguyen', lines: [{ variantId: book, qty: 2 }], shippingVnd: 30000 });
+    const r = await create({ source: 'facebook', contactHandle: 'fb.com/an.nguyen', sourceRef: 'https://m.me/an.nguyen', lines: [{ variantId: book, qty: 2 }], shippingVnd: 30000 });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body.docNo).toMatch(/^DH-\d{4}-00001$/);
-    expect(r.body.status).toBe('new');
+    // “Tạo đơn giao”: a social order keyed by staff needs no confirmation (FR-ORD-02).
+    expect(r.body.status).toBe('confirmed');
     expect(r.body.reviewReasons).toEqual([]);
     expect(r.body.totalVnd).toBe(230000);
     expect(r.body.paymentRef).toBeNull();
@@ -268,7 +269,10 @@ describe('fulfilment', () => {
     const rec = (await h.call('GET', `/api/v1/orders/${o.id}`, { cookie: online })).body;
     expect(rec.status).toBe('cancelled');
     expect(rec.events[0].reason).toMatch(/chưa nhận chuyển khoản/);
-    expect(await level(book)).toEqual(before);
+    // Its own hold is released (other stale unpaid orders are cancelled in the same run).
+    const [held] = await h.t.sql`select count(*)::int as n from inventory.stock_reservation where ref_id = ${o.id} and status = 'active'`;
+    expect(held!.n).toBe(0);
+    expect((await level(book)).onHand).toBe(before.onHand);
   });
 
   it('keeps reservations equal to the active reservation rows and the ledger in balance', async () => {
@@ -398,7 +402,7 @@ describe('reports, customers and COD (FR-SOC-02, FR-CRM-03, FR-ORD-11, BR-29)', 
     const from = new Date(h.clock.now().getTime() - 3 * 86_400_000 + 7 * 3600_000).toISOString().slice(0, 10);
     const r = await h.call('GET', `/api/v1/reports/sales?from=${from}&to=${day}&groupBy=channel`, { cookie: owner });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
-    const fb = r.body.rows.find((x: { key: string }) => x.key === 'Facebook');
+    const fb = r.body.rows.find((x: { key: string }) => x.key === 'Website');
     expect(fb.orders).toBeGreaterThanOrEqual(4);
     expect(fb.returnsVnd).toBe(100000);
     const [done] = await h.t.sql`select count(*)::int as n from orders.web_order where done_at is not null`;
@@ -410,7 +414,7 @@ describe('reports, customers and COD (FR-SOC-02, FR-CRM-03, FR-ORD-11, BR-29)', 
   it('lists online orders in the customer purchases and list stats (FR-CRM-02/03)', async () => {
     const [c] = await h.t.sql`select id from crm.customer where phone_e164 = '+84977777777'`;
     const p = (await h.call('GET', `/api/v1/customers/${c!.id}/purchases`, { cookie: owner })).body;
-    expect(p.items[0]).toMatchObject({ kind: 'order', channel: 'facebook', status: 'completed', returnsVnd: 100000 });
+    expect(p.items[0]).toMatchObject({ kind: 'order', channel: 'website', status: 'completed', returnsVnd: 100000 });
     expect(p.totals.orders).toBe(1);
     const list = (await h.call('GET', '/api/v1/customers?q=0977777777', { cookie: owner })).body.items;
     expect(list[0]).toMatchObject({ orders: 1, ordersVnd: 200000 });
@@ -433,5 +437,48 @@ describe('reports, customers and COD (FR-SOC-02, FR-CRM-03, FR-ORD-11, BR-29)', 
     expect(r.body.url).toMatch(/^https:\/\/tiemsach\.vn\/sach\/.+/);
     expect(r.body.text).toContain('Giá: 100.000 ₫');
     expect(['Còn hàng', 'Sắp hết hàng']).toContain(r.body.availability);
+  });
+});
+
+describe('Orders and Delivery screens (FR-ORD-01..03, FR-ORD-05)', () => {
+  it('lists every order on Orders and lets a cashier confirm a website order', async () => {
+    // Earlier tests moved the clock past the 12-hour session idle limit (TDD §10.2).
+    cashier = await h.login('thu', 'mat-khau-moi-456');
+    online = await h.login('online', 'mat-khau-moi-456');
+    const web = (await create({ recipient: { name: 'Khách Website', phone: '0933000111' } })).body;
+    expect(web.status).toBe('new');
+    // The cashier sees online orders on Orders (online.confirm) but not the Delivery list.
+    const list = await h.call('GET', '/api/v1/order-list?type=online&q=0933000111', { cookie: cashier });
+    expect(list.status, JSON.stringify(list.body)).toBe(200);
+    expect(list.body.items[0]).toMatchObject({ type: 'online', id: web.id, docNo: web.docNo, status: 'new', needsAction: true, customerName: 'Khách Website' });
+    expect(list.body.counts.online).toBeGreaterThanOrEqual(1);
+    expect((await h.call('GET', '/api/v1/orders?scope=delivery', { cookie: cashier })).status).toBe(403);
+    expect((await h.call('GET', `/api/v1/orders/${web.id}`, { cookie: cashier })).status).toBe(200);
+    const ok = await h.call('POST', `/api/v1/orders/${web.id}/confirm`, { cookie: cashier });
+    expect(ok.body.status).toBe('confirmed');
+    // Website orders waiting for confirmation sort first.
+    const res = await h.call('GET', '/api/v1/order-list', { cookie: online });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const all = res.body.items as { needsAction: boolean }[];
+    const firstQuiet = all.findIndex((r) => !r.needsAction);
+    expect(all.length).toBeGreaterThan(0);
+    expect(all.slice(firstQuiet).every((r) => !r.needsAction)).toBe(true);
+  });
+
+  it('shows only confirmed carrier orders on Delivery, by stage', async () => {
+    const social = (await create({ source: 'zalo', recipient: { name: 'Khách Zalo', phone: '0933000222' } })).body;
+    expect(social.status).toBe('confirmed');
+    const fresh = (await create({ recipient: { name: 'Chưa xác nhận', phone: '0933000333' } })).body;
+    const d = (await h.call('GET', '/api/v1/orders?scope=delivery&stage=waiting', { cookie: online })).body;
+    const ids = d.items.map((o: { id: string }) => o.id);
+    expect(ids).toContain(social.id);
+    expect(ids).not.toContain(fresh.id);
+    expect(d.items.every((o: { delivery: string; status: string }) => o.delivery === 'ship' && ['confirmed', 'packing'].includes(o.status))).toBe(true);
+    expect(d.stages.waiting).toBeGreaterThanOrEqual(1);
+    const badges = (await h.call('GET', '/api/v1/me/badges', { cookie: online })).body;
+    expect(badges.shipmentsWaiting).toBe(d.stages.waiting);
+    const cashierBadges = (await h.call('GET', '/api/v1/me/badges', { cookie: cashier })).body;
+    expect(cashierBadges.ordersNeedingAction).toBeGreaterThanOrEqual(1);
+    expect(cashierBadges).not.toHaveProperty('shipmentsWaiting');
   });
 });

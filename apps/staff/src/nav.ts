@@ -35,8 +35,8 @@ export interface NavItem {
   icon: LucideIcon;
   /** Any of these permissions shows the item. */
   anyOf: string[];
-  /** Key in `/api/v1/me/badges`. */
-  badge?: string;
+  /** Key(s) in `/api/v1/me/badges`; several keys are added up. */
+  badge?: string | string[];
 }
 
 export interface NavGroup {
@@ -50,8 +50,8 @@ export const NAV: NavGroup[] = [
     label: 'nav.group.store',
     items: [
       { path: '/pos', label: 'nav.selling', icon: ScanBarcode, anyOf: ['sale.create'] },
-      { path: '/orders', label: 'nav.orders', icon: Truck, anyOf: ['online.manage'], badge: 'ordersNeedingAction' },
-      { path: '/sales', label: 'nav.sales', icon: Receipt, anyOf: ['sale.create', 'sale.view_all'], badge: 'einvoicesFailed' },
+      { path: '/orders', label: 'nav.orders', icon: Truck, anyOf: ['online.manage'], badge: 'shipmentsWaiting' },
+      { path: '/sales', label: 'nav.sales', icon: Receipt, anyOf: ['sale.create', 'sale.view_all', 'online.manage', 'online.confirm'], badge: ['ordersNeedingAction', 'einvoicesFailed'] },
       { path: '/customers', label: 'nav.customers', icon: Users, anyOf: ['customer.view'] },
       { path: '/promotions', label: 'nav.promotions', icon: BadgePercent, anyOf: ['promotion.manage'] },
     ],

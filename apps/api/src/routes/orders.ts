@@ -8,7 +8,10 @@ import { defineRoute, IdParams } from '../http/route.js';
 
 /** Orders, delivery and social channels (TDD §6.2 “Orders, delivery and social”). */
 export function orderRoutes(app: OpenAPIHono<AppEnv>, carrier: CarrierAdapter, webhookSecret: string | undefined): void {
-  defineRoute(app, { method: 'get', path: '/api/v1/orders', access: 'online.manage', summary: 'Order inbox with counts per status', query: orders.OrdersQuery }, async ({ ctx, query }) =>
+  defineRoute(app, { method: 'get', path: '/api/v1/order-list', access: 'session', summary: 'Orders screen: every order (counter, online, pre-order); rows filtered by permission', query: orders.AllOrdersQuery }, async ({ ctx, query }) =>
+    orders.listAllOrders(ctx, query),
+  );
+  defineRoute(app, { method: 'get', path: '/api/v1/orders', access: 'online.manage', summary: 'Online orders; scope=delivery is the Delivery screen by stage', query: orders.OrdersQuery }, async ({ ctx, query }) =>
     orders.listOrders(ctx, query),
   );
   defineRoute(
@@ -17,11 +20,11 @@ export function orderRoutes(app: OpenAPIHono<AppEnv>, carrier: CarrierAdapter, w
     async ({ ctx, body, c }) => orders.createOrder(ctx, body, c.req.header('idempotency-key')),
   );
   defineRoute(app, { method: 'post', path: '/api/v1/orders/quote', access: 'online.manage', summary: 'Price an order before saving', body: orders.QuoteSchema }, async ({ ctx, body }) => orders.quote(ctx, body));
-  defineRoute(app, { method: 'post', path: '/api/v1/orders/bulk-confirm', access: 'online.manage', summary: 'Confirm several orders', body: orders.BulkConfirmSchema }, async ({ ctx, body }) =>
+  defineRoute(app, { method: 'post', path: '/api/v1/orders/bulk-confirm', access: 'session', summary: 'Confirm several orders', body: orders.BulkConfirmSchema }, async ({ ctx, body }) =>
     orders.bulkConfirm(ctx, body),
   );
-  defineRoute(app, { method: 'get', path: '/api/v1/orders/:id', access: 'online.manage', summary: 'Order record (marks it read)', params: IdParams }, async ({ ctx, params }) => orders.getOrder(ctx, params.id));
-  defineRoute(app, { method: 'post', path: '/api/v1/orders/:id/confirm', access: 'online.manage', summary: 'Confirm: reserve stock', params: IdParams }, async ({ ctx, params }) => orders.confirm(ctx, params.id));
+  defineRoute(app, { method: 'get', path: '/api/v1/orders/:id', access: 'session', summary: 'Order record (marks it read)', params: IdParams }, async ({ ctx, params }) => orders.getOrder(ctx, params.id));
+  defineRoute(app, { method: 'post', path: '/api/v1/orders/:id/confirm', access: 'session', summary: 'Confirm: reserve stock', params: IdParams }, async ({ ctx, params }) => orders.confirm(ctx, params.id));
   defineRoute(app, { method: 'post', path: '/api/v1/orders/:id/pack', access: 'online.manage', summary: 'Start packing', params: IdParams }, async ({ ctx, params }) => orders.pack(ctx, params.id));
   defineRoute(app, { method: 'post', path: '/api/v1/orders/:id/cancel', access: 'online.manage', summary: 'Cancel with reason; releases stock', params: IdParams, body: orders.CancelSchema }, async ({ ctx, params, body }) =>
     orders.cancel(ctx, params.id, body),

@@ -1,11 +1,14 @@
+import { ORDER_SOURCES } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertOctagon, ArrowLeft, CalendarClock, Clock, FileCheck, FileText, MoreHorizontal, PackageCheck, PhoneCall, Printer, Receipt, RotateCcw, Send, Truck, XCircle } from 'lucide-react';
+import clsx from 'clsx';
+import { AlertOctagon, ArrowLeft, Clock, FileCheck, FileText, MoreHorizontal, PackageCheck, PhoneCall, Printer, Receipt, RotateCcw, Send, Truck, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ApprovalPrompt, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, Tabs, TextArea, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
+import { ApprovalPrompt, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
+import { ORDER_SOURCE, ORDER_STATUS, OrderStatusChip, PaymentChip } from '../components/order-ui';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
-import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
+import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { printSlip } from '../lib/print';
 import { can, useMe } from '../lib/session';
 import { CancelPreorder, PREORDER_STATUS, PreorderChip, type PreorderRow } from '../pos/preorders';
@@ -38,141 +41,150 @@ function SaleStatus({ status }: { status: string }) {
   return status === 'voided' ? <StatusChip tone="neutral" icon={XCircle}>Đã hủy</StatusChip> : <StatusChip tone="success">Hoàn tất</StatusChip>;
 }
 
-interface SaleRow {
+
+/** Đơn hàng: every order – counter sales, pre-orders and online orders – in one list (FR-ORD-01, FR-ORD-05, Design §12.1). */
+type OrderType = 'counter' | 'online' | 'preorder';
+interface AllOrdersRow {
+  type: OrderType;
   id: string;
   docNo: string;
-  soldAt: string;
-  totalVnd: number;
-  status: string;
-  cashier: string;
+  source: string;
+  channelName: string | null;
   customerName: string | null;
-  customerPhone: string | null;
-  methods: string[] | null;
-  einvoiceStatus: string | null;
+  phone: string | null;
+  totalVnd: number;
+  payment: string[];
+  paidAt: string | null;
+  status: string;
+  reviewReasons: string[];
+  needsAction: boolean;
+  unread: boolean;
+  at: string;
 }
 
-/** Đơn hàng: counter sales and pre-orders, one tab each (FR-POS-21, FR-POS-09, Design §12.1). */
+const TYPE_LABEL: Record<OrderType, string> = { counter: 'Tại quầy', online: 'Online', preorder: 'Đặt trước' };
+const ONLINE_PAYMENT: Record<string, string> = { cod: 'COD', transfer: 'Chuyển khoản' };
+const STATUS_OPTIONS = [
+  { key: 'completed', label: 'Hoàn tất (tại quầy)' },
+  { key: 'voided', label: 'Đã hủy (tại quầy)' },
+  ...Object.entries(ORDER_STATUS).map(([key, v]) => ({ key, label: `${v.label} (online)` })),
+  ...Object.entries(PREORDER_STATUS)
+    .filter(([key]) => key !== 'cancelled')
+    .map(([key, v]) => ({ key, label: `${v.label} (đặt trước)` })),
+];
+
+function TypeStatus({ r }: { r: AllOrdersRow }) {
+  if (r.type === 'counter') return <SaleStatus status={r.status} />;
+  if (r.type === 'online') return <OrderStatusChip status={r.status} reasons={r.reviewReasons} />;
+  const s = PREORDER_STATUS[r.status] ?? { label: r.status, tone: 'neutral' as Tone };
+  return <StatusChip tone={s.tone}>{s.label}</StatusChip>;
+}
+
 export function SalesPage() {
-  const [tab, setTab] = useParam('tab', 'sales');
+  const navigate = useNavigate();
+  const [q, setQ] = useParam('q');
+  const [type, setType] = useListParam('type');
+  const [source, setSource] = useListParam('source');
+  const [status, setStatus] = useListParam('status');
+  const [time, setTime] = useParam('time');
+  const [page, setPage] = useParam('page', '1');
+  const [preorder, setPreorder] = useState<PreorderRow | null>(null);
+  const query = { q: q || undefined, type: type.join(',') || undefined, source: source.join(',') || undefined, status: status.join(',') || undefined, ...timeRange(time), page: Number(page), limit: 40 };
+  // Website orders arrive live (FR-ORD-03): the list refreshes itself while open.
+  const list = useQuery({
+    queryKey: ['order-list', query],
+    queryFn: () => get<{ items: AllOrdersRow[]; total: number; counts: Partial<Record<OrderType, number>> }>('/api/v1/order-list', query),
+    refetchInterval: 20_000,
+  });
+  const counts = list.data?.counts ?? {};
+
+  const open = async (r: AllOrdersRow) => {
+    if (r.type === 'counter') return navigate(`/sales/${r.id}`);
+    if (r.type === 'online') return navigate(`/orders/${r.id}`);
+    try {
+      const found = await get<{ items: PreorderRow[] }>('/api/v1/preorders', { q: r.docNo });
+      const p = found.items.find((x) => x.id === r.id);
+      if (p) setPreorder(p);
+      else toast.error('Không mở được phiếu đặt trước.');
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const columns: Column<AllOrdersRow>[] = [
+    {
+      header: 'Mã đơn',
+      cell: (r) => (
+        <span className={clsx('inline-flex items-center gap-2', r.unread && 'font-bold')}>
+          {r.unread && <span className="size-2 rounded-full bg-navy-700" aria-label="Chưa xem" />}
+          <span className="code">{r.docNo}</span>
+        </span>
+      ),
+    },
+    { header: 'Loại', cell: (r) => TYPE_LABEL[r.type] },
+    // Source as plain text, no colour dot (Design §10.5).
+    { header: 'Kênh', cell: (r) => <span className="text-ink-700">{r.type === 'counter' ? 'Tại quầy' : (r.channelName ?? ORDER_SOURCE[r.source] ?? r.source)}</span> },
+    {
+      header: 'Khách hàng',
+      cell: (r) =>
+        r.customerName ? (
+          <span>
+            {r.customerName}
+            <span className="block text-[13px] whitespace-nowrap text-ink-500">{r.phone && formatPhone(r.phone)}</span>
+          </span>
+        ) : (
+          <span className="text-ink-500">Khách lẻ</span>
+        ),
+    },
+    { header: 'Tổng tiền', align: 'right', cell: (r) => formatVnd(r.totalVnd) },
+    {
+      header: 'Thanh toán',
+      cell: (r) =>
+        r.type === 'online' ? (
+          <PaymentChip method={r.payment[0] ?? ''} paidAt={r.paidAt} status={r.status} />
+        ) : (
+          r.payment.map((m) => METHOD_LABEL[m] ?? ONLINE_PAYMENT[m] ?? m).join(', ') || '—'
+        ),
+    },
+    { header: 'Trạng thái', cell: (r) => <TypeStatus r={r} /> },
+    { header: 'Thời gian', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.at) },
+  ];
+  const filtered = !!(q || type.length || source.length || status.length || time);
+
   return (
     <>
       <PageHeader title="Đơn hàng" />
-      <Tabs
-        tabs={[
-          { key: 'sales', label: 'Đơn bán' },
-          { key: 'preorders', label: 'Đơn đặt trước' },
-        ]}
-        value={tab === 'preorders' ? 'preorders' : 'sales'}
-        onChange={setTab}
-      />
-      {tab === 'preorders' ? <PreorderList /> : <SaleList />}
-    </>
-  );
-}
-
-function SaleList() {
-  const navigate = useNavigate();
-  const [q, setQ] = useParam('q');
-  const [status, setStatus] = useListParam('status');
-  const [method, setMethod] = useListParam('method');
-  const [time, setTime] = useParam('time');
-  const [page, setPage] = useParam('page', '1');
-  const range = timeRange(time);
-  const query = { q: q || undefined, status: status.join(',') || undefined, method: method.join(',') || undefined, ...range, page: Number(page), limit: 40 };
-  const list = useQuery({ queryKey: ['sales', query], queryFn: () => get<{ items: SaleRow[] }>('/api/v1/pos/sales', query) });
-
-  const columns: Column<SaleRow>[] = [
-    { header: 'Mã đơn', cell: (r) => <span className="code">{r.docNo}</span> },
-    { header: 'Thời gian', className: 'whitespace-nowrap', cell: (r) => formatDateTime(r.soldAt) },
-    { header: 'Khách hàng', cell: (r) => (r.customerName ? <span>{r.customerName}<span className="block text-[13px] text-ink-500">{r.customerPhone && formatPhone(r.customerPhone)}</span></span> : <span className="text-ink-500">Khách lẻ</span>) },
-    { header: 'Thu ngân', cell: (r) => r.cashier },
-    { header: 'Thanh toán', cell: (r) => (r.methods ?? []).map((m) => METHOD_LABEL[m] ?? m).join(', ') },
-    { header: 'Tổng tiền', align: 'right', cell: (r) => formatVnd(r.totalVnd) },
-    // Sale status only; the e-invoice state is on the sale record (Design §12.1).
-    { header: 'Trạng thái', cell: (r) => <SaleStatus status={r.status} /> },
-  ];
-
-  return (
-    <>
       <div className="mb-4 flex items-center gap-2">
-        <SearchBox value={q} onChange={setQ} placeholder="Tìm mã đơn, khách hàng, SĐT, SKU…" />
+        <SearchBox value={q} onChange={setQ} placeholder="Tìm mã đơn, khách hàng, SĐT, mã vận đơn…" />
         <FilterMenu
           groups={[
+            { label: 'Loại', options: (Object.keys(TYPE_LABEL) as OrderType[]).map((k) => ({ key: k, label: TYPE_LABEL[k], count: counts[k] ?? 0 })), values: type, onChange: setType },
+            { label: 'Kênh', options: [{ key: 'counter', label: 'Tại quầy' }, ...ORDER_SOURCES.map((k) => ({ key: k, label: ORDER_SOURCE[k]! }))], values: source, onChange: setSource },
+            { label: 'Trạng thái', options: STATUS_OPTIONS, values: status, onChange: setStatus },
             { kind: 'custom', label: 'Thời gian', summary: timeLabel(time), active: !!time, onClear: () => setTime(''), content: <TimeFilter value={time} onChange={setTime} /> },
-            { label: 'Trạng thái', options: [{ key: 'completed', label: 'Hoàn tất' }, { key: 'voided', label: 'Đã hủy' }], values: status, onChange: setStatus },
-            { label: 'Thanh toán', options: [{ key: 'cash', label: 'Tiền mặt' }, { key: 'transfer', label: 'Chuyển khoản' }, { key: 'card', label: 'Thẻ' }], values: method, onChange: setMethod },
           ]}
         />
       </div>
       <DataTable
         columns={columns}
         rows={list.data?.items}
-        rowKey={(r) => r.id}
-        onRow={(r) => navigate(`/sales/${r.id}`)}
+        rowKey={(r) => `${r.type}-${r.id}`}
+        onRow={(r) => void open(r)}
         error={list.error}
         onRetry={() => list.refetch()}
-        empty={{ icon: Receipt, title: q || status.length || method.length || time ? 'Không có đơn phù hợp' : 'Chưa có đơn bán nào', help: 'Đơn bán tại quầy sẽ hiện ở đây.' }}
+        minWidth={980}
+        empty={{ icon: Receipt, title: filtered ? 'Không có đơn phù hợp' : 'Chưa có đơn hàng nào', help: 'Đơn bán tại quầy, đơn online và phiếu đặt trước đều hiện ở đây.' }}
       />
-      <Pager page={Number(page)} hasMore={(list.data?.items.length ?? 0) === 40} onPage={(p) => setPage(String(p))} />
+      <Pager page={Number(page)} hasMore={(list.data?.items.length ?? 0) === 40} {...(list.data && { total: list.data.total })} onPage={(p) => setPage(String(p))} />
+      {preorder && <PreorderRecord p={preorder} onClose={() => setPreorder(null)} />}
     </>
   );
 }
 
 // =============================================================================================
-// Pre-orders (FR-POS-09, FR-ORD-14): taken and collected at the POS, listed here
+// Pre-orders (FR-POS-09, FR-ORD-14): taken and collected at the POS, opened from the Orders list
 
 const PREORDER_OPEN = ['reserved', 'ordered', 'arrived', 'contacted'];
-
-function PreorderList() {
-  const [q, setQ] = useParam('pq');
-  const [status, setStatus] = useListParam('pstatus');
-  const [open, setOpen] = useState<PreorderRow | null>(null);
-  const query = { q: q || undefined, status: status.join(',') || undefined };
-  const list = useQuery({ queryKey: ['preorders', query], queryFn: () => get<{ items: PreorderRow[] }>('/api/v1/preorders', query) });
-  const columns: Column<PreorderRow>[] = [
-    { header: 'Mã phiếu', cell: (p) => <span className="code">{p.docNo}</span> },
-    {
-      header: 'Khách hàng',
-      cell: (p) => (
-        <span>
-          {p.customerName}
-          <span className="block text-[13px] whitespace-nowrap text-ink-500">{p.customerPhone && formatPhone(p.customerPhone)}</span>
-        </span>
-      ),
-    },
-    {
-      header: 'Sản phẩm',
-      cell: (p) => (
-        <span className="line-clamp-2">
-          {p.lines.map((l) => `${l.title} × ${formatNumber(l.qty)}`).join(', ')}
-        </span>
-      ),
-    },
-    { header: 'Tổng tiền', align: 'right', cell: (p) => formatVnd(p.totalVnd) },
-    { header: 'Đã cọc', align: 'right', cell: (p) => formatVnd(p.depositVnd) },
-    { header: 'Trạng thái', cell: (p) => <PreorderChip p={p} /> },
-    { header: 'Ngày đặt', className: 'whitespace-nowrap', cell: (p) => formatDate(p.createdAt) },
-  ];
-  return (
-    <>
-      <div className="mb-4 flex items-center gap-2">
-        <SearchBox value={q} onChange={setQ} placeholder="Tìm mã phiếu, khách hàng, SĐT, SKU…" />
-        <FilterMenu groups={[{ label: 'Trạng thái', options: Object.entries(PREORDER_STATUS).map(([key, v]) => ({ key, label: v.label })), values: status, onChange: setStatus }]} />
-      </div>
-      <DataTable
-        columns={columns}
-        rows={list.data?.items}
-        rowKey={(p) => p.id}
-        onRow={setOpen}
-        error={list.error}
-        onRetry={() => list.refetch()}
-        minWidth={880}
-        empty={{ icon: CalendarClock, title: q || status.length ? 'Không có phiếu phù hợp' : 'Chưa có phiếu đặt trước', help: 'Phiếu đặt trước tạo ở màn Bán hàng (nút Đặt trước) sẽ hiện ở đây.' }}
-      />
-      {open && <PreorderRecord p={open} onClose={() => setOpen(null)} />}
-    </>
-  );
-}
 
 function PreorderRecord({ p, onClose }: { p: PreorderRow; onClose: () => void }) {
   const navigate = useNavigate();

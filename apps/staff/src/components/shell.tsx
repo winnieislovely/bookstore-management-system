@@ -38,7 +38,7 @@ function Sidebar({ groups, badges, rail, onNavigate }: { groups: NavGroup[]; bad
             {g.label && !rail && <div className="px-6 pb-1 text-xs font-semibold tracking-[0.08em] text-white/56 uppercase">{t(g.label)}</div>}
             <ul>
               {g.items.map((item) => {
-                const count = item.badge ? (badges[item.badge] ?? 0) : 0;
+                const count = (Array.isArray(item.badge) ? item.badge : item.badge ? [item.badge] : []).reduce((n, k) => n + (badges[k] ?? 0), 0);
                 return (
                   <li key={item.path}>
                     <NavLink
