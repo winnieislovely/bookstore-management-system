@@ -8,7 +8,7 @@ import {
   Library,
   Handshake,
   Landmark,
-  LayoutDashboard,
+  House,
   Monitor,
   Receipt,
   ScanBarcode,
@@ -45,7 +45,7 @@ export interface NavGroup {
 }
 
 export const NAV: NavGroup[] = [
-  { items: [{ path: '/dashboard', label: 'nav.overview', icon: LayoutDashboard, anyOf: ['report.view'] }] },
+  { items: [{ path: '/dashboard', label: 'nav.overview', icon: House, anyOf: ['report.view'] }] },
   {
     label: 'nav.group.store',
     items: [
