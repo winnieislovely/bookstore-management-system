@@ -22,6 +22,8 @@ const Env = z.object({
   GHN_TOKEN: z.string().optional(),
   GHN_SHOP_ID: z.coerce.number().int().optional(),
   GHN_ENV: z.enum(['sandbox', 'live']).default('sandbox'),
+  /** Contact (email) sent to Open Library in the User-Agent for book lookup (TDD §8.8). */
+  OPEN_LIBRARY_CONTACT: z.string().optional(),
   /** Shared secret in the webhook URL registered with GHN (`/webhooks/ghn?token=…`). */
   GHN_WEBHOOK_SECRET: z.string().min(16).optional(),
 });

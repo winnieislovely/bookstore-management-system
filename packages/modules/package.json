@@ -26,7 +26,9 @@
     "./orders": "./src/orders/index.ts",
     "./library": "./src/library/index.ts",
     "./library/counts": "./src/library/counts.ts",
-    "./integrations/ghn": "./src/integrations/ghn.ts"
+    "./integrations/ghn": "./src/integrations/ghn.ts",
+    "./integrations/openlibrary": "./src/integrations/openlibrary.ts",
+    "./catalog/lookup": "./src/catalog/lookup.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

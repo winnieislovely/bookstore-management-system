@@ -322,7 +322,7 @@ export function Pager({ page, hasMore, onPage, total, limit = 40 }: { page: numb
   );
 }
 
-export function SelectField({ label, children, className, required, ...rest }: SelectHTMLAttributes<HTMLSelectElement> & { label: string }) {
+export function SelectField({ label, children, className, required, ...rest }: SelectHTMLAttributes<HTMLSelectElement> & { label: ReactNode }) {
   const id = useId();
   return (
     <div className={clsx('flex flex-col gap-1', className)}>
@@ -337,7 +337,7 @@ export function SelectField({ label, children, className, required, ...rest }: S
   );
 }
 
-export function TextArea({ label, className, required, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string }) {
+export function TextArea({ label, helper, className, required, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { label: ReactNode; helper?: string | undefined }) {
   const id = useId();
   return (
     <div className={clsx('flex flex-col gap-1', className)}>
@@ -345,7 +345,12 @@ export function TextArea({ label, className, required, ...rest }: TextareaHTMLAt
         {label}
         {required && <span className="text-danger-700"> *</span>}
       </label>
-      <textarea id={id} required={required} rows={3} className="rounded-md border border-paper-500 bg-white px-3 py-2 text-sm focus:border-navy-700 max-sm:text-base" {...rest} />
+      <textarea id={id} required={required} rows={3} aria-describedby={helper ? `${id}-desc` : undefined} className="rounded-md border border-paper-500 bg-white px-3 py-2 text-sm focus:border-navy-700 max-sm:text-base" {...rest} />
+      {helper && (
+        <p id={`${id}-desc`} className="text-[13px] text-ink-500">
+          {helper}
+        </p>
+      )}
     </div>
   );
 }

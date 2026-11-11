@@ -1,5 +1,6 @@
 import { LocalDiskStorage } from '@bookstore/modules/files';
 import { MockCarrierAdapter } from '@bookstore/modules/integrations/ghn';
+import { MockBookLookup } from '@bookstore/modules/integrations/openlibrary';
 import { createFieldCrypto, type Ctx } from '@bookstore/modules/platform';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,8 @@ export interface Harness {
   clock: FakeClock;
   /** GHN stand-in: tests move shipments along through its status map. */
   carrier: MockCarrierAdapter;
+  /** Open Library stand-in (never calls the network). */
+  bookLookup: MockBookLookup;
   /** A service context for calling modules directly (no actor). */
   ctx: () => Ctx;
   call: (method: string, path: string, opts?: { body?: unknown; cookie?: string | null; csrf?: boolean }) => Promise<Res>;
@@ -43,7 +46,8 @@ export async function startHarness(): Promise<Harness> {
   const crypto = createFieldCrypto(config.FIELD_ENCRYPTION_KEY);
   const storage = new LocalDiskStorage(mkdtempSync(join(tmpdir(), 'bms-files-')));
   const carrier = new MockCarrierAdapter();
-  const app = createApp({ db: t.db, clock, crypto, storage, config, log: pino({ level: 'silent' }), carrier });
+  const bookLookup = new MockBookLookup();
+  const app = createApp({ db: t.db, clock, crypto, storage, config, log: pino({ level: 'silent' }), carrier, bookLookup });
 
   const call: Harness['call'] = async (method, path, opts = {}) => {
     const headers: Record<string, string> = { origin: ORIGIN };
@@ -67,6 +71,7 @@ export async function startHarness(): Promise<Harness> {
     app,
     clock,
     carrier,
+    bookLookup,
     ctx: () => ({ db: t.db, clock, crypto, actor: null, requestId: randomUUID(), ip: null }),
     call,
     login,

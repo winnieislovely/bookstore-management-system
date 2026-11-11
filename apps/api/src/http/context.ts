@@ -1,6 +1,7 @@
 import type { Db } from '@bookstore/db';
 import type { StorageAdapter } from '@bookstore/modules/files';
 import type { CarrierAdapter } from '@bookstore/modules/integrations/ghn';
+import type { BookLookupAdapter } from '@bookstore/modules/integrations/openlibrary';
 import type { Clock, Ctx, FieldCrypto } from '@bookstore/modules/platform';
 import type { Logger } from 'pino';
 import type { Config } from '../config.js';
@@ -15,6 +16,8 @@ export interface Deps {
   log: Logger;
   /** GHN (TDD §8.2); defaults from the configuration. */
   carrier?: CarrierAdapter;
+  /** Open Library book lookup (TDD §8.8); defaults to the live service. */
+  bookLookup?: BookLookupAdapter;
 }
 
 export interface SessionState {

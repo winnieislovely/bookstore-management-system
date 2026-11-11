@@ -272,3 +272,10 @@ export const importRow = catalog.table(
   (t) => [uniqueIndex('import_row_job_row_uq').on(t.jobId, t.rowNo)],
 );
 
+
+/** Open Library answers kept for 7 days (FR-CAT-16, TDD §8.8): `q:<title>`, `isbn:<isbn13>`, `work:<id>`. */
+export const bookLookupCache = catalog.table('book_lookup_cache', {
+  key: text().primaryKey(),
+  payload: jsonb().notNull(),
+  fetchedAt: ts().notNull(),
+});

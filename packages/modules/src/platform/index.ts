@@ -42,7 +42,7 @@ export function can(actor: Actor | null, permission: Permission): boolean {
  */
 export class AppError extends Error {
   constructor(
-    readonly status: 400 | 401 | 403 | 404 | 409 | 412 | 415 | 422 | 423 | 429,
+    readonly status: 400 | 401 | 403 | 404 | 409 | 412 | 415 | 422 | 423 | 429 | 503,
     readonly code: string,
     message: string,
     readonly details?: unknown,

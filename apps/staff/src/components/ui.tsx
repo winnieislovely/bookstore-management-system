@@ -69,7 +69,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 // Inputs (§10.2): label above, helper below, error replaces helper with an icon.
 
 export interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
-  label: string;
+  label: ReactNode;
   helper?: string | undefined;
   error?: string | undefined;
   suffix?: string;
