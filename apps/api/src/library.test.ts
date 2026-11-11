@@ -13,6 +13,8 @@ let other: string;
 let mai: string;
 let nam: string;
 const DAY = 86_400_000;
+/** Accession numbers the system gave, by the label a test section uses for its title. */
+const acc: Record<string, string[]> = {};
 
 const call = (method: string, path: string, cookie: string, body?: unknown) => h.call(method, path, { cookie, body });
 
@@ -38,30 +40,48 @@ afterAll(async () => {
   await h?.t.stop();
 });
 
-describe('catalogue: library codes and copies (FR-LIB-01, FR-LIB-02, FR-LIB-17)', () => {
-  it('suggests the next code per language and refuses a duplicate code', async () => {
-    expect((await call('GET', '/api/v1/library/titles/next-code?lang=vi', librarian)).body.code).toBe('VN-0001');
-    const r = await call('POST', '/api/v1/library/titles', librarian, { code: 'vn-0123', title: 'Dế Mèn phiêu lưu ký', authors: ['Tô Hoài'], language: 'vi', category: 'Thiếu nhi' });
+describe('catalogue: call numbers and accession numbers (FR-LIB-01, FR-LIB-02, FR-LIB-17)', () => {
+  it('saves a title with its call number and first copies in one step', async () => {
+    const r = await call('POST', '/api/v1/library/titles', librarian, {
+      title: 'Dế Mèn phiêu lưu ký',
+      authors: ['Tô Hoài'],
+      language: 'vi',
+      category: 'Thiếu nhi',
+      dewey: '895.92234',
+      cutter: 'H63d',
+      copies: { count: 2, valueVnd: 80000, acquiredVia: 'purchase' },
+    });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
-    expect(r.body.code).toBe('VN-0123');
+    expect(r.body.callNo).toBe('895.92234 H63d');
+    // Accession numbers: language prefix and a running six-digit number.
+    expect(r.body.copies.map((c: { barcode: string }) => c.barcode)).toEqual(['VN-000001', 'VN-000002']);
     titleId = r.body.id;
-    expect((await call('GET', '/api/v1/library/titles/next-code?lang=vi', librarian)).body.code).toBe('VN-0124');
-    expect((await call('GET', '/api/v1/library/titles/next-code?lang=en', librarian)).body.code).toBe('EN-0001');
-    const dup = await call('POST', '/api/v1/library/titles', librarian, { code: 'VN-0123', title: 'Khác', language: 'vi' });
-    expect(dup.body.error.code).toBe('code_taken');
-    other = (await call('POST', '/api/v1/library/titles', librarian, { code: 'EN-0001', title: 'The Little Prince', language: 'en' })).body.id;
+    // Shelf for the count tests below.
+    for (const c of r.body.copies) await call('PATCH', `/api/v1/library/copies/${c.id}`, librarian, { shelf: 'A1' });
+    // Titles may share a call number; a bad Dewey number is refused.
+    expect((await call('POST', '/api/v1/library/titles', librarian, { title: 'Dế Mèn (bản khác)', language: 'vi', dewey: '895.92234', cutter: 'H63d' })).status).toBe(201);
+    expect((await call('POST', '/api/v1/library/titles', librarian, { title: 'Sai', language: 'vi', dewey: 'ABC' })).status).toBe(400);
+    // Without Dewey a title is unclassified, and still takes copies.
+    other = (await call('POST', '/api/v1/library/titles', librarian, { title: 'The Little Prince', language: 'en' })).body.id;
   });
 
-  it('numbers copies as library code plus copy number and prints labels', async () => {
-    const r = await call('POST', `/api/v1/library/titles/${titleId}/copies`, librarian, { count: 2, valueVnd: 80000, acquiredVia: 'purchase', shelf: 'A1' });
+  it('numbers later copies on, with the entry date, and prints spine labels', async () => {
+    const r = await call('POST', `/api/v1/library/titles/${other}/copies`, librarian, { count: 1, valueVnd: 30000, acquiredVia: 'donation', shelf: 'B1', acquiredAt: '2026-10-20' });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
-    expect(r.body.items.map((c: { barcode: string }) => c.barcode)).toEqual(['VN-0123-1', 'VN-0123-2']);
-    await call('POST', `/api/v1/library/titles/${other}/copies`, librarian, { count: 1, valueVnd: 30000, acquiredVia: 'donation', shelf: 'B1' });
-    const labels = (await call('GET', `/api/v1/library/labels?copyIds=${r.body.items.map((c: { id: string }) => c.id).join(',')}`, librarian)).body.items;
-    expect(labels[0]).toMatchObject({ barcode: 'VN-0123-1', code: 'VN-0123', language: 'vi' });
+    expect(r.body.items.map((c: { barcode: string }) => c.barcode)).toEqual(['EN-000001']);
+    const t = (await call('GET', `/api/v1/library/titles/${other}`, librarian)).body;
+    expect(new Date(t.copies[0].acquiredAt).toISOString()).toBe('2026-10-19T17:00:00.000Z');
+    const ids = (await call('GET', `/api/v1/library/titles/${titleId}`, librarian)).body.copies.map((c: { id: string }) => c.id).join(',');
+    const labels = (await call('GET', `/api/v1/library/labels?copyIds=${ids},${t.copies[0].id}`, librarian)).body.items;
+    expect(labels[0]).toMatchObject({ barcode: 'EN-000001', callNo: null, title: 'The Little Prince' });
+    expect(labels[1]).toMatchObject({ barcode: 'VN-000001', callNo: '895.92234 H63d', dewey: '895.92234', cutter: 'H63d', language: 'vi' });
     const list = (await call('GET', '/api/v1/library/titles?language=vi', librarian)).body.items;
-    expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({ copies: 2, available: 2 });
+    expect(list).toHaveLength(2);
+    expect(list.find((x: { id: string }) => x.id === titleId)).toMatchObject({ callNo: '895.92234 H63d', copies: 2, available: 2 });
+    expect((await call('GET', '/api/v1/library/titles?unclassified=true', librarian)).body.items.map((x: { id: string }) => x.id)).toEqual([other]);
+    // Accession numbers are found with or without the hyphen.
+    expect((await call('GET', '/api/v1/library/copies/by-barcode/vn000002', librarian)).body).toMatchObject({ barcode: 'VN-000002', callNo: '895.92234 H63d' });
+    expect((await call('GET', '/api/v1/library/titles?q=EN000001', librarian)).body.items[0].id).toBe(other);
     // Cashiers have no library screens.
     expect((await call('GET', '/api/v1/library/titles', cashier)).status).toBe(403);
   });
@@ -74,12 +94,12 @@ describe('loans and fees taken at the library desk (FR-LIB-07, FR-LIB-08, FR-LIB
     ((await call('GET', `/api/v1/library/borrowers/${who}`, librarian)).body.charges as { id: string; kind: string; status: string; amountVnd: number }[]).filter((c) => c.status === 'unpaid');
 
   it('lends only once the 50,000 VND fee is paid at the desk, due in 30 days', async () => {
-    const unpaid = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['vn-0123-1'] });
+    const unpaid = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['vn000001'] });
     expect(unpaid.status).toBe(400);
     // Cash or transfer only: no card at the library desk.
-    const card = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['vn-0123-1'], payment: { method: 'card', ref: 'AP1' } });
+    const card = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['vn000001'], payment: { method: 'card', ref: 'AP1' } });
     expect(card.status).toBe(400);
-    const r = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['vn-0123-1'], payment: cash });
+    const r = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['vn000001'], payment: cash });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body).toMatchObject({ totalFeeVnd: 50000, discountPct: 0 });
     expect(r.body.receiptNo).toMatch(/^PT-\d{4}-00001$/);
@@ -88,7 +108,7 @@ describe('loans and fees taken at the library desk (FR-LIB-07, FR-LIB-08, FR-LIB
     expect(due - h.clock.now().getTime()).toBeGreaterThan(29 * DAY);
     expect(due - h.clock.now().getTime()).toBeLessThan(31 * DAY);
     expect(await owedOf(mai)).toEqual([]);
-    const again = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: nam, barcodes: ['VN-0123-1'], payment: cash });
+    const again = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: nam, barcodes: ['VN-000001'], payment: cash });
     expect(again.body.error.code).toBe('copy_not_available');
   });
 
@@ -96,7 +116,7 @@ describe('loans and fees taken at the library desk (FR-LIB-07, FR-LIB-08, FR-LIB
     const day = new Date(h.clock.now().getTime() + 7 * 3600_000).toISOString().slice(0, 10);
     const book = (await call('GET', `/api/v1/library/payments?from=${day}&to=${day}`, librarian)).body;
     expect(book.items[0]).toMatchObject({ kind: 'receipt', method: 'cash', amountVnd: 50000, customerName: 'Mai' });
-    expect(book.items[0].items).toContain('VN-0123-1');
+    expect(book.items[0].items).toContain('VN-000001');
     expect(book.totals).toMatchObject({ cash: 50000, all: 50000 });
     expect((await call('GET', `/api/v1/library/payments?from=${day}&to=${day}`, cashier)).status).toBe(403);
     // No sale and no shift cash: the shop's figures are untouched.
@@ -131,14 +151,14 @@ describe('loans and fees taken at the library desk (FR-LIB-07, FR-LIB-08, FR-LIB
     expect(await library.remindLoans(h.ctx())).toEqual({ dueSoon: 0, overdue: 1 });
     const notes = (await call('GET', '/api/v1/notifications', librarian)).body.items;
     expect(notes[0]).toMatchObject({ template: 'library.loans_to_call', vars: { overdue: 1 } });
-    const r = await call('POST', '/api/v1/library/loans/checkin', librarian, { barcode: 'VN-0123-1', condition: 'ok' });
+    const r = await call('POST', '/api/v1/library/loans/checkin', librarian, { barcode: 'VN-000001', condition: 'ok' });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body).toMatchObject({ daysLate: 3, lateFeeVnd: 6000, damageVnd: 0, hold: null });
     const b = (await call('GET', `/api/v1/library/borrowers/${mai}`, librarian)).body;
     expect(b.unpaidChargesVnd).toBe(6000);
     expect(b.history[0]).toMatchObject({ closedAs: 'returned' });
     // Owed charges block new loans (BR-15).
-    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['EN-0001-1'], payment: cash })).body.error.details.blocks).toEqual(['unpaid_charges']);
+    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['EN-000001'], payment: cash })).body.error.details.blocks).toEqual(['unpaid_charges']);
   });
 
   it('lets a manager waive a late fee with a reason; the librarian may not', async () => {
@@ -164,7 +184,7 @@ describe('loans and fees taken at the library desk (FR-LIB-07, FR-LIB-08, FR-LIB
     const b = (await call('GET', `/api/v1/library/borrowers/${mai}`, librarian)).body;
     expect(b.spendVnd).toBe(45000);
     expect(b.fee).toEqual({ listVnd: 50000, discountPct: 10, amountVnd: 45000 });
-    const r = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['EN-0001-1'], payment: cash });
+    const r = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['EN-000001'], payment: cash });
     expect(r.body).toMatchObject({ totalFeeVnd: 45000, discountPct: 10 });
   });
 });
@@ -175,22 +195,22 @@ describe('damage, loss, reservations and the cash book (FR-LIB-09a, FR-LIB-11, F
     ((await call('GET', `/api/v1/library/borrowers/${who}`, librarian)).body.charges as { id: string; kind: string; status: string; amountVnd: number }[]).filter((c) => c.status === 'unpaid');
 
   it('holds a returned copy for the first in the queue; renewal is refused meanwhile', async () => {
-    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: nam, barcodes: ['VN-0123-1', 'VN-0123-2'], payment: cash })).body.totalFeeVnd).toBe(100000);
+    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: nam, barcodes: ['VN-000001', 'VN-000002'], payment: cash })).body.totalFeeVnd).toBe(100000);
     expect((await call('POST', '/api/v1/library/reservations', librarian, { titleId, customerId: nam })).body.error.code).toBe('already_borrowing');
     const res = await call('POST', '/api/v1/library/reservations', librarian, { titleId, customerId: mai });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
-    const namLoan = (await call('GET', `/api/v1/library/borrowers/${nam}`, librarian)).body.openLoans.find((l: { barcode: string }) => l.barcode === 'VN-0123-2');
+    const namLoan = (await call('GET', `/api/v1/library/borrowers/${nam}`, librarian)).body.openLoans.find((l: { barcode: string }) => l.barcode === 'VN-000002');
     expect((await call('POST', `/api/v1/library/loans/${namLoan.id}/renew`, librarian, { payment: cash })).body.error.code).toBe('title_reserved');
-    const back = (await call('POST', '/api/v1/library/loans/checkin', librarian, { barcode: 'VN-0123-2' })).body;
+    const back = (await call('POST', '/api/v1/library/loans/checkin', librarian, { barcode: 'VN-000002' })).body;
     expect(back.hold).toMatchObject({ customerName: 'Mai', customerPhone: '+84912000001' });
     expect((await call('GET', '/api/v1/library/loans?filter=held', librarian)).body.holds).toHaveLength(1);
     // Held for Mai: Nam cannot take it, Mai can.
-    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: nam, barcodes: ['VN-0123-2'], payment: cash })).body.error.code).toBe('copy_held');
-    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['VN-0123-2'], payment: cash })).status).toBe(201);
+    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: nam, barcodes: ['VN-000002'], payment: cash })).body.error.code).toBe('copy_held');
+    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: mai, barcodes: ['VN-000002'], payment: cash })).status).toBe(201);
   });
 
   it('charges value plus processing fee for a damaged or lost copy, cancelled if found', async () => {
-    const dmg = (await call('POST', '/api/v1/library/loans/checkin', librarian, { barcode: 'VN-0123-2', condition: 'damaged' })).body;
+    const dmg = (await call('POST', '/api/v1/library/loans/checkin', librarian, { barcode: 'VN-000002', condition: 'damaged' })).body;
     expect(dmg.damageVnd).toBe(100000);
     const namLoan = (await call('GET', `/api/v1/library/borrowers/${nam}`, librarian)).body.openLoans[0];
     expect((await call('POST', `/api/v1/library/loans/${namLoan.id}/mark-lost`, librarian)).body.chargeVnd).toBe(100000);
@@ -224,22 +244,22 @@ describe('damage, loss, reservations and the cash book (FR-LIB-09a, FR-LIB-11, F
   });
 
   it('counts a shelf like a stock count: blind, scan, out of scope, submit, approve without changes (FR-LIB-04)', async () => {
-    // Shelf A1 holds VN-0123-1 (on the shelf); VN-0123-2 is damaged and EN-0001-1 is on loan.
+    // Shelf A1 holds VN-000001 (on the shelf); VN-000002 is damaged and EN-000001 is on loan.
     const created = await call('POST', '/api/v1/library/counts', librarian, { shelves: ['A1'], blind: true });
     expect(created.status, JSON.stringify(created.body)).toBe(201);
     expect(created.body.docNo).toMatch(/^KT-\d{4}-00001$/);
     const id = created.body.id;
     let c = (await call('GET', `/api/v1/library/counts/${id}`, librarian)).body;
-    expect(c.lines.map((l: { barcode: string }) => l.barcode)).toEqual(['VN-0123-1']);
+    expect(c.lines.map((l: { barcode: string }) => l.barcode)).toEqual(['VN-000001']);
     expect(c.lines[0].status).toBeUndefined(); // blind for the librarian
-    expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: 'vn-0123-1' })).body).toMatchObject({ inScope: true });
-    expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: 'EN-0001-1' })).body).toMatchObject({ inScope: false });
+    expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: 'vn000001' })).body).toMatchObject({ inScope: true });
+    expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: 'EN-000001' })).body).toMatchObject({ inScope: false });
     expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: 'XX-1' })).body.error.code).toBe('copy_not_found');
     c = (await call('GET', `/api/v1/library/counts/${id}`, owner)).body;
     expect(c.summary).toMatchObject({ lines: 1, found: 1, missing: 0, unchecked: 0, outOfScope: 1 });
-    expect(c.lines.find((l: { barcode: string }) => l.barcode === 'EN-0001-1')).toMatchObject({ inScope: false, outcome: 'found_on_loan' });
+    expect(c.lines.find((l: { barcode: string }) => l.barcode === 'EN-000001')).toMatchObject({ inScope: false, outcome: 'found_on_loan' });
     expect((await call('POST', `/api/v1/library/counts/${id}/submit`, librarian)).status).toBe(204);
-    expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: 'VN-0123-1' })).body.error.code).toBe('count_not_open');
+    expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: 'VN-000001' })).body.error.code).toBe('count_not_open');
     expect((await call('POST', `/api/v1/library/counts/${id}/approve`, librarian)).status).toBe(403);
     expect((await call('POST', `/api/v1/library/counts/${id}/approve`, owner)).body.status).toBe('approved');
     const title = (await call('GET', `/api/v1/library/titles/${titleId}`, librarian)).body;
@@ -254,8 +274,8 @@ describe('damage, loss, reservations and the cash book (FR-LIB-09a, FR-LIB-11, F
     const csv = await (await req('GET', `/api/v1/library/counts/${id}/sheet?format=csv`)).text();
     expect(csv.replace(/^\uFEFF/, '').split('\r\n')[0]).toBe('Mã bản,Tên sách,Kệ,Trạng thái hệ thống,Có mặt');
     const up = async (text: string) => (await (await req('POST', `/api/v1/library/counts/${id}/sheet`, new TextEncoder().encode(text))).json()) as { error: { code: string } };
-    expect((await up('Mã bản,Có mặt\r\nVN-0123-1,2\r\n')).error.code).toBe('count_sheet_invalid');
-    expect(await up('Mã bản,Có mặt\r\nVN-0123-1,0\r\n')).toMatchObject({ updated: 1, checked: 1 });
+    expect((await up('Mã bản,Có mặt\r\nVN-000001,2\r\n')).error.code).toBe('count_sheet_invalid');
+    expect(await up('Mã bản,Có mặt\r\nVN-000001,0\r\n')).toMatchObject({ updated: 1, checked: 1 });
     expect((await call('GET', `/api/v1/library/counts/${id}`, owner)).body.summary).toMatchObject({ missing: 1 });
     expect((await call('POST', `/api/v1/library/counts/${id}/cancel`, librarian)).status).toBe(204);
     expect((await call('GET', '/api/v1/library/counts?status=cancelled', librarian)).body.items).toHaveLength(1);
@@ -266,11 +286,11 @@ describe('damage, loss, reservations and the cash book (FR-LIB-09a, FR-LIB-11, F
     const r = (await call('GET', `/api/v1/reports/library?from=2000-01-01&to=${day}`, owner)).body;
     expect(r.loans).toBeGreaterThanOrEqual(5);
     expect(r.loanFeesVnd).toBeGreaterThan(0);
-    expect(r.popular[0].code).toBe('VN-0123');
+    expect(r.popular[0]).toMatchObject({ callNo: '895.92234 H63d', title: 'Dế Mèn phiêu lưu ký' });
   });
 
   it('gives the library overview on Mượn / trả and the dashboard (FR-LIB-15a, FR-RPT-01)', async () => {
-    // VN-0123-1 on the shelf, VN-0123-2 damaged, EN-0001-1 lent to Mai.
+    // VN-000001 on the shelf, VN-000002 damaged, EN-000001 lent to Mai.
     const ov = (await call('GET', '/api/v1/library/overview', librarian)).body;
     expect(ov).toMatchObject({ copies: 3, available: 1, onLoan: 1, overdue: 0, period: 'week' });
     // Fees collected this week (from Monday, store time), receipts less refunds (FR-LIB-15a).
@@ -294,6 +314,8 @@ describe('reservations on the borrow form (FR-LIB-13, UC-17 3b)', () => {
   let hoa: string;
   let minh: string;
   const ids: Record<string, string> = {};
+  /** Accession numbers per title, in copy order. */
+  const bc: Record<string, string[]> = {};
   const checkout = (body: unknown) => call('POST', '/api/v1/library/loans/checkout', librarian, body);
   const titleRow = async (code: string) => (await call('GET', `/api/v1/library/titles?q=${code}`, librarian)).body.items[0];
 
@@ -301,10 +323,10 @@ describe('reservations on the borrow form (FR-LIB-13, UC-17 3b)', () => {
     hoa = await customer('Hoa', '0912000011');
     minh = await customer('Minh', '0912000012');
     for (const [code, n] of [['VN-0201', 1], ['VN-0202', 1], ['VN-0203', 3], ['VN-0204', 1]] as const) {
-      ids[code] = (await call('POST', '/api/v1/library/titles', librarian, { code, title: `Sách ${code}`, language: 'vi' })).body.id;
-      await call('POST', `/api/v1/library/titles/${ids[code]}/copies`, librarian, { count: n, valueVnd: 50000, acquiredVia: 'purchase', shelf: 'C1' });
+      ids[code] = (await call('POST', '/api/v1/library/titles', librarian, { title: `Sách ${code}`, language: 'vi' })).body.id;
+      bc[code] = (await call('POST', `/api/v1/library/titles/${ids[code]}/copies`, librarian, { count: n, valueVnd: 50000, acquiredVia: 'purchase', shelf: 'C1' })).body.items.map((c: { barcode: string }) => c.barcode);
     }
-    expect((await checkout({ customerId: minh, barcodes: ['VN-0201-1', 'VN-0202-1', 'VN-0204-1'], payment: cash })).status).toBe(201);
+    expect((await checkout({ customerId: minh, barcodes: [bc['VN-0201']![0], bc['VN-0202']![0], bc['VN-0204']![0]], payment: cash })).status).toBe(201);
   });
 
   it('reserves a title with no copy on the shelf without payment (a reservation slip)', async () => {
@@ -314,29 +336,29 @@ describe('reservations on the borrow form (FR-LIB-13, UC-17 3b)', () => {
     const r = await checkout({ customerId: hoa, holdTitleIds: [ids['VN-0201']] });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body).toMatchObject({ loans: [], totalFeeVnd: 0, receiptNo: null });
-    expect(r.body.holds).toEqual([expect.objectContaining({ code: 'VN-0201', position: 1 })]);
+    expect(r.body.holds).toEqual([expect.objectContaining({ title: 'Sách VN-0201', callNo: null, position: 1 })]);
     expect((await checkout({ customerId: hoa, holdTitleIds: [ids['VN-0201']] })).body.error.code).toBe('already_reserved');
     expect((await checkout({ customerId: hoa })).status).toBe(400);
   });
 
   it('lends and reserves on one form, taking the fee for the loans only', async () => {
     // A title still on the shelf cannot be reserved; nothing of the form is recorded.
-    const shelf = await checkout({ customerId: hoa, barcodes: ['VN-0203-1'], holdTitleIds: [ids['VN-0203']], payment: cash });
+    const shelf = await checkout({ customerId: hoa, barcodes: [bc['VN-0203']![0]], holdTitleIds: [ids['VN-0203']], payment: cash });
     expect(shelf.body.error.code).toBe('title_available');
     expect((await titleRow('VN-0203')).available).toBe(3);
     // Payment is still required once a copy is lent.
-    expect((await checkout({ customerId: hoa, barcodes: ['VN-0203-1'], holdTitleIds: [ids['VN-0202']] })).status).toBe(400);
-    const r = await checkout({ customerId: hoa, barcodes: ['VN-0203-1'], holdTitleIds: [ids['VN-0202']], payment: cash });
+    expect((await checkout({ customerId: hoa, barcodes: [bc['VN-0203']![0]], holdTitleIds: [ids['VN-0202']] })).status).toBe(400);
+    const r = await checkout({ customerId: hoa, barcodes: [bc['VN-0203']![0]], holdTitleIds: [ids['VN-0202']], payment: cash });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body).toMatchObject({ totalFeeVnd: 50000 });
     expect(r.body.loans).toHaveLength(1);
-    expect(r.body.holds).toEqual([expect.objectContaining({ code: 'VN-0202', position: 1 })]);
+    expect(r.body.holds).toEqual([expect.objectContaining({ title: 'Sách VN-0202', callNo: null, position: 1 })]);
   });
 
   it('does not count reservations toward the loan limit', async () => {
-    expect((await checkout({ customerId: hoa, barcodes: ['VN-0203-2', 'VN-0203-3'], payment: cash })).status).toBe(201);
+    expect((await checkout({ customerId: hoa, barcodes: [bc['VN-0203']![1], bc['VN-0203']![2]], payment: cash })).status).toBe(201);
     // Three loans out: no more copies, but a reservation is still taken.
-    expect((await checkout({ customerId: hoa, barcodes: ['VN-0123-1'], payment: cash })).body.error.code).toBe('borrow_blocked');
+    expect((await checkout({ customerId: hoa, barcodes: ['VN-000001'], payment: cash })).body.error.code).toBe('borrow_blocked');
     expect((await checkout({ customerId: hoa, holdTitleIds: [ids['VN-0204']] })).status).toBe(201);
   });
 
@@ -356,22 +378,22 @@ describe('manual discount at check-out (FR-LIB-18)', () => {
   let an: string;
   beforeAll(async () => {
     an = await customer('An', '0912000021');
-    const t = (await call('POST', '/api/v1/library/titles', librarian, { code: 'VN-0301', title: 'Sách giảm giá', language: 'vi' })).body.id;
-    await call('POST', `/api/v1/library/titles/${t}/copies`, librarian, { count: 5, valueVnd: 50000, acquiredVia: 'purchase', shelf: 'D1' });
+    const t = (await call('POST', '/api/v1/library/titles', librarian, { title: 'Sách giảm giá', language: 'vi' })).body.id;
+    acc['VN-0301'] = (await call('POST', `/api/v1/library/titles/${t}/copies`, librarian, { count: 5, valueVnd: 50000, acquiredVia: 'purchase', shelf: 'D1' })).body.items.map((c: { barcode: string }) => c.barcode);
   });
 
   it('takes a percentage off each copy, rounded down to 1,000 VND', async () => {
-    const r = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: an, barcodes: ['VN-0301-1', 'VN-0301-2'], payment: cash, discount: { kind: 'pct', value: 15 } });
+    const r = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: an, barcodes: [acc['VN-0301']![0]!, acc['VN-0301']![1]!], payment: cash, discount: { kind: 'pct', value: 15 } });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body.loans.map((l: { feeVnd: number }) => l.feeVnd)).toEqual([42000, 42000]);
     expect(r.body.totalFeeVnd).toBe(84000);
-    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: an, barcodes: ['VN-0301-3'], payment: cash, discount: { kind: 'pct', value: 120 } })).status).toBe(400);
+    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: an, barcodes: [acc['VN-0301']![2]!], payment: cash, discount: { kind: 'pct', value: 120 } })).status).toBe(400);
   });
 
   it('takes an amount off the total, never above the fees', async () => {
-    const big = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: an, barcodes: ['VN-0301-3'], payment: cash, discount: { kind: 'vnd', value: 60000 } });
+    const big = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: an, barcodes: [acc['VN-0301']![2]!], payment: cash, discount: { kind: 'vnd', value: 60000 } });
     expect(big.body.error.code).toBe('discount_too_high');
-    const r = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: an, barcodes: ['VN-0301-3'], payment: cash, discount: { kind: 'vnd', value: 50000 } });
+    const r = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: an, barcodes: [acc['VN-0301']![2]!], payment: cash, discount: { kind: 'vnd', value: 50000 } });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     // Free loan: still a slip, a 0 VND receipt (FR-LIB-09a).
     expect(r.body).toMatchObject({ totalFeeVnd: 0 });
@@ -388,12 +410,12 @@ describe('loan slips on Mượn / trả (FR-LIB-09a)', () => {
 
   beforeAll(async () => {
     binh = await customer('Bình', '0912000031');
-    const t = (await call('POST', '/api/v1/library/titles', librarian, { code: 'VN-0401', title: 'Sách phiếu mượn', language: 'vi' })).body.id;
-    await call('POST', `/api/v1/library/titles/${t}/copies`, librarian, { count: 3, valueVnd: 80000, acquiredVia: 'purchase', shelf: 'E1' });
+    const t = (await call('POST', '/api/v1/library/titles', librarian, { title: 'Sách phiếu mượn', language: 'vi' })).body.id;
+    acc['VN-0401'] = (await call('POST', `/api/v1/library/titles/${t}/copies`, librarian, { count: 3, valueVnd: 80000, acquiredVia: 'purchase', shelf: 'E1' })).body.items.map((c: { barcode: string }) => c.barcode);
   });
 
   it('lists one row per check-out, numbered by its receipt', async () => {
-    const r = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: binh, barcodes: ['VN-0401-1', 'VN-0401-2'], payment: cash });
+    const r = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: binh, barcodes: [acc['VN-0401']![0]!, acc['VN-0401']![1]!], payment: cash });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     slipNo = r.body.receiptNo;
     const list = await slips(`?q=${slipNo}`);
@@ -401,7 +423,7 @@ describe('loan slips on Mượn / trả (FR-LIB-09a)', () => {
     expect(list.items[0]).toMatchObject({ docNo: slipNo, customerName: 'Bình', customerPhone: '+84912000031', copies: 2, out: 2, amountVnd: 100000, receivedBy: expect.any(String) });
     slipId = list.items[0].id;
     expect((await slips('?q=0912000031')).items.map((s: { docNo: string }) => s.docNo)).toContain(slipNo);
-    expect((await slips('?q=vn-0401-2')).items.map((s: { docNo: string }) => s.docNo)).toEqual([slipNo]);
+    expect((await slips(`?q=${acc['VN-0401']![1]!.toLowerCase()}`)).items.map((s: { docNo: string }) => s.docNo)).toEqual([slipNo]);
   });
 
   it('adds later fees to the slip and shows its receipts', async () => {
@@ -411,9 +433,9 @@ describe('loan slips on Mượn / trả (FR-LIB-09a)', () => {
     librarian = await h.login('thuthu', 'mat-khau-moi-456');
     cashier = await h.login('thu', 'mat-khau-moi-456');
     expect((await slips('?filter=overdue')).items.map((s: { docNo: string }) => s.docNo)).toContain(slipNo);
-    await call('POST', '/api/v1/library/loans/checkin', librarian, { barcode: 'VN-0401-1' });
+    await call('POST', '/api/v1/library/loans/checkin', librarian, { barcode: acc['VN-0401']![0]! });
     let d = (await call('GET', `/api/v1/library/slips/${slipId}`, librarian)).body;
-    expect(d.owed).toEqual([expect.objectContaining({ kind: 'late_fee', amountVnd: 6000, barcode: 'VN-0401-1' })]);
+    expect(d.owed).toEqual([expect.objectContaining({ kind: 'late_fee', amountVnd: 6000, barcode: acc['VN-0401']![0]! })]);
     await call('POST', '/api/v1/library/charges/pay', librarian, { customerId: binh, chargeIds: d.owed.map((c: { id: string }) => c.id), payment: cash });
     d = (await call('GET', `/api/v1/library/slips/${slipId}`, librarian)).body;
     expect(d).toMatchObject({ docNo: slipNo, copies: 2, out: 1, amountVnd: 106000, owed: [] });
@@ -422,18 +444,18 @@ describe('loan slips on Mượn / trả (FR-LIB-09a)', () => {
       [6000, 'Phí trả trễ'],
     ]);
     expect(d.loans.map((l: { barcode: string; returnedAt: string | null }) => [l.barcode, !!l.returnedAt])).toEqual([
-      ['VN-0401-1', true],
-      ['VN-0401-2', false],
+      [acc['VN-0401']![0]!, true],
+      [acc['VN-0401']![1]!, false],
     ]);
   });
 
   it('moves a slip to Đã trả hết once every copy is back; a 0 VND slip cannot be refunded', async () => {
-    await call('POST', '/api/v1/library/loans/checkin', librarian, { barcode: 'VN-0401-2' });
+    await call('POST', '/api/v1/library/loans/checkin', librarian, { barcode: acc['VN-0401']![1]! });
     const late = (await call('GET', `/api/v1/library/slips/${slipId}`, librarian)).body.owed;
     await call('POST', '/api/v1/library/charges/pay', librarian, { customerId: binh, chargeIds: late.map((c: { id: string }) => c.id), payment: cash });
     expect((await slips('?filter=open')).items.map((s: { docNo: string }) => s.docNo)).not.toContain(slipNo);
     expect((await slips('?filter=returned')).items.map((s: { docNo: string }) => s.docNo)).toContain(slipNo);
-    const free = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: binh, barcodes: ['VN-0401-3'], payment: cash, discount: { kind: 'pct', value: 100 } });
+    const free = await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: binh, barcodes: [acc['VN-0401']![2]!], payment: cash, discount: { kind: 'pct', value: 100 } });
     const freeSlip = (await slips(`?q=${free.body.receiptNo}`)).items[0];
     expect(freeSlip).toMatchObject({ amountVnd: 0, copies: 1 });
     const p = (await call('GET', `/api/v1/library/slips/${freeSlip.id}`, librarian)).body.payments[0];
@@ -446,11 +468,11 @@ describe('loan slips on Mượn / trả (FR-LIB-09a)', () => {
 describe('customer list: last activity counts library use (FR-CRM-02)', () => {
   it('shows a borrower who never bought as active', async () => {
     const chi = await customer('Chi chỉ mượn', '0912000041');
-    const t = (await call('POST', '/api/v1/library/titles', librarian, { code: 'VN-0501', title: 'Sách hoạt động', language: 'vi' })).body.id;
-    await call('POST', `/api/v1/library/titles/${t}/copies`, librarian, { count: 1, valueVnd: 50000, acquiredVia: 'purchase', shelf: 'F1' });
+    const t = (await call('POST', '/api/v1/library/titles', librarian, { title: 'Sách hoạt động', language: 'vi' })).body.id;
+    acc['VN-0501'] = (await call('POST', `/api/v1/library/titles/${t}/copies`, librarian, { count: 1, valueVnd: 50000, acquiredVia: 'purchase', shelf: 'F1' })).body.items.map((c: { barcode: string }) => c.barcode);
     const row = async () => (await call('GET', '/api/v1/customers?q=0912000041', owner)).body.items[0];
     expect((await row()).lastActivityAt).toBeNull();
-    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: chi, barcodes: ['VN-0501-1'], payment: { method: 'cash' } })).status).toBe(201);
+    expect((await call('POST', '/api/v1/library/loans/checkout', librarian, { customerId: chi, barcodes: [acc['VN-0501']![0]!], payment: { method: 'cash' } })).status).toBe(201);
     const r = await row();
     expect(r).toMatchObject({ orders: 0 });
     expect(r.lastActivityAt).toBeTruthy();

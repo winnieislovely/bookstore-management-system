@@ -435,7 +435,7 @@ export function LibraryCountDetailPage() {
       </div>
       <DataTable
         columns={[
-          { header: 'Mã bản', cell: (l: Line) => <span className="code">{l.barcode}</span> },
+          { header: 'Mã cá biệt', cell: (l: Line) => <span className="code">{l.barcode}</span> },
           { header: 'Tên sách', cell: (l) => l.title },
           { header: 'Kệ', cell: (l) => l.shelf ?? '—' },
           ...(showStatus ? [{ header: 'Trạng thái hệ thống', cell: (l: Line) => (l.status ? <StatusChip tone={COPY_STATUS[l.status]?.tone ?? 'neutral'}>{COPY_STATUS[l.status]?.label ?? l.status}</StatusChip> : '—') }] : []),

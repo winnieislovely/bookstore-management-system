@@ -17,6 +17,9 @@ export interface BookResult {
   isbn13: string | null;
   description: string | null;
   coverId: number | null;
+  /** Dewey number when Open Library has one (library titles, FR-LIB-02a). */
+  dewey: string | null;
+  language: 'vi' | 'en' | null;
 }
 
 const thumb = (coverId: number) => `https://covers.openlibrary.org/b/id/${coverId}-S.jpg`;
@@ -25,7 +28,7 @@ const thumb = (coverId: number) => `https://covers.openlibrary.org/b/id/${coverI
  * “Tìm sách” on Thêm sản phẩm mới (Design §12.4): title search with a dropdown (the main path),
  * or an ISBN typed or scanned, which fills the form straight away when there is one result.
  */
-export function BookLookup({ onPick }: { onPick: (b: BookResult) => void }) {
+export function BookLookup({ onPick, endpoint = '/api/v1/catalog/book-lookup' }: { onPick: (b: BookResult) => void; endpoint?: string }) {
   const [text, setText] = useState('');
   const [term, setTerm] = useState('');
   const [open, setOpen] = useState(false);
@@ -49,8 +52,8 @@ export function BookLookup({ onPick }: { onPick: (b: BookResult) => void }) {
 
   const isbn = isValidIsbn(term) ? term : null;
   const q = useQuery({
-    queryKey: ['book-lookup', isbn ? `isbn:${isbn}` : `q:${term.toLowerCase()}`],
-    queryFn: () => get<{ items: BookResult[] }>(`/api/v1/catalog/book-lookup?${isbn ? `isbn=${encodeURIComponent(isbn)}` : `q=${encodeURIComponent(term)}`}`),
+    queryKey: ['book-lookup', endpoint, isbn ? `isbn:${isbn}` : `q:${term.toLowerCase()}`],
+    queryFn: () => get<{ items: BookResult[] }>(`${endpoint}?${isbn ? `isbn=${encodeURIComponent(isbn)}` : `q=${encodeURIComponent(term)}`}`),
     enabled: !!isbn || term.length >= 3,
     staleTime: 10 * 60_000,
     retry: false,

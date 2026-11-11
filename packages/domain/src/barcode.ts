@@ -43,12 +43,32 @@ export const CODE128 = [
 ] as const;
 
 const START_B = 104;
+const CODE_C = 99;
 const STOP = 106;
 
-/** Code 128 set B modules (printable ASCII 32–126) with the mod-103 check symbol. */
-export function code128Modules(text: string): string {
+/**
+ * Symbol values: start B and set B (printable ASCII 32–126), switching to set C for a trailing run
+ * of at least four digits (two digits per symbol), so codes like `EN-000125` fit a 30 mm spine
+ * label at 0.2 mm modules (Design §16.5).
+ */
+export function code128Values(text: string): number[] {
   if (!/^[\x20-\x7e]+$/.test(text)) throw new RangeError('Code 128 set B covers printable ASCII only');
-  const values = [START_B, ...[...text].map((ch) => ch.charCodeAt(0) - 32)];
+  const run = /\d+$/.exec(text)?.[0] ?? '';
+  // An odd run keeps its first digit in set B so set C takes whole pairs.
+  const cLen = run.length >= 4 ? run.length - (run.length % 2) : 0;
+  const head = text.slice(0, text.length - cLen);
+  const tail = text.slice(text.length - cLen);
+  const values = [START_B, ...[...head].map((ch) => ch.charCodeAt(0) - 32)];
+  if (cLen) {
+    values.push(CODE_C);
+    for (let i = 0; i < tail.length; i += 2) values.push(Number(tail.slice(i, i + 2)));
+  }
+  return values;
+}
+
+/** Code 128 modules with the mod-103 check symbol. */
+export function code128Modules(text: string): string {
+  const values = code128Values(text);
   const check = values.reduce((sum, v, i) => sum + v * (i === 0 ? 1 : i), 0) % 103;
   let out = '';
   for (const v of [...values, check, STOP]) {

@@ -76,7 +76,7 @@ describe('book lookup (FR-CAT-16)', () => {
       h.bookLookup.down = false;
     }
     // An answer older than 7 days is fetched again.
-    await h.t.sql`update catalog.book_lookup_cache set fetched_at = fetched_at - interval '8 days' where key = 'q:crime'`;
+    await h.t.sql`update catalog.book_lookup_cache set fetched_at = fetched_at - interval '8 days' where key = 'v2:q:crime'`;
     await get('/api/v1/catalog/book-lookup?q=crime', manager);
     expect(h.bookLookup.calls).toBeGreaterThan(before);
   });

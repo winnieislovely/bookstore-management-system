@@ -2,7 +2,7 @@ import { schema } from '@bookstore/db';
 import {
   borrowBlocks,
   BORROW_BLOCK_TEXT,
-  copyBarcode,
+  composeCallNo,
   daysLate,
   dueAfter,
   foldText,
@@ -12,9 +12,8 @@ import {
   LIB_PAYMENT_METHODS,
   loanFee,
   discountedLoanFees,
-  nextLibraryCode,
+  normalizeDewey,
   normalizeIsbn,
-  normalizeLibraryCode,
   replacementCharge,
   type SettingsSnapshot,
 } from '@bookstore/domain';
@@ -71,8 +70,16 @@ const optText = (max: number) =>
     .nullish()
     .transform((v) => (v ? v : null));
 
+/** Copies added with a title or later: entry date, count, value and source (FR-LIB-02). */
+export const CopiesBlock = z.object({
+  count: z.number().int().min(0).max(50).default(1),
+  /** Entry date (store day); default today. */
+  acquiredAt: z.iso.date().optional(),
+  valueVnd: z.number().int().min(0).default(0),
+  acquiredVia: z.enum(['purchase', 'donation']).default('purchase'),
+});
+
 export const TitleSchema = z.object({
-  code: z.string().trim().min(1, 'Cần nhập mã thư viện.').max(30).transform(normalizeLibraryCode),
   title: z.string().trim().min(1, 'Cần nhập tên sách.').max(300),
   authors: z.array(z.string().trim().min(1).max(160)).max(10).default([]),
   isbn13: optText(20),
@@ -80,11 +87,16 @@ export const TitleSchema = z.object({
   year: z.number().int().min(1000).max(2100).nullish(),
   language: z.enum(LIB_LANGUAGES),
   category: optText(120),
-  callNo: optText(60),
+  /** Dewey number; empty while the title is unclassified (FR-LIB-01). */
+  dewey: optText(30).refine((v) => v === null || normalizeDewey(v) !== null, { message: 'Số Dewey gồm 3 chữ số, có thể thêm phần thập phân (ví dụ 891.733).' }),
+  /** Cutter with the title letter (`D67c`). */
+  cutter: optText(20),
+  /** First copies, saved with a new title in one step (ignored on update). */
+  copies: CopiesBlock.optional(),
 });
 
-function searchText(t: { code: string; title: string; authors: string[]; isbn13: string | null }) {
-  return foldText([t.code, t.title, ...t.authors, t.isbn13 ?? ''].join(' '));
+function searchText(t: { callNo: string | null; title: string; authors: string[]; isbn13: string | null }) {
+  return foldText([t.callNo ?? '', t.title, ...t.authors, t.isbn13 ?? ''].join(' '));
 }
 
 function isbnOf(raw: string | null): string | null {
@@ -94,34 +106,25 @@ function isbnOf(raw: string | null): string | null {
   return isbn;
 }
 
-async function codeTaken(tx: Tx, code: string, exceptId?: string) {
-  const t = schema.libTitle;
-  const [row] = await tx
-    .select({ id: t.id, title: t.title })
-    .from(t)
-    .where(and(sql`lower(${t.code}) = lower(${code})`, exceptId ? sql`${t.id} <> ${exceptId}::uuid` : undefined));
-  if (row) throw errors.conflict('code_taken', `Mã thư viện ${code} đã dùng cho “${row.title}”.`, { titleId: row.id });
-}
-
-export async function nextCode(ctx: Ctx, language: string) {
-  requirePermission(ctx, 'library.manage');
-  const lang = z.enum(LIB_LANGUAGES).parse(language);
-  const rows = await ctx.db.select({ code: schema.libTitle.code }).from(schema.libTitle).where(sql`${schema.libTitle.code} ilike ${lang === 'vi' ? 'VN-%' : 'EN-%'}`);
-  return { code: nextLibraryCode(lang, rows.map((r) => r.code)) };
+/** Title fields with the normalised Dewey and the composed call number (`891.733 D67c`, or null). */
+function titleValues(data: z.output<typeof TitleSchema>) {
+  const { copies: _copies, ...rest } = data;
+  const dewey = normalizeDewey(rest.dewey);
+  const cutter = rest.cutter ? rest.cutter.replace(/\s+/g, '') : null;
+  const isbn13 = isbnOf(rest.isbn13);
+  const callNo = composeCallNo(dewey, cutter);
+  return { ...rest, dewey, cutter, isbn13, callNo, year: rest.year ?? null, searchText: searchText({ ...rest, isbn13, callNo }) };
 }
 
 export async function createTitle(ctx: Ctx, input: z.input<typeof TitleSchema>) {
   requirePermission(ctx, 'library.manage');
   const data = TitleSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
-    await codeTaken(tx, data.code);
-    const isbn13 = isbnOf(data.isbn13);
-    const [row] = await tx
-      .insert(schema.libTitle)
-      .values({ ...data, isbn13, year: data.year ?? null, searchText: searchText({ ...data, isbn13 }) })
-      .returning({ id: schema.libTitle.id, code: schema.libTitle.code });
-    await audit.record(tx, ctx, { action: 'library.title.create', entity: 'lib_title', entityId: row!.id, after: data });
-    return row!;
+    const values = titleValues(data);
+    const [row] = await tx.insert(schema.libTitle).values(values).returning({ id: schema.libTitle.id, callNo: schema.libTitle.callNo });
+    const copies = data.copies?.count ? await insertCopies(tx, ctx, row!.id, data.copies.count, copyValues(ctx, data.copies)) : [];
+    await audit.record(tx, ctx, { action: 'library.title.create', entity: 'lib_title', entityId: row!.id, after: { ...values, barcodes: copies.map((c) => c.barcode) } });
+    return { ...row!, copies };
   });
 }
 
@@ -131,15 +134,14 @@ export async function updateTitle(ctx: Ctx, id: string, input: z.input<typeof Ti
   return ctx.db.transaction(async (tx) => {
     const [before] = await tx.select().from(schema.libTitle).where(eq(schema.libTitle.id, id)).for('update');
     if (!before) throw errors.notFound('Đầu sách');
-    await codeTaken(tx, data.code, id);
-    const isbn13 = isbnOf(data.isbn13);
-    // Copy barcodes keep the code they were labelled with (TDD §4.8).
+    // Accession numbers never change; a new call number only needs new spine labels.
+    const values = titleValues(data);
     await tx
       .update(schema.libTitle)
-      .set({ ...data, isbn13, year: data.year ?? null, searchText: searchText({ ...data, isbn13 }), updatedAt: ctx.clock.now(), version: sql`${schema.libTitle.version} + 1` })
+      .set({ ...values, updatedAt: ctx.clock.now(), version: sql`${schema.libTitle.version} + 1` })
       .where(eq(schema.libTitle.id, id));
-    await audit.record(tx, ctx, { action: 'library.title.update', entity: 'lib_title', entityId: id, before, after: data });
-    return { id, code: data.code };
+    await audit.record(tx, ctx, { action: 'library.title.update', entity: 'lib_title', entityId: id, before, after: values });
+    return { id, callNo: values.callNo };
   });
 }
 
@@ -149,6 +151,8 @@ export const TitlesQuery = z.object({
   /** Titles with at least one copy in this status. */
   status: z.enum(['available', 'reserved', 'on_loan', 'lost', 'damaged']).optional(),
   category: z.string().trim().max(120).optional(),
+  /** Only titles without a call number (Chưa phân loại). */
+  unclassified: z.union([z.boolean(), z.stringbool()]).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
 
@@ -159,20 +163,22 @@ export async function listTitles(ctx: Ctx, input: z.input<typeof TitlesQuery>) {
   const where: SQL[] = [];
   if (q.language) where.push(eq(t.language, q.language));
   if (q.category) where.push(eq(t.category, q.category));
+  if (q.unclassified) where.push(sql`${t.callNo} is null`);
   if (q.status) where.push(sql`exists (select 1 from library.lib_copy c where c.title_id = library.lib_title.id and c.status = ${q.status})`);
   if (q.q) {
     const folded = foldText(q.q);
-    where.push(sql`(${t.searchText} like ${`%${folded}%`} or exists (select 1 from library.lib_copy c where c.title_id = library.lib_title.id and lower(c.barcode) = lower(${q.q})))`);
+    where.push(sql`(${t.searchText} like ${`%${folded}%`} or exists (select 1 from library.lib_copy c where c.title_id = library.lib_title.id and replace(lower(c.barcode), '-', '') = replace(lower(${q.q}), '-', '')))`);
   }
   const items = await ctx.db
     .select({
       id: t.id,
-      code: t.code,
+      callNo: t.callNo,
+      dewey: t.dewey,
+      cutter: t.cutter,
       title: t.title,
       authors: t.authors,
       language: t.language,
       category: t.category,
-      callNo: t.callNo,
       // Qualified by hand: a single-table select renders columns unqualified.
       copies: sql<number>`(select count(*)::int from library.lib_copy c where c.title_id = library.lib_title.id)`,
       available: sql<number>`(select count(*)::int from library.lib_copy c where c.title_id = library.lib_title.id and c.status = 'available')`,
@@ -183,7 +189,7 @@ export async function listTitles(ctx: Ctx, input: z.input<typeof TitlesQuery>) {
     })
     .from(t)
     .where(where.length ? and(...where) : undefined)
-    .orderBy(asc(t.code))
+    .orderBy(sql`${t.callNo} asc nulls last`, asc(t.title))
     .limit(q.limit);
   const categories = await ctx.db.execute<{ category: string }>(sql`select distinct category from library.lib_title where category is not null order by category`);
   return { items, categories: categories.map((c) => c.category) };
@@ -241,25 +247,44 @@ export async function getTitle(ctx: Ctx, id: string) {
 // =============================================================================================
 // Copies (FR-LIB-02, FR-INV-13)
 
-export const AddCopiesSchema = z.object({
+export const AddCopiesSchema = CopiesBlock.extend({
   count: z.number().int().min(1).max(50).default(1),
-  valueVnd: z.number().int().min(0),
-  acquiredVia: z.enum(['purchase', 'donation']),
   shelf: optText(60),
   condition: optText(200),
 });
 
-async function insertCopies(tx: Tx, ctx: Ctx, titleId: string, n: number, values: { valueVnd: number; acquiredVia: 'purchase' | 'donation' | 'transfer'; shelf: string | null; condition: string | null; sourceVariantId?: string }) {
-  const [title] = await tx.select({ id: schema.libTitle.id, code: schema.libTitle.code }).from(schema.libTitle).where(eq(schema.libTitle.id, titleId)).for('update');
+/** Entry date at the start of that store day, or now when it is today or not given. */
+function copyValues(ctx: Ctx, b: { acquiredAt?: string | undefined; valueVnd: number; acquiredVia: 'purchase' | 'donation'; shelf?: string | null; condition?: string | null }) {
+  const now = ctx.clock.now();
+  const today = new Date(now.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
+  const acquiredAt = !b.acquiredAt || b.acquiredAt === today ? now : new Date(`${b.acquiredAt}T00:00:00+07:00`);
+  return { valueVnd: b.valueVnd, acquiredVia: b.acquiredVia, shelf: b.shelf ?? null, condition: b.condition ?? null, acquiredAt };
+}
+
+/** Next `n` accession numbers of a prefix, consecutive and never reused (FR-LIB-01): `EN-000125`. */
+async function allocateAccession(tx: Tx, prefix: 'VN' | 'EN', n: number): Promise<string[]> {
+  const [row] = await tx
+    .insert(schema.libAccessionCounter)
+    .values({ prefix, lastNo: n })
+    .onConflictDoUpdate({ target: schema.libAccessionCounter.prefix, set: { lastNo: sql`${schema.libAccessionCounter.lastNo} + ${n}` } })
+    .returning({ lastNo: schema.libAccessionCounter.lastNo });
+  const last = row!.lastNo;
+  return Array.from({ length: n }, (_, i) => `${prefix}-${String(last - n + i + 1).padStart(6, '0')}`);
+}
+
+async function insertCopies(
+  tx: Tx,
+  ctx: Ctx,
+  titleId: string,
+  n: number,
+  values: { valueVnd: number; acquiredVia: 'purchase' | 'donation' | 'transfer'; shelf: string | null; condition: string | null; acquiredAt?: Date; sourceVariantId?: string },
+) {
+  const [title] = await tx.select({ id: schema.libTitle.id, language: schema.libTitle.language }).from(schema.libTitle).where(eq(schema.libTitle.id, titleId)).for('update');
   if (!title) throw errors.notFound('Đầu sách');
   const [last] = await tx.execute<{ n: number }>(sql`select coalesce(max(copy_no), 0)::int as n from library.lib_copy where title_id = ${titleId}::uuid`);
   const now = ctx.clock.now();
-  const rows = Array.from({ length: n }, (_, i) => {
-    const copyNo = last!.n + i + 1;
-    return { titleId, copyNo, barcode: copyBarcode(title.code, copyNo), ...values, acquiredAt: now, createdAt: now };
-  });
-  const taken = await tx.select({ barcode: schema.libCopy.barcode }).from(schema.libCopy).where(inArray(schema.libCopy.barcode, rows.map((r) => r.barcode)));
-  if (taken.length) throw errors.conflict('barcode_taken', `Mã bản ${taken[0]!.barcode} đã có. Hãy đổi mã thư viện của đầu sách.`);
+  const barcodes = await allocateAccession(tx, title.language === 'vi' ? 'VN' : 'EN', n);
+  const rows = barcodes.map((barcode, i) => ({ titleId, copyNo: last!.n + i + 1, barcode, ...values, acquiredAt: values.acquiredAt ?? now, createdAt: now }));
   return tx.insert(schema.libCopy).values(rows).returning({ id: schema.libCopy.id, barcode: schema.libCopy.barcode, copyNo: schema.libCopy.copyNo });
 }
 
@@ -267,7 +292,7 @@ export async function addCopies(ctx: Ctx, titleId: string, input: z.input<typeof
   requirePermission(ctx, 'library.manage');
   const data = AddCopiesSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
-    const copies = await insertCopies(tx, ctx, titleId, data.count, { valueVnd: data.valueVnd, acquiredVia: data.acquiredVia, shelf: data.shelf, condition: data.condition });
+    const copies = await insertCopies(tx, ctx, titleId, data.count, copyValues(ctx, data));
     await audit.record(tx, ctx, { action: 'library.copy.add', entity: 'lib_title', entityId: titleId, after: { ...data, barcodes: copies.map((c) => c.barcode) } });
     return { items: copies };
   });
@@ -347,7 +372,7 @@ export async function labels(ctx: Ctx, copyIds: string[]) {
   requireAny(ctx);
   if (!copyIds.length) return { items: [] };
   const rows = await ctx.db
-    .select({ barcode: schema.libCopy.barcode, code: schema.libTitle.code, title: schema.libTitle.title, language: schema.libTitle.language })
+    .select({ barcode: schema.libCopy.barcode, callNo: schema.libTitle.callNo, dewey: schema.libTitle.dewey, cutter: schema.libTitle.cutter, title: schema.libTitle.title, language: schema.libTitle.language })
     .from(schema.libCopy)
     .innerJoin(schema.libTitle, eq(schema.libTitle.id, schema.libCopy.titleId))
     .where(inArray(schema.libCopy.id, copyIds))
@@ -360,19 +385,19 @@ export const CopiesQuery = z.object({
   status: z.enum(['available', 'reserved', 'on_loan', 'lost', 'damaged']).optional(),
 });
 
-/** Copies matching a library code, copy code or title, for the check-out search (Design §13.8). */
+/** Copies matching an accession number (with or without the hyphen), a call number or a title (Design §13.8). */
 export async function searchCopies(ctx: Ctx, input: z.input<typeof CopiesQuery>) {
   requireAny(ctx);
   const q = CopiesQuery.parse(input);
   const folded = foldText(q.q);
   const rows = await ctx.db
-    .select({ id: schema.libCopy.id, barcode: schema.libCopy.barcode, status: schema.libCopy.status, shelf: schema.libCopy.shelf, code: schema.libTitle.code, title: schema.libTitle.title })
+    .select({ id: schema.libCopy.id, barcode: schema.libCopy.barcode, status: schema.libCopy.status, shelf: schema.libCopy.shelf, callNo: schema.libTitle.callNo, title: schema.libTitle.title })
     .from(schema.libCopy)
     .innerJoin(schema.libTitle, eq(schema.libTitle.id, schema.libCopy.titleId))
     .where(
       and(
         q.status ? eq(schema.libCopy.status, q.status) : undefined,
-        sql`(upper(${schema.libCopy.barcode}) like upper(${`${q.q}%`}) or ${schema.libTitle.searchText} like ${`%${folded}%`})`,
+        sql`(replace(upper(${schema.libCopy.barcode}), '-', '') like replace(upper(${`${q.q}%`}), '-', '') or ${schema.libTitle.searchText} like ${`%${folded}%`})`,
       ),
     )
     .orderBy(asc(schema.libCopy.barcode))
@@ -384,10 +409,10 @@ export async function searchCopies(ctx: Ctx, input: z.input<typeof CopiesQuery>)
 export async function copyByBarcode(ctx: Ctx, barcode: string) {
   requireAny(ctx);
   const [row] = await ctx.db
-    .select({ id: schema.libCopy.id, barcode: schema.libCopy.barcode, status: schema.libCopy.status, code: schema.libTitle.code, title: schema.libTitle.title })
+    .select({ id: schema.libCopy.id, barcode: schema.libCopy.barcode, status: schema.libCopy.status, callNo: schema.libTitle.callNo, title: schema.libTitle.title })
     .from(schema.libCopy)
     .innerJoin(schema.libTitle, eq(schema.libTitle.id, schema.libCopy.titleId))
-    .where(sql`upper(${schema.libCopy.barcode}) = upper(${barcode.trim()})`);
+    .where(sql`replace(upper(${schema.libCopy.barcode}), '-', '') = replace(upper(${barcode.trim()}), '-', '')`);
   if (!row) throw new AppError(404, 'copy_not_found', `Không tìm thấy bản sách có mã ${barcode.trim()}.`, { barcode });
   return row;
 }
@@ -405,7 +430,7 @@ async function borrowerState(tx: Tx, customerId: string, now: Date) {
 
 const LOAN_ROW = sql`
   l.id, l.copy_id, l.customer_id, l.loaned_at, l.due_at, l.returned_at, l.closed_as, l.renewals,
-  c.barcode, c.value_vnd, t.id as title_id, t.code, t.title, cu.name as customer_name, cu.phone_e164 as customer_phone`;
+  c.barcode, c.value_vnd, t.id as title_id, t.call_no as code, t.title, cu.name as customer_name, cu.phone_e164 as customer_phone`;
 
 type LoanRow = {
   id: string;
@@ -419,7 +444,7 @@ type LoanRow = {
   barcode: string;
   value_vnd: string;
   title_id: string;
-  code: string;
+  code: string | null;
   title: string;
   customer_name: string;
   customer_phone: string | null;
@@ -442,7 +467,7 @@ function loanView(raw: LoanRow, now: Date, r: Rules) {
     customerName: l.customer_name,
     customerPhone: l.customer_phone,
     titleId: l.title_id,
-    code: l.code,
+    callNo: l.code,
     title: l.title,
     barcode: l.barcode,
     loanedAt: l.loaned_at,
@@ -504,7 +529,7 @@ async function chargesOf(tx: Tx, where: SQL, limit: number) {
     barcode: string | null;
   }>(sql`
     select ch.id, ch.kind, ch.list_vnd, ch.discount_pct, ch.amount_vnd, ch.status, ch.reason, ch.created_at, ch.paid_at,
-           coalesce(p.doc_no, s.doc_no) as receipt_no, t.code, t.title, c.barcode
+           coalesce(p.doc_no, s.doc_no) as receipt_no, t.call_no as code, t.title, c.barcode
     from library.lib_charge ch
     left join library.lib_payment p on p.id = ch.payment_id
     left join sales.sale s on s.id = ch.sale_id
@@ -524,7 +549,7 @@ async function chargesOf(tx: Tx, where: SQL, limit: number) {
     paidAt: x.paid_at,
     /** Desk receipt, or the POS sale for charges paid before 4 Nov 2026. */
     receiptNo: x.receipt_no,
-    code: x.code,
+    callNo: x.code,
     title: x.title,
     barcode: x.barcode,
   }));
@@ -717,13 +742,13 @@ export async function checkout(ctx: Ctx, input: z.input<typeof CheckoutSchema>) 
     const locked = await tx
       .select()
       .from(schema.libCopy)
-      .where(inArray(sql`upper(${schema.libCopy.barcode})`, data.barcodes.map((b) => b.toUpperCase())))
+      .where(inArray(sql`replace(upper(${schema.libCopy.barcode}), '-', '')`, data.barcodes.map((b) => b.toUpperCase().replace(/-/g, ''))))
       .for('update');
     const titles = locked.length
-      ? await tx.select({ id: schema.libTitle.id, title: schema.libTitle.title, code: schema.libTitle.code }).from(schema.libTitle).where(inArray(schema.libTitle.id, locked.map((c) => c.titleId)))
+      ? await tx.select({ id: schema.libTitle.id, title: schema.libTitle.title, callNo: schema.libTitle.callNo }).from(schema.libTitle).where(inArray(schema.libTitle.id, locked.map((c) => c.titleId)))
       : [];
     const titleOf = new Map(titles.map((t) => [t.id, t]));
-    const byBarcode = new Map(locked.map((c) => [c.barcode.toUpperCase(), { c, title: titleOf.get(c.titleId)!.title, code: titleOf.get(c.titleId)!.code }]));
+    const byBarcode = new Map(locked.map((c) => [c.barcode.toUpperCase().replace(/-/g, ""), { c, title: titleOf.get(c.titleId)!.title, callNo: titleOf.get(c.titleId)!.callNo }]));
     const fee = loanFee(await lifetimeSpend(tx, cust.id), feeRules(r));
     if (data.discount?.kind === 'vnd' && data.discount.value > fee.listVnd * data.barcodes.length) {
       throw new AppError(422, 'discount_too_high', 'Ưu đãi không được lớn hơn phí mượn.');
@@ -733,7 +758,7 @@ export async function checkout(ctx: Ctx, input: z.input<typeof CheckoutSchema>) 
     const out = [];
     const feeIds: string[] = [];
     for (const b of data.barcodes) {
-      const x = byBarcode.get(b.toUpperCase());
+      const x = byBarcode.get(b.toUpperCase().replace(/-/g, ""));
       if (!x) throw new AppError(404, 'copy_not_found', `Không tìm thấy bản sách có mã ${b}.`, { barcode: b });
       const c = x.c;
       let hold: { id: string } | undefined;
@@ -753,7 +778,7 @@ export async function checkout(ctx: Ctx, input: z.input<typeof CheckoutSchema>) 
       const copyFee: { listVnd: number; discountPct: number; amountVnd: number } = manual ? { listVnd: fee.listVnd, discountPct: manual.discountPcts[i]!, amountVnd: manual.amounts[i]! } : fee;
       const ch = await raiseCharge(tx, ctx, { customerId: cust.id, loanId: loan!.id, kind: 'loan_fee', ...copyFee });
       if (ch) feeIds.push(ch.id);
-      out.push({ loanId: loan!.id, barcode: c.barcode, code: x.code, title: x.title, dueAt, feeVnd: copyFee.amountVnd, listFeeVnd: fee.listVnd });
+      out.push({ loanId: loan!.id, barcode: c.barcode, callNo: x.callNo, title: x.title, dueAt, feeVnd: copyFee.amountVnd, listFeeVnd: fee.listVnd });
     }
     // Every check-out issues a receipt, 0 VND for a free loan; its number is the loan slip (FR-LIB-09a).
     const receipt = out.length ? await collect(tx, ctx, cust.id, feeIds, data.payment ?? { method: 'cash' }) : null;
@@ -761,7 +786,7 @@ export async function checkout(ctx: Ctx, input: z.input<typeof CheckoutSchema>) 
     // Titles with no copy on the shelf are reserved on the same form (FR-LIB-13, UC-17 3b).
     const holds = [];
     for (const titleId of data.holdTitleIds) holds.push(await reserveTx(tx, ctx, actor.userId, titleId, cust.id));
-    await audit.record(tx, ctx, { action: 'library.checkout', entity: 'customer', entityId: cust.id, after: { barcodes: out.map((o) => o.barcode), holds: holds.map((h) => h.code), dueAt, feeVnd: fee.amountVnd, discount: data.discount ?? null, receipt: receipt?.docNo } });
+    await audit.record(tx, ctx, { action: 'library.checkout', entity: 'customer', entityId: cust.id, after: { barcodes: out.map((o) => o.barcode), holds: holds.map((h) => h.callNo ?? h.title), dueAt, feeVnd: fee.amountVnd, discount: data.discount ?? null, receipt: receipt?.docNo } });
     return { customerId: cust.id, customerName: cust.name, dueAt, discountPct: fee.discountPct, loans: out, holds, totalFeeVnd: out.reduce((a, o) => a + o.feeVnd, 0), receiptNo: receipt?.docNo ?? null };
   });
 }
@@ -805,9 +830,9 @@ export async function checkin(ctx: Ctx, input: z.input<typeof CheckinSchema>) {
     const [l] = await tx.execute<LoanRow>(sql`
       select ${LOAN_ROW} from library.loan l
       join library.lib_copy c on c.id = l.copy_id join library.lib_title t on t.id = c.title_id join crm.customer cu on cu.id = l.customer_id
-      where upper(c.barcode) = upper(${data.barcode}) and l.returned_at is null for update of l, c`).then((rows) => rows.map(fixLoan));
+      where replace(upper(c.barcode), '-', '') = replace(upper(${data.barcode}), '-', '') and l.returned_at is null for update of l, c`).then((rows) => rows.map(fixLoan));
     if (!l) {
-      const [c] = await tx.select({ id: schema.libCopy.id }).from(schema.libCopy).where(sql`upper(${schema.libCopy.barcode}) = upper(${data.barcode})`);
+      const [c] = await tx.select({ id: schema.libCopy.id }).from(schema.libCopy).where(sql`replace(upper(${schema.libCopy.barcode}), '-', '') = replace(upper(${data.barcode}), '-', '')`);
       throw c ? errors.conflict('not_on_loan', `Bản ${data.barcode} không có lượt mượn nào đang mở.`) : new AppError(404, 'copy_not_found', `Không tìm thấy bản sách có mã ${data.barcode}.`);
     }
     const days = daysLate(l.due_at, now);
@@ -832,7 +857,7 @@ export async function checkin(ctx: Ctx, input: z.input<typeof CheckinSchema>) {
     return {
       loanId: l.id,
       barcode: l.barcode,
-      code: l.code,
+      callNo: l.code,
       title: l.title,
       customerId: l.customer_id,
       customerName: l.customer_name,
@@ -930,7 +955,7 @@ async function reservationsOf(ctx: Ctx, where: SQL) {
   const rows = await ctx.db.execute<{
     id: string;
     title_id: string;
-    code: string;
+    code: string | null;
     title: string;
     customer_id: string;
     customer_name: string;
@@ -941,7 +966,7 @@ async function reservationsOf(ctx: Ctx, where: SQL) {
     barcode: string | null;
     position: number;
   }>(sql`
-    select r.id, r.title_id, t.code, t.title, r.customer_id, cu.name as customer_name, cu.phone_e164 as customer_phone, r.status, r.queued_at, r.hold_until, c.barcode,
+    select r.id, r.title_id, t.call_no as code, t.title, r.customer_id, cu.name as customer_name, cu.phone_e164 as customer_phone, r.status, r.queued_at, r.hold_until, c.barcode,
            (select count(*)::int from library.lib_reservation q where q.title_id = r.title_id and q.status = 'queued' and (q.queued_at, q.id) <= (r.queued_at, r.id)) as position
     from library.lib_reservation r join library.lib_title t on t.id = r.title_id join crm.customer cu on cu.id = r.customer_id
     left join library.lib_copy c on c.id = r.copy_id
@@ -949,7 +974,7 @@ async function reservationsOf(ctx: Ctx, where: SQL) {
   return rows.map((x) => ({
     id: x.id,
     titleId: x.title_id,
-    code: x.code,
+    callNo: x.code,
     title: x.title,
     customerId: x.customer_id,
     customerName: x.customer_name,
@@ -982,7 +1007,7 @@ export async function reserve(ctx: Ctx, input: z.input<typeof ReserveSchema>) {
 async function reserveTx(tx: Tx, ctx: Ctx, userId: string, titleId: string, customerId: string) {
   const data = { titleId, customerId };
   {
-    const [t] = await tx.select({ id: schema.libTitle.id, title: schema.libTitle.title, code: schema.libTitle.code }).from(schema.libTitle).where(eq(schema.libTitle.id, data.titleId)).for('update');
+    const [t] = await tx.select({ id: schema.libTitle.id, title: schema.libTitle.title, callNo: schema.libTitle.callNo }).from(schema.libTitle).where(eq(schema.libTitle.id, data.titleId)).for('update');
     if (!t) throw errors.notFound('Đầu sách');
     const [avail] = await tx.execute<{ n: number }>(sql`select count(*)::int as n from library.lib_copy where title_id = ${t.id}::uuid and status = 'available'`);
     if (avail!.n > 0) throw errors.conflict('title_available', `“${t.title}” đang có bản trên kệ, cho mượn luôn thay vì đặt giữ.`);
@@ -999,7 +1024,7 @@ async function reserveTx(tx: Tx, ctx: Ctx, userId: string, titleId: string, cust
       .returning({ id: schema.libReservation.id });
     await audit.record(tx, ctx, { action: 'library.reserve', entity: 'lib_reservation', entityId: row!.id, after: data });
     const [pos] = await tx.execute<{ n: number }>(sql`select count(*)::int as n from library.lib_reservation where title_id = ${t.id}::uuid and status = 'queued'`);
-    return { id: row!.id, titleId: t.id, title: t.title, code: t.code, position: pos!.n };
+    return { id: row!.id, titleId: t.id, title: t.title, callNo: t.callNo, position: pos!.n };
   }
 }
 
@@ -1118,7 +1143,7 @@ export async function listSlips(ctx: Ctx, input: z.input<typeof SlipsQuery>) {
     where.push(sql`(upper(coalesce(doc_no, '')) like ${`%${q.q.toUpperCase()}%`} or search_text like ${`%${folded}%`}
       ${digits.length >= 4 ? sql`or customer_phone like ${`%${digits.slice(-9)}%`}` : sql``}
       or exists (select 1 from library.loan l join library.lib_copy c on c.id = l.copy_id join library.lib_title t on t.id = c.title_id
-                 where coalesce(l.slip_id, l.id) = x.id and (t.search_text like ${`%${folded}%`} or upper(c.barcode) = upper(${q.q}))))`);
+                 where coalesce(l.slip_id, l.id) = x.id and (t.search_text like ${`%${folded}%`} or replace(upper(c.barcode), '-', '') = replace(upper(${q.q}), '-', ''))))`);
   }
   const rows = await ctx.db.execute<SlipRow>(sql`select * from (${SLIPS}) x ${where.length ? sql`where ${sql.join(where, sql` and `)}` : sql``} order by created_at desc, doc_no desc nulls last limit 300`);
   const [c] = await ctx.db.execute<{ open: number; due_soon: number; overdue: number; returned: number; all: number }>(sql`
@@ -1203,7 +1228,7 @@ export async function listLoans(ctx: Ctx, input: z.input<typeof LoansQuery>) {
   if (q.q) {
     const folded = foldText(q.q);
     const digits = q.q.replace(/\D/g, '');
-    where.push(sql`(cu.search_text like ${`%${folded}%`} or t.search_text like ${`%${folded}%`} or upper(c.barcode) = upper(${q.q}) ${digits.length >= 4 ? sql`or cu.phone_e164 like ${`%${digits.slice(-9)}%`}` : sql``})`);
+    where.push(sql`(cu.search_text like ${`%${folded}%`} or t.search_text like ${`%${folded}%`} or replace(upper(c.barcode), '-', '') = replace(upper(${q.q}), '-', '') ${digits.length >= 4 ? sql`or cu.phone_e164 like ${`%${digits.slice(-9)}%`}` : sql``})`);
   }
   const rows = await ctx.db.execute<LoanRow>(sql`
     select ${LOAN_ROW} from library.loan l
@@ -1256,9 +1281,9 @@ export async function report(ctx: Ctx, input: z.input<typeof ReportSchema>) {
            (select coalesce(sum(amount_vnd), 0) from library.lib_charge where status = 'paid' and kind = 'late_fee' and ${inRange(sql`paid_at`)}) as late,
            (select coalesce(sum(amount_vnd), 0) from library.lib_charge where status = 'paid' and kind in ('lost', 'damage') and ${inRange(sql`paid_at`)}) as losses,
            (select coalesce(sum(amount_vnd), 0) from library.lib_charge where status = 'waived' and ${inRange(sql`created_at`)}) as waived`);
-  const popular = await ctx.db.execute<{ code: string; title: string; loans: number }>(sql`
-    select t.code, t.title, count(*)::int as loans from library.loan l join library.lib_copy c on c.id = l.copy_id join library.lib_title t on t.id = c.title_id
-    where ${inRange(sql`l.loaned_at`)} group by t.id order by loans desc, t.code limit 10`);
+  const popular = await ctx.db.execute<{ callNo: string | null; title: string; loans: number }>(sql`
+    select t.call_no as "callNo", t.title, count(*)::int as loans from library.loan l join library.lib_copy c on c.id = l.copy_id join library.lib_title t on t.id = c.title_id
+    where ${inRange(sql`l.loaned_at`)} group by t.id order by loans desc, t.title limit 10`);
   const collection = await ctx.db.execute<{ language: string; status: string; n: number }>(sql`
     select t.language, c.status, count(*)::int as n from library.lib_copy c join library.lib_title t on t.id = c.title_id group by t.language, c.status order by t.language, c.status`);
   return {
@@ -1311,10 +1336,10 @@ export async function overview(ctx: Ctx) {
 }
 
 export async function overdueForDashboard(tx: Tx, now: Date) {
-  const rows = await tx.execute<{ id: string; title: string; code: string; customer_name: string; customer_phone: string | null; due_at: Date }>(sql`
-    select l.id, t.title, t.code, cu.name as customer_name, cu.phone_e164 as customer_phone, l.due_at from library.loan l
+  const rows = await tx.execute<{ id: string; title: string; code: string | null; customer_name: string; customer_phone: string | null; due_at: Date }>(sql`
+    select l.id, t.title, t.call_no as code, cu.name as customer_name, cu.phone_e164 as customer_phone, l.due_at from library.loan l
     join library.lib_copy c on c.id = l.copy_id join library.lib_title t on t.id = c.title_id join crm.customer cu on cu.id = l.customer_id
     where l.returned_at is null and l.due_at < ${tsParam(now)} order by l.due_at limit 10`);
-  return rows.map((x) => ({ loanId: x.id, title: x.title, code: x.code, customerName: x.customer_name, customerPhone: x.customer_phone, dueAt: asDate(x.due_at), daysLate: daysLate(asDate(x.due_at), now) }));
+  return rows.map((x) => ({ loanId: x.id, title: x.title, callNo: x.code, customerName: x.customer_name, customerPhone: x.customer_phone, dueAt: asDate(x.due_at), daysLate: daysLate(asDate(x.due_at), now) }));
 }
 

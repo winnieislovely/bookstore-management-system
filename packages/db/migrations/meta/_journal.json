@@ -169,6 +169,13 @@
       "when": 1794385751849,
       "tag": "0023_book_lookup_cache",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794390117429,
+      "tag": "0024_r4_call_numbers",
+      "breakpoints": true
     }
   ]
 }

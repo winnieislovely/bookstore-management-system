@@ -1,4 +1,4 @@
-import { normalizeIsbn } from '@bookstore/domain';
+import { normalizeDewey, normalizeIsbn } from '@bookstore/domain';
 
 /**
  * Book lookup boundary (FR-CAT-16, TDD §8.8): Open Library behind `BookLookupAdapter`, with an HTTP
@@ -17,6 +17,10 @@ export interface BookHit {
   isbn13: string | null;
   description: string | null;
   coverId: number | null;
+  /** Dewey number, normalised (`891.733`), when Open Library has one (FR-LIB-02a). */
+  dewey: string | null;
+  /** Language of the edition, when it is Vietnamese or English. */
+  language: 'vi' | 'en' | null;
 }
 
 export interface BookLookupAdapter {
@@ -89,6 +93,12 @@ const yearOf = (v: unknown): number | null => {
 };
 const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? fixVietnamese(v) : null);
 const workIdOf = (key: unknown): string | null => (typeof key === 'string' ? (/OL\d+W/.exec(key)?.[0] ?? null) : null);
+const firstDewey = (list: unknown): string | null => (Array.isArray(list) ? (list.map((v) => (typeof v === 'string' ? normalizeDewey(v) : null)).find(Boolean) ?? null) : null);
+/** `eng`, `/languages/vie` → `en`, `vi`; anything else null. */
+const languageOf = (list: unknown): 'vi' | 'en' | null => {
+  const codes = (Array.isArray(list) ? list : []).map((v) => (typeof v === 'string' ? v : typeof v === 'object' && v && 'key' in v ? String((v as { key: unknown }).key) : '')).map((v) => v.replace('/languages/', ''));
+  return codes.includes('vie') ? 'vi' : codes.includes('eng') ? 'en' : null;
+};
 
 // ---------------------------------------------------------------------------------------------
 // Live Open Library
@@ -131,7 +141,7 @@ export class OpenLibraryAdapter implements BookLookupAdapter {
   }
 
   async search(title: string): Promise<BookHit[]> {
-    const fields = 'key,title,subtitle,author_name,first_publish_year,cover_i,editions,editions.title,editions.subtitle,editions.isbn,editions.publisher,editions.publish_date,editions.cover_i';
+    const fields = 'key,title,subtitle,author_name,first_publish_year,cover_i,ddc,language,editions,editions.title,editions.subtitle,editions.isbn,editions.publisher,editions.publish_date,editions.cover_i,editions.language';
     const body = await this.json(`https://openlibrary.org/search.json?title=${encodeURIComponent(title)}&limit=8&fields=${fields}`);
     const docs = (body?.docs ?? []) as Record<string, unknown>[];
     return docs.map((d) => {
@@ -148,6 +158,9 @@ export class OpenLibraryAdapter implements BookLookupAdapter {
         isbn13: firstIsbn(ed.isbn),
         description: null,
         coverId: typeof ed.cover_i === 'number' ? ed.cover_i : typeof d.cover_i === 'number' ? d.cover_i : null,
+        // Work-level list: every edition's Dewey number (TDD §8.8).
+        dewey: firstDewey(d.ddc),
+        language: languageOf(ed.language) ?? languageOf(d.language),
       } satisfies BookHit;
     }).filter((h) => h.title);
   }
@@ -179,6 +192,8 @@ export class OpenLibraryAdapter implements BookLookupAdapter {
         isbn13,
         description: plainDescription(ed.description) ?? plainDescription(work?.description),
         coverId: ((ed.covers as number[] | undefined) ?? []).find((c) => c > 0) ?? null,
+        dewey: firstDewey(ed.dewey_decimal_class),
+        language: languageOf(ed.languages),
       },
     ].filter((h) => h.title);
   }
@@ -215,8 +230,8 @@ export class MockBookLookup implements BookLookupAdapter {
   down = false;
   calls = 0;
   readonly books: BookHit[] = [
-    { workId: 'OL1W', title: 'Mắt biếc', authors: ['Nguyễn Nhật Ánh'], publisher: 'Nhà xuất bản Trẻ', year: 2013, isbn13: '9786041005143', description: null, coverId: 101 },
-    { workId: 'OL2W', title: 'Crime and Punishment', authors: ['Fyodor Dostoevsky'], publisher: 'Penguin', year: 2003, isbn13: '9780140449136', description: null, coverId: 102 },
+    { workId: 'OL1W', title: 'Mắt biếc', authors: ['Nhật Ánh Nguyễn'], publisher: 'Nhà xuất bản Trẻ', year: 2013, isbn13: '9786041005143', description: null, coverId: 101, dewey: null, language: 'vi' },
+    { workId: 'OL2W', title: 'Crime and Punishment', authors: ['Fyodor Dostoevsky'], publisher: 'Penguin', year: 2003, isbn13: '9780140449136', description: null, coverId: 102, dewey: '891.733', language: 'en' },
   ];
   readonly descriptions: Record<string, string> = { OL2W: 'A young man in St Petersburg commits a murder.' };
 

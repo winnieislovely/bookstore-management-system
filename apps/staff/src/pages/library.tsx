@@ -1,10 +1,11 @@
-import { barcodeSvg, BORROW_BLOCK_TEXT, discountedLoanFees, dueAfter, escapeXml, type BorrowBlock, type LoanDiscount } from '@bookstore/domain';
+import { barcodeSvg, BORROW_BLOCK_TEXT, cutterNumber, deweyCategory, discountedLoanFees, dueAfter, escapeXml, normalizeDewey, vietnameseNaturalOrder, type BorrowBlock, type LoanDiscount } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { AlertOctagon, ArrowLeftRight, BookmarkCheck, CheckCircle2, ChevronDown, Library, Phone, Plus, Printer, ScanBarcode, Search, Truck, User, UserPlus, X } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, SearchBox, SelectField, TextArea, TimeFilter, errText, timeDays, timeLabel, toast, useDebounced, useParam, type Column } from '../components/data';
+import { BookLookup, type BookResult } from '../components/bookLookup';
 import { ProductSearch } from '../components/product-search';
 import { Button, Card, EmptyState, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, patch, post } from '../lib/api';
@@ -41,7 +42,7 @@ interface Loan {
   customerName: string;
   customerPhone: string | null;
   titleId: string;
-  code: string;
+  callNo: string | null;
   title: string;
   barcode: string;
   loanedAt: string;
@@ -58,7 +59,7 @@ interface Loan {
 interface Hold {
   id: string;
   titleId: string;
-  code: string;
+  callNo: string | null;
   title: string;
   customerId: string;
   customerName: string;
@@ -82,7 +83,7 @@ interface Charge {
   paidAt: string | null;
   /** Desk receipt (PT-…), or the POS sale for charges paid before 4 Nov 2026. */
   receiptNo: string | null;
-  code: string | null;
+  callNo: string | null;
   title: string | null;
   barcode: string | null;
 }
@@ -108,18 +109,20 @@ interface CopyHit {
   barcode: string;
   status: string;
   shelf: string | null;
-  code: string;
+  callNo: string | null;
   title: string;
 }
 
 interface TitleRow {
   id: string;
-  code: string;
+  /** Call number (`891.733 D67c`), null while unclassified. */
+  callNo: string | null;
+  dewey: string | null;
+  cutter: string | null;
   title: string;
   authors: string[];
   language: string;
   category: string | null;
-  callNo: string | null;
   copies: number;
   available: number;
   queued: number;
@@ -129,7 +132,14 @@ interface TitleRow {
 }
 
 /** A title with no copy on the shelf, reserved on the borrow form (FR-LIB-13). */
-type HoldLine = { titleId: string; code: string; title: string; nextDueAt: string | null; queued: number };
+type HoldLine = { titleId: string; callNo: string | null; title: string; nextDueAt: string | null; queued: number };
+
+/** Call number as shown in lists; unclassified titles say so (FR-LIB-01). */
+const callNoText = (c: string | null | undefined) => c ?? 'Chưa phân loại';
+
+function CallNo({ value }: { value: string | null }) {
+  return value ? <span className="code font-medium">{value}</span> : <StatusChip tone="neutral">Chưa phân loại</StatusChip>;
+}
 /** Out of copies but some are lent, so a reservation makes sense. */
 const reservable = (t: TitleRow) => t.available === 0 && t.onLoan > 0;
 
@@ -453,11 +463,11 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
     enabled: scanTerm.length >= 2,
     queryFn: () => get<{ items: TitleRow[] }>('/api/v1/library/titles', { q: scanTerm, limit: 10 }),
   });
-  const [copies, setCopies] = useState<{ barcode: string; title: string; code: string }[]>([]);
+  const [copies, setCopies] = useState<{ barcode: string; title: string; callNo: string | null }[]>([]);
   const [holds, setHolds] = useState<HoldLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<{ totalFeeVnd: number; dueAt: string; count: number; holds: { code: string; title: string; position: number }[] } | null>(null);
+  const [done, setDone] = useState<{ totalFeeVnd: number; dueAt: string; count: number; holds: { callNo: string | null; title: string; position: number }[] } | null>(null);
   const [payment, setPayment] = useState<DeskPayment>({ method: 'cash' });
   const [payOwed, setPayOwed] = useState(false);
   const b = useQuery({ queryKey: ['library-borrower', customer?.id], enabled: !!customer, queryFn: () => get<Borrower>(`/api/v1/library/borrowers/${customer!.id}`) });
@@ -471,12 +481,12 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
   const pick = (c: CopyHit) => {
     setScan('');
     setError(null);
-    if (!copies.some((x) => x.barcode === c.barcode)) setCopies((cs) => [...cs, { barcode: c.barcode, title: c.title, code: c.code }]);
+    if (!copies.some((x) => x.barcode === c.barcode)) setCopies((cs) => [...cs, { barcode: c.barcode, title: c.title, callNo: c.callNo }]);
   };
   const pickHold = (t: TitleRow) => {
     setScan('');
     setError(null);
-    if (!holds.some((x) => x.titleId === t.id)) setHolds((hs) => [...hs, { titleId: t.id, code: t.code, title: t.title, nextDueAt: t.nextDueAt, queued: t.queued }]);
+    if (!holds.some((x) => x.titleId === t.id)) setHolds((hs) => [...hs, { titleId: t.id, callNo: t.callNo, title: t.title, nextDueAt: t.nextDueAt, queued: t.queued }]);
   };
   /**
    * Enter or scan: an exact copy code is added; a title code or title adds its only copy on the
@@ -518,8 +528,8 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
         !t
           ? `Không tìm thấy sách có mã hoặc tên “${text}”.`
           : t.copies === 0
-            ? `Đầu sách ${t.code} “${t.title}” chưa có bản sách nào. Thêm bản ở Quản lý đầu sách trước khi cho mượn.`
-            : `Mọi bản của ${t.code} “${t.title}” đang được giữ hoặc không dùng được.`,
+            ? `Đầu sách “${t.title}” chưa có bản sách nào. Thêm bản ở Quản lý đầu sách trước khi cho mượn.`
+            : `Mọi bản của “${t.title}” đang được giữ hoặc không dùng được.`,
       );
     } catch (e) {
       setError(errText(e));
@@ -534,7 +544,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
     setError(null);
     try {
       // The loan fee is taken at the desk before the loans are recorded (FR-LIB-07, FR-LIB-09a).
-      const r = await post<{ totalFeeVnd: number; dueAt: string; loans: unknown[]; holds: { code: string; title: string; position: number }[] }>('/api/v1/library/loans/checkout', {
+      const r = await post<{ totalFeeVnd: number; dueAt: string; loans: unknown[]; holds: { callNo: string | null; title: string; position: number }[] }>('/api/v1/library/loans/checkout', {
         customerId: customer!.id,
         barcodes: copies.map((c) => c.barcode),
         holdTitleIds: holds.map((h) => h.titleId),
@@ -574,9 +584,9 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
               {done.count > 0 && <p className="font-semibold">Đặt giữ</p>}
               <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-2">
                 {done.holds.map((h) => (
-                  <div key={h.code} className="contents">
+                  <div key={`${h.title}-${h.position}`} className="contents">
                     <dt className="min-w-0 text-ink-700">
-                      {h.title} <span className="text-ink-500">· {h.code}</span>
+                      {h.title} {h.callNo && <span className="text-ink-500">· {h.callNo}</span>}
                     </dt>
                     <dd className="text-right font-semibold whitespace-nowrap num">Thứ {h.position} trong hàng chờ</dd>
                   </div>
@@ -633,7 +643,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
                     <span className="min-w-0 flex-1">
                       {r.title} <span className="text-ink-500">· {r.barcode}</span>
                     </span>
-                    <Button size="sm" variant="secondary" onClick={() => setCopies((cs) => [...cs, { barcode: r.barcode!, title: r.title, code: r.code }])}>
+                    <Button size="sm" variant="secondary" onClick={() => setCopies((cs) => [...cs, { barcode: r.barcode!, title: r.title, callNo: r.callNo }])}>
                       Lấy sách
                     </Button>
                   </div>
@@ -649,8 +659,8 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
             >
               <input
                 className="h-11 min-w-0 flex-1 rounded-md border border-paper-500 bg-white px-3 focus:border-navy-700"
-                placeholder="Nhập mã thư viện/tên sách"
-                aria-label="Mã thư viện"
+                placeholder="Nhập mã cá biệt/tên sách"
+                aria-label="Mã cá biệt"
                 value={scan}
                 onChange={(e) => setScan(e.target.value)}
               />
@@ -680,7 +690,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
                       <span className="min-w-0 flex-1">
                         <span className="block font-medium">{t.title}</span>
                         <span className="text-ink-500">
-                          {t.code}
+                          {callNoText(t.callNo)}
                           {t.nextDueAt ? ` · có lại ${formatDate(t.nextDueAt)}` : ''}
                         </span>
                       </span>
@@ -723,7 +733,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
                     <span className="min-w-0 flex-1">
                       <span className="block font-semibold">{h.title}</span>
                       <span className="flex items-center justify-between gap-3">
-                        <span className="text-ink-500">{h.code}</span>
+                        <span className="text-ink-500">{callNoText(h.callNo)}</span>
                         <StatusChip tone="accent" icon={BookmarkCheck}>
                           Đặt giữ
                         </StatusChip>
@@ -789,7 +799,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
 interface CheckinResult {
   customerId: string;
   barcode: string;
-  code: string;
+  callNo: string | null;
   title: string;
   customerName: string;
   customerPhone: string | null;
@@ -852,7 +862,7 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
           <dl className="grid w-full grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-left text-sm">
             <dt className="text-ink-700">Tên sách</dt>
             <dd className="text-right font-semibold">{result.title}</dd>
-            <dt className="text-ink-700">Mã thư viện</dt>
+            <dt className="text-ink-700">Mã cá biệt</dt>
             <dd className="text-right font-semibold">{result.barcode}</dd>
             <dt className="text-ink-700">Tên khách</dt>
             <dd className="text-right font-semibold">{result.customerName}</dd>
@@ -908,13 +918,13 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
           <div className="flex flex-col gap-2">
             <div className="flex items-end gap-2">
               <Field
-                label="Mã thư viện"
+                label="Mã cá biệt"
                 className="flex-1"
                 autoFocus
                 value={barcode}
                 onChange={(e) => setBarcode(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && barcode.trim() && void submit()}
-                placeholder="Nhập mã thư viện/tên sách"
+                placeholder="Nhập mã cá biệt/tên sách"
               />
               {/* Camera scan fills the copy code (Design §13.8). */}
               <button type="button" className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-navy-50 text-navy-700 hover:bg-navy-100" aria-label="Quét mã bằng camera" onClick={() => setCamera(true)}>
@@ -1447,13 +1457,25 @@ export function LibraryCatalogPage() {
   const [language, setLanguage] = useParam('lang');
   const [status, setStatus] = useParam('status');
   const [category, setCategory] = useParam('category');
+  const [classified, setClassified] = useParam('class');
   const [dialog, setDialog] = useState<null | 'new'>(null);
   const list = useQuery({
-    queryKey: ['library-titles', q, language, status, category],
-    queryFn: () => get<{ items: TitleRow[]; categories: string[] }>('/api/v1/library/titles', { q: q || undefined, language: language || undefined, status: status || undefined, category: category || undefined }),
+    queryKey: ['library-titles', q, language, status, category, classified],
+    queryFn: () => get<{ items: TitleRow[]; categories: string[] }>('/api/v1/library/titles', { q: q || undefined, language: language || undefined, status: status || undefined, category: category || undefined, unclassified: classified === 'no' ? 'true' : undefined }),
   });
   const columns: Column<TitleRow>[] = [
-    { header: 'Mã thư viện', cell: (r) => <span className="code font-medium">{r.code}</span> },
+    {
+      header: 'Ký hiệu xếp giá',
+      cell: (r) =>
+        r.dewey ? (
+          <span className="code flex flex-col font-medium leading-5">
+            <span>{normalizeDewey(r.dewey)}</span>
+            {r.cutter && <span>{r.cutter}</span>}
+          </span>
+        ) : (
+          <CallNo value={r.callNo} />
+        ),
+    },
     {
       header: 'Tên sách',
       cell: (r) => (
@@ -1477,7 +1499,7 @@ export function LibraryCatalogPage() {
     },
   ];
   const manage = can(me, 'library.manage');
-  const filtered = !!(q || language || status || category);
+  const filtered = !!(q || language || status || category || classified);
   return (
     <>
       <PageHeader
@@ -1494,13 +1516,14 @@ export function LibraryCatalogPage() {
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="min-w-0 flex-1">
-          <SearchBox value={q} onChange={setQ} placeholder="Tìm mã thư viện, mã bản, tên sách, tác giả, ISBN…" />
+          <SearchBox value={q} onChange={setQ} placeholder="Tìm mã cá biệt, ký hiệu, tên sách, tác giả, ISBN…" />
         </div>
         <FilterMenu
           groups={[
             { kind: 'single', label: 'Ngôn ngữ', options: [{ key: 'vi', label: 'Tiếng Việt' }, { key: 'en', label: 'Tiếng Anh' }], value: language, onChange: setLanguage },
             { kind: 'single', label: 'Trạng thái', options: Object.entries(COPY_STATUS).map(([key, s]) => ({ key, label: `Có bản ${s.label.toLowerCase()}` })), value: status, onChange: setStatus },
             { kind: 'single', label: 'Thể loại', options: (list.data?.categories ?? []).map((c) => ({ key: c, label: c })), value: category, onChange: setCategory },
+            { kind: 'single', label: 'Phân loại', options: [{ key: 'no', label: 'Chưa phân loại' }], value: classified, onChange: setClassified },
           ]}
         />
       </div>
@@ -1511,16 +1534,17 @@ export function LibraryCatalogPage() {
         onRow={(r) => navigate(`/library/titles/${r.id}`)}
         error={list.error}
         onRetry={() => list.refetch()}
-        empty={filtered ? { icon: Search, title: 'Không có đầu sách phù hợp', help: 'Thử đổi từ khóa hoặc bộ lọc.' } : { icon: Library, title: 'Thư viện chưa có đầu sách', help: 'Thêm đầu sách rồi thêm bản sách để in tem.' }}
+        empty={filtered ? { icon: Search, title: 'Không có đầu sách phù hợp', help: 'Thử đổi từ khóa hoặc bộ lọc.' } : { icon: Library, title: 'Thư viện chưa có đầu sách', help: 'Thêm đầu sách cùng số cuốn để in tem gáy.' }}
       />
-      {dialog === 'new' && <TitleForm title={null} onClose={() => setDialog(null)} onSaved={(id) => navigate(`/library/titles/${id}`)} />}
+      {dialog === 'new' && <TitleForm title={null} onClose={() => setDialog(null)} onSaved={(id, copyIds) => navigate(`/library/titles/${id}${copyIds.length ? `?print=${copyIds.join(',')}` : ''}`)} />}
     </>
   );
 }
 
 interface TitleDetail {
   id: string;
-  code: string;
+  dewey: string | null;
+  cutter: string | null;
   title: string;
   authors: string[];
   isbn13: string | null;
@@ -1544,10 +1568,47 @@ interface TitleDetail {
   reservations: Hold[];
 }
 
-function TitleForm({ title, onClose, onSaved }: { title: TitleDetail | null; onClose: () => void; onSaved: (id: string) => void }) {
+function AutoChip() {
+  return (
+    <span className="ml-1.5 align-middle">
+      <StatusChip tone="info">Tự điền</StatusChip>
+    </span>
+  );
+}
+
+const storeToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+
+/** Ngày nhập, Số cuốn, Giá trị, Nguồn for copies added with a title or later (FR-LIB-02, Design §13.8). */
+type CopiesDraft = { count: string; acquiredAt: string; valueVnd: number | null; acquiredVia: 'purchase' | 'donation' };
+const newCopiesDraft = (): CopiesDraft => ({ count: '1', acquiredAt: storeToday(), valueVnd: null, acquiredVia: 'purchase' });
+
+function CopiesFields({ value, onChange, allowZero }: { value: CopiesDraft; onChange: (v: CopiesDraft) => void; allowZero?: boolean }) {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <Field label="Ngày nhập" type="date" value={value.acquiredAt} max={storeToday()} onChange={(e) => onChange({ ...value, acquiredAt: e.target.value })} />
+      <Field
+        label="Số cuốn"
+        inputMode="numeric"
+        value={value.count}
+        helper={allowZero ? 'Để 0 nếu chỉ lưu đầu sách.' : undefined}
+        onChange={(e) => onChange({ ...value, count: e.target.value.replace(/\D/g, '').slice(0, 2) })}
+      />
+      <MoneyInput label="Giá trị mỗi cuốn" value={value.valueVnd} onChange={(v) => onChange({ ...value, valueVnd: v })} />
+      <SelectField label="Nguồn" value={value.acquiredVia} onChange={(e) => onChange({ ...value, acquiredVia: e.target.value as 'purchase' | 'donation' })}>
+        <option value="purchase">Mua</option>
+        <option value="donation">Tặng</option>
+      </SelectField>
+    </div>
+  );
+}
+
+const copiesBody = (c: CopiesDraft) => ({ count: Number(c.count) || 0, acquiredAt: c.acquiredAt, valueVnd: c.valueVnd ?? 0, acquiredVia: c.acquiredVia });
+
+/** “Thêm đầu sách” / “Sửa”: Tìm sách, Thông tin sách, Ký hiệu xếp giá and, for a new title, Nhập bản (Design §13.8). */
+function TitleForm({ title, onClose, onSaved }: { title: TitleDetail | null; onClose: () => void; onSaved: (id: string, copyIds: string[]) => void }) {
   const qc = useQueryClient();
+  const isNew = !title;
   const [f, setF] = useState({
-    code: title?.code ?? '',
     title: title?.title ?? '',
     authors: title?.authors.join(', ') ?? '',
     isbn13: title?.isbn13 ?? '',
@@ -1555,35 +1616,88 @@ function TitleForm({ title, onClose, onSaved }: { title: TitleDetail | null; onC
     year: title?.year ? String(title.year) : '',
     language: title?.language ?? 'vi',
     category: title?.category ?? '',
-    callNo: title?.callNo ?? '',
+    dewey: title?.dewey ?? '',
+    cutter: title?.cutter ?? '',
   });
-  const [codeTouched, setCodeTouched] = useState(!!title);
+  // The Cutter and the category follow the author, title and Dewey until staff type their own.
+  const [cutterTouched, setCutterTouched] = useState(!!title?.cutter);
+  const [categoryTouched, setCategoryTouched] = useState(!!title?.category);
+  const [auto, setAuto] = useState<Set<string>>(new Set());
+  const [copies, setCopies] = useState<CopiesDraft>(newCopiesDraft);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // The next free code for the language, until staff type their own (Design §13.8).
-  const next = useQuery({ queryKey: ['library-next-code', f.language], enabled: !title, queryFn: () => get<{ code: string }>('/api/v1/library/titles/next-code', { lang: f.language }) });
-  const code = codeTouched ? f.code : (next.data?.code ?? '');
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const unmark = (k: string) => auto.has(k) && setAuto((a) => new Set([...a].filter((x) => x !== k)));
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => {
+    unmark(k);
+    setF({ ...f, [k]: e.target.value });
+  };
+  const label = (text: string, k: string) => (
+    <>
+      {text}
+      {auto.has(k) && <AutoChip />}
+    </>
+  );
+  const lang = f.language === 'en' ? 'en' : 'vi';
+  const firstAuthor = f.authors.split(',')[0]?.trim() ?? '';
+  const cutter = cutterTouched ? f.cutter : cutterNumber(firstAuthor, f.title, lang);
+  const dewey = normalizeDewey(f.dewey);
+  const deweyBad = f.dewey.trim() !== '' && !dewey;
+  const category = categoryTouched ? f.category : f.category || deweyCategory(f.dewey) || '';
+  const count = Number(copies.count) || 0;
+
+  /** Fill only empty fields from a looked-up book (FR-LIB-02a). */
+  const fill = (b: BookResult) => {
+    const next = { ...f };
+    const marked: string[] = [];
+    const take = (k: keyof typeof f, v: string | null | undefined) => {
+      if (v && !f[k].trim()) {
+        next[k] = v;
+        marked.push(k);
+      }
+    };
+    const language = b.language ?? (f.language as 'vi' | 'en');
+    take('title', b.title);
+    take('authors', (language === 'vi' ? b.authors.map(vietnameseNaturalOrder) : b.authors).join(', '));
+    take('isbn13', b.isbn13);
+    take('publisher', b.publisher);
+    take('year', b.year ? String(b.year) : null);
+    take('dewey', b.dewey);
+    if (b.language && b.language !== f.language) {
+      next.language = b.language;
+      marked.push('language');
+    }
+    setF(next);
+    setAuto((a) => new Set([...a, ...marked]));
+  };
+
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
       const body = {
-        code,
         title: f.title,
         authors: f.authors.split(',').map((a) => a.trim()).filter(Boolean),
         isbn13: f.isbn13 || null,
         publisher: f.publisher || null,
         year: f.year ? Number(f.year) : null,
         language: f.language,
-        category: f.category || null,
-        callNo: f.callNo || null,
+        category: category || null,
+        dewey: f.dewey.trim() || null,
+        cutter: dewey ? cutter || null : null,
+        ...(isNew && count > 0 && { copies: copiesBody(copies) }),
       };
-      const r = title ? await patch<{ id: string }>(`/api/v1/library/titles/${title.id}`, body) : await post<{ id: string }>('/api/v1/library/titles', body);
-      toast.success('Đã lưu đầu sách.');
+      let id: string;
+      let made: { id: string; barcode: string }[] = [];
+      if (title) id = (await patch<{ id: string }>(`/api/v1/library/titles/${title.id}`, body)).id;
+      else {
+        const r = await post<{ id: string; copies: { id: string; barcode: string }[] }>('/api/v1/library/titles', body);
+        id = r.id;
+        made = r.copies;
+      }
+      toast.success(made.length ? `Đã lưu đầu sách và ${made.length} cuốn (${made[0]!.barcode}${made.length > 1 ? ` – ${made[made.length - 1]!.barcode}` : ''}).` : 'Đã lưu đầu sách.');
       void qc.invalidateQueries({ queryKey: ['library-titles'] });
-      void qc.invalidateQueries({ queryKey: ['library-title', r.id] });
-      onSaved(r.id);
+      void qc.invalidateQueries({ queryKey: ['library-title', id] });
+      onSaved(id, made.map((c) => c.id));
       onClose();
     } catch (e) {
       setError(errText(e));
@@ -1591,44 +1705,92 @@ function TitleForm({ title, onClose, onSaved }: { title: TitleDetail | null; onC
       setBusy(false);
     }
   };
+  const section = 'text-sm font-semibold text-ink-900 sm:col-span-2';
   return (
     <Dialog
-      title={title ? `Sửa ${title.code}` : 'Thêm đầu sách'}
+      title={title ? `Sửa “${title.title}”` : 'Thêm đầu sách'}
+      size="lg"
       onClose={onClose}
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
             Hủy
           </Button>
-          <Button variant="primary" loading={busy} disabled={!code.trim() || !f.title.trim()} onClick={save}>
-            Lưu
+          <Button variant="primary" {...(isNew && count > 0 && { icon: Printer })} loading={busy} disabled={!f.title.trim() || deweyBad} onClick={save}>
+            {isNew && count > 0 ? 'Lưu và in tem' : 'Lưu'}
           </Button>
         </>
       }
     >
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <SelectField label="Ngôn ngữ" required value={f.language} onChange={set('language')}>
+        {isNew && (
+          <div className="sm:col-span-2">
+            <BookLookup onPick={fill} endpoint="/api/v1/library/book-lookup" />
+            {auto.size > 0 && <p className="mt-1 text-xs text-ink-500">Dữ liệu từ Open Library</p>}
+          </div>
+        )}
+        <h3 className={section}>Thông tin sách</h3>
+        <Field label={label('Tên sách', 'title')} required className="sm:col-span-2" autoFocus={!!title} value={f.title} onChange={set('title')} />
+        <Field label={label('Tác giả', 'authors')} helper="Nhiều tác giả cách nhau bởi dấu phẩy; tác giả đầu dùng để tính Cutter." className="sm:col-span-2" value={f.authors} onChange={set('authors')} />
+        <Field label={label('ISBN', 'isbn13')} className="code" value={f.isbn13} onChange={set('isbn13')} />
+        <Field label={label('Nhà xuất bản', 'publisher')} value={f.publisher} onChange={set('publisher')} />
+        <Field label={label('Năm xuất bản', 'year')} inputMode="numeric" value={f.year} onChange={(e) => (unmark('year'), setF({ ...f, year: e.target.value.replace(/\D/g, '').slice(0, 4) }))} />
+        <SelectField label={label('Ngôn ngữ', 'language')} required value={f.language} onChange={set('language')}>
           <option value="vi">Tiếng Việt</option>
           <option value="en">Tiếng Anh</option>
         </SelectField>
         <Field
-          label="Mã thư viện"
-          required
-          className="code"
-          value={code}
-          helper={title ? 'Đổi mã không đổi mã trên các tem đã in.' : 'Gợi ý mã kế tiếp; có thể sửa.'}
+          label="Thể loại"
+          className="sm:col-span-2"
+          value={category}
+          helper={!categoryTouched && !f.category && deweyCategory(f.dewey) ? 'Gợi ý theo lớp Dewey; có thể sửa.' : undefined}
           onChange={(e) => {
-            setCodeTouched(true);
-            setF({ ...f, code: e.target.value.toUpperCase() });
+            setCategoryTouched(true);
+            setF({ ...f, category: e.target.value });
           }}
         />
-        <Field label="Tên sách" required className="sm:col-span-2" autoFocus={!!title} value={f.title} onChange={set('title')} />
-        <Field label="Tác giả" helper="Nhiều tác giả cách nhau bởi dấu phẩy." className="sm:col-span-2" value={f.authors} onChange={set('authors')} />
-        <Field label="ISBN" className="code" value={f.isbn13} onChange={set('isbn13')} />
-        <Field label="Nhà xuất bản" value={f.publisher} onChange={set('publisher')} />
-        <Field label="Năm xuất bản" inputMode="numeric" value={f.year} onChange={(e) => setF({ ...f, year: e.target.value.replace(/\D/g, '').slice(0, 4) })} />
-        <Field label="Thể loại" value={f.category} onChange={set('category')} />
-        <Field label="Số hiệu kệ" className="sm:col-span-2" value={f.callNo} onChange={set('callNo')} />
+
+        <h3 className={clsx(section, 'mt-2')}>Ký hiệu xếp giá</h3>
+        <Field
+          label={label('Dewey', 'dewey')}
+          inputMode="decimal"
+          className="code"
+          value={f.dewey}
+          error={deweyBad ? 'Số Dewey gồm 3 chữ số, có thể thêm phần thập phân (ví dụ 891.733).' : undefined}
+          helper="Để trống nếu chưa phân loại."
+          onChange={set('dewey')}
+        />
+        <Field
+          label="Cutter"
+          className="code"
+          value={cutter}
+          helper="Tự tính theo bảng Cutter LC; có thể sửa."
+          onChange={(e) => {
+            setCutterTouched(true);
+            setF({ ...f, cutter: e.target.value });
+          }}
+        />
+        <div className="flex items-center gap-3 sm:col-span-2">
+          <span className="text-[13px] text-ink-500">Tem gáy:</span>
+          {dewey ? (
+            <span className="code inline-flex flex-col rounded-md border border-paper-500 px-3 py-1 text-center text-base leading-6 font-bold">
+              <span>{dewey}</span>
+              {cutter && <span>{cutter}</span>}
+            </span>
+          ) : (
+            <StatusChip tone="neutral">Chưa phân loại</StatusChip>
+          )}
+        </div>
+
+        {isNew && (
+          <>
+            <h3 className={clsx(section, 'mt-2')}>Nhập bản</h3>
+            <div className="sm:col-span-2">
+              <CopiesFields value={copies} onChange={setCopies} allowZero />
+              <p className="mt-2 text-[13px] text-ink-500">Mã cá biệt được cấp tự động theo ngôn ngữ ({lang === 'vi' ? 'VN' : 'EN'}-000…).</p>
+            </div>
+          </>
+        )}
         {error && (
           <div className="sm:col-span-2">
             <InlineAlert tone="danger">{error}</InlineAlert>
@@ -1646,7 +1808,12 @@ export function LibraryTitlePage() {
   const { data: me } = useMe();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [dialog, setDialog] = useState<null | 'edit' | 'add' | 'transfer' | 'labels' | 'reserve' | { kind: 'copy'; copy: TitleDetail['copies'][number] } | { kind: 'unreserve'; hold: Hold }>(null);
+  const [params, setParams] = useSearchParams();
+  // Copies just added open their spine labels straight away (FR-LIB-17).
+  const [dialog, setDialog] = useState<null | 'edit' | 'add' | 'transfer' | 'reserve' | { kind: 'labels'; ids: string[] } | { kind: 'copy'; copy: TitleDetail['copies'][number] } | { kind: 'unreserve'; hold: Hold }>(() => {
+    const ids = params.get('print')?.split(',').filter(Boolean) ?? [];
+    return ids.length ? { kind: 'labels', ids } : null;
+  });
   const t = useQuery({ queryKey: ['library-title', id], queryFn: () => get<TitleDetail>(`/api/v1/library/titles/${id}`) });
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['library-title', id] });
@@ -1657,7 +1824,8 @@ export function LibraryTitlePage() {
   const d = t.data;
   const manage = can(me, 'library.manage');
   const columns: Column<TitleDetail['copies'][number]>[] = [
-    { header: 'Mã bản', cell: (c) => <span className="code font-medium">{c.barcode}</span> },
+    { header: 'Mã cá biệt', cell: (c) => <span className="code font-medium">{c.barcode}</span> },
+    { header: 'Ngày nhập', cell: (c) => <span className="num">{formatDate(c.acquiredAt)}</span> },
     { header: 'Trạng thái', cell: (c) => <CopyChip status={c.status} /> },
     {
       header: 'Người mượn',
@@ -1692,7 +1860,7 @@ export function LibraryTitlePage() {
         }
         subtitle={
           <span className="flex flex-wrap items-center gap-2">
-            <span className="code">{d.code}</span>
+            <CallNo value={d.callNo} />
             <StatusChip tone="neutral">{LANG[d.language]}</StatusChip>
           </span>
         }
@@ -1710,7 +1878,7 @@ export function LibraryTitlePage() {
             <h2 className="flex-1 text-base font-semibold">Bản sách ({d.copies.length})</h2>
             {manage && (
               <>
-                <Button size="sm" variant="secondary" icon={Printer} disabled={selected.size === 0} onClick={() => setDialog('labels')}>
+                <Button size="sm" variant="secondary" icon={Printer} disabled={selected.size === 0} onClick={() => setDialog({ kind: 'labels', ids: [...selected] })}>
                   In tem{selected.size ? ` (${selected.size})` : ''}
                 </Button>
                 {can(me, 'inventory.adjust') && (
@@ -1741,7 +1909,7 @@ export function LibraryTitlePage() {
                 ['Nhà xuất bản', d.publisher ?? '—'],
                 ['Năm', d.year ?? '—'],
                 ['Thể loại', d.category ?? '—'],
-                ['Số hiệu kệ', d.callNo ?? '—'],
+                ['Ký hiệu xếp giá', d.callNo ?? 'Chưa phân loại'],
               ]}
             />
           </Card>
@@ -1781,9 +1949,26 @@ export function LibraryTitlePage() {
         </div>
       </div>
       {dialog === 'edit' && <TitleForm title={d} onClose={() => setDialog(null)} onSaved={refresh} />}
-      {dialog === 'add' && <AddCopiesDialog titleId={d.id} onClose={() => setDialog(null)} onDone={refresh} />}
+      {dialog === 'add' && (
+        <AddCopiesDialog
+          titleId={d.id}
+          onClose={() => setDialog(null)}
+          onDone={(ids) => {
+            refresh();
+            setDialog({ kind: 'labels', ids });
+          }}
+        />
+      )}
       {dialog === 'transfer' && <TransferDialog titleId={d.id} onClose={() => setDialog(null)} onDone={refresh} />}
-      {dialog === 'labels' && <LabelsDialog copyIds={[...selected]} onClose={() => setDialog(null)} />}
+      {typeof dialog === 'object' && dialog?.kind === 'labels' && (
+        <LabelsDialog
+          copyIds={dialog.ids}
+          onClose={() => {
+            setDialog(null);
+            if (params.has('print')) setParams({}, { replace: true });
+          }}
+        />
+      )}
       {dialog === 'reserve' && <ReserveDialog titleId={d.id} title={d.title} onClose={() => setDialog(null)} onDone={refresh} />}
       {typeof dialog === 'object' && dialog?.kind === 'copy' && <CopyDialog copy={dialog.copy} canFind={can(me, 'library.lend')} onClose={() => setDialog(null)} onDone={refresh} />}
       {typeof dialog === 'object' && dialog?.kind === 'unreserve' && (
@@ -1846,30 +2031,29 @@ function useSubmit(fn: () => Promise<unknown>, done: () => void) {
   return { busy, error, run };
 }
 
-function AddCopiesDialog({ titleId, onClose, onDone }: { titleId: string; onClose: () => void; onDone: () => void }) {
-  const [count, setCount] = useState('1');
-  const [value, setValue] = useState<number | null>(null);
-  const [via, setVia] = useState<'purchase' | 'donation'>('purchase');
+/** “Thêm bản”: Ngày nhập, Số cuốn, Giá trị, Nguồn; then the spine labels of the new copies (FR-LIB-02, Design §13.8). */
+function AddCopiesDialog({ titleId, onClose, onDone }: { titleId: string; onClose: () => void; onDone: (copyIds: string[]) => void }) {
+  const [copies, setCopies] = useState<CopiesDraft>(newCopiesDraft);
   const [shelf, setShelf] = useState('');
-  const [condition, setCondition] = useState('');
-  const s = useSubmit(
-    async () => {
-      const r = await post<{ items: { barcode: string }[] }>(`/api/v1/library/titles/${titleId}/copies`, { count: Number(count), valueVnd: value ?? 0, acquiredVia: via, shelf: shelf || null, condition: condition || null });
-      toast.success(`Đã thêm ${r.items.map((c) => c.barcode).join(', ')}.`);
-      onDone();
-    },
-    onClose,
-  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await post<{ items: { id: string; barcode: string }[] }>(`/api/v1/library/titles/${titleId}/copies`, { ...copiesBody(copies), shelf: shelf || null });
+      toast.success(`Đã thêm ${r.items.length} cuốn (${r.items[0]!.barcode}${r.items.length > 1 ? ` – ${r.items[r.items.length - 1]!.barcode}` : ''}).`);
+      onDone(r.items.map((c) => c.id));
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <FormDialog title="Thêm bản sách" busy={s.busy} error={s.error} disabled={!Number(count)} onSave={s.run} onClose={onClose} confirm="Thêm">
-      <Field label="Số bản" inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, '').slice(0, 2))} />
-      <MoneyInput label="Giá trị mỗi bản (dùng khi tính phí mất, hỏng)" value={value} onChange={setValue} />
-      <SelectField label="Nguồn" value={via} onChange={(e) => setVia(e.target.value as 'purchase' | 'donation')}>
-        <option value="purchase">Mua</option>
-        <option value="donation">Được tặng</option>
-      </SelectField>
+    <FormDialog title="Thêm bản sách" busy={busy} error={error} disabled={!Number(copies.count)} onSave={run} onClose={onClose} confirm="Thêm và in tem">
+      <CopiesFields value={copies} onChange={setCopies} />
       <Field label="Kệ" value={shelf} onChange={(e) => setShelf(e.target.value)} />
-      <Field label="Tình trạng" value={condition} onChange={(e) => setCondition(e.target.value)} />
     </FormDialog>
   );
 }
@@ -1990,40 +2174,55 @@ function ReserveDialog({ titleId, title, onClose, onDone }: { titleId: string; t
   );
 }
 
-// Book labels (FR-LIB-17, Design §16.5): library code large, Code 128 of the copy barcode, short title, language.
-function labelsHtml(items: { barcode: string; code: string; title: string; language: string }[], sheet: 'roll' | 'a4'): string {
-  const cell = (i: (typeof items)[number]) =>
-    `<div class="lb"><div class="top"><b>${escapeXml(i.code)}</b><span>${LANG[i.language] ?? ''}</span></div>${barcodeSvg(i.barcode, { moduleMm: 0.25, heightMm: 8 })}<div class="ti">${escapeXml(i.title)}</div></div>`;
-  const page = sheet === 'a4' ? { w: 210, h: 297, cols: 5, rows: 13, lw: 38.1, lh: 21.2 } : { w: 40, h: 25, cols: 1, rows: 1, lw: 40, lh: 25 };
+// Spine labels (FR-LIB-17, Design §16.5): stacked accession barcode, Dewey and Cutter, 30 × 45 mm.
+type LabelItem = { barcode: string; callNo: string | null; dewey: string | null; cutter: string | null; title: string; language: string };
+
+/** A Dewey number with more than three decimals breaks after the third: 895.922 / 34. */
+function deweyLines(dewey: string): string[] {
+  const m = /^(\d{3}\.\d{3})(\d+)$/.exec(dewey);
+  return m ? [m[1]!, m[2]!] : [dewey];
+}
+
+function labelsHtml(items: LabelItem[], sheet: 'roll' | 'a4'): string {
+  const cell = (i: LabelItem) => {
+    const lines = i.dewey ? [...deweyLines(i.dewey), ...(i.cutter ? [i.cutter] : [])] : null;
+    return (
+      `<div class="lb">${barcodeSvg(i.barcode, { moduleMm: 0.2, heightMm: 8, showText: false })}<div class="no">${escapeXml(i.barcode)}</div>` +
+      (lines ? `<div class="cn">${lines.map((l) => `<div>${escapeXml(l)}</div>`).join('')}</div>` : `<div class="ti">${escapeXml(i.title)}</div>`) +
+      '</div>'
+    );
+  };
+  const page = sheet === 'a4' ? { w: 210, h: 297, cols: 6, rows: 6, lw: 30, lh: 45 } : { w: 30, h: 45, cols: 1, rows: 1, lw: 30, lh: 45 };
   const per = page.cols * page.rows;
   const pages: string[] = [];
   for (let i = 0; i < items.length; i += per) pages.push(`<section class="page">${items.slice(i, i + per).map((x) => `<div class="cell">${cell(x)}</div>`).join('')}</section>`);
   const mx = Math.max(0, (page.w - page.cols * page.lw) / 2);
   const my = Math.max(0, (page.h - page.rows * page.lh) / 2);
-  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Tem sách thư viện</title><style>
+  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Tem gáy sách</title><style>
 @page { size: ${page.w}mm ${page.h}mm; margin: 0; }
 * { box-sizing: border-box; }
 body { margin: 0; font-family: "Be Vietnam Pro", Arial, sans-serif; color: #000; background: #fff; }
 .page { width: ${page.w}mm; height: ${page.h}mm; padding: ${my}mm ${mx}mm; display: grid; grid-template-columns: repeat(${page.cols}, ${page.lw}mm); grid-auto-rows: ${page.lh}mm; page-break-after: always; }
-.cell { overflow: hidden; padding: 1mm 1.5mm; text-align: center; }
-.top { display: flex; justify-content: space-between; align-items: baseline; }
-.top b { font-size: 14pt; } .top span { font-size: 7pt; font-weight: 600; }
-.lb svg { max-width: 100%; }
-.ti { font-size: 6pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell { overflow: hidden; padding: 1.5mm 1mm; text-align: center; }
+.lb svg { display: block; margin: 0 auto; max-width: 100%; }
+.no { font-size: 7pt; font-weight: 500; margin-top: 0.5mm; }
+.cn { margin-top: 2mm; font-size: 14pt; font-weight: 700; line-height: 1.15; }
+.ti { margin-top: 2mm; font-size: 8pt; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 </style></head><body>${pages.join('')}</body></html>`;
 }
 
 function LabelsDialog({ copyIds, onClose }: { copyIds: string[]; onClose: () => void }) {
   const [sheet, setSheet] = useState<'roll' | 'a4'>('roll');
   const s = useSubmit(async () => {
-    const r = await get<{ items: { barcode: string; code: string; title: string; language: string }[] }>('/api/v1/library/labels', { copyIds: copyIds.join(',') });
+    const r = await get<{ items: LabelItem[] }>('/api/v1/library/labels', { copyIds: copyIds.join(',') });
     printHtml(labelsHtml(r.items, sheet));
   }, onClose);
   return (
-    <FormDialog title={`In tem ${copyIds.length} bản sách`} busy={s.busy} error={s.error} onSave={s.run} onClose={onClose} confirm="In">
+    <FormDialog title={`In tem gáy ${copyIds.length} cuốn`} busy={s.busy} error={s.error} onSave={s.run} onClose={onClose} confirm="In">
+      <p className="text-sm text-ink-700">Mỗi tem: mã vạch mã cá biệt, số Dewey và Cutter xếp chồng.</p>
       <SelectField label="Khổ giấy" value={sheet} onChange={(e) => setSheet(e.target.value as 'roll' | 'a4')}>
-        <option value="roll">Cuộn tem 40 × 25 mm</option>
-        <option value="a4">A4, 65 tem</option>
+        <option value="roll">Cuộn tem 30 × 45 mm</option>
+        <option value="a4">A4, 36 tem</option>
       </SelectField>
     </FormDialog>
   );
@@ -2139,7 +2338,7 @@ interface LibraryReport {
   lateFeesVnd: number;
   lossChargesVnd: number;
   waivedVnd: number;
-  popular: { code: string; title: string; loans: number }[];
+  popular: { callNo: string | null; title: string; loans: number }[];
   collection: { language: string; status: string; n: number }[];
 }
 
@@ -2184,8 +2383,8 @@ export function LibraryReportPage() {
               ) : (
                 <ol className="flex flex-col gap-2 text-sm">
                   {d.popular.map((p) => (
-                    <li key={p.code} className="flex gap-3">
-                      <span className="code w-20 shrink-0">{p.code}</span>
+                    <li key={p.title} className="flex gap-3">
+                      <span className="code w-28 shrink-0">{p.callNo ?? '—'}</span>
                       <span className="min-w-0 flex-1 truncate">{p.title}</span>
                       <span className="font-semibold num">{p.loans}</span>
                     </li>

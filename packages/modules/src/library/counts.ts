@@ -114,7 +114,7 @@ export async function getCount(ctx: Ctx, id: string) {
       copyId: l.copyId,
       barcode: schema.libCopy.barcode,
       title: schema.libTitle.title,
-      code: schema.libTitle.code,
+      callNo: schema.libTitle.callNo,
       inScope: l.inScope,
       expectedShelf: l.expectedShelf,
       expectedStatus: l.expectedStatus,
@@ -134,7 +134,7 @@ export async function getCount(ctx: Ctx, id: string) {
       copyId: r.copyId,
       barcode: r.barcode,
       title: r.title,
-      code: r.code,
+      callNo: r.callNo,
       inScope: r.inScope,
       shelf: r.inScope ? r.expectedShelf : r.currentShelf,
       found: r.found,
@@ -177,7 +177,7 @@ export async function scan(ctx: Ctx, id: string, input: z.input<typeof ScanSchem
       .select({ id: schema.libCopy.id, barcode: schema.libCopy.barcode, status: schema.libCopy.status, shelf: schema.libCopy.shelf, title: schema.libTitle.title })
       .from(schema.libCopy)
       .innerJoin(schema.libTitle, eq(schema.libTitle.id, schema.libCopy.titleId))
-      .where(sql`upper(${schema.libCopy.barcode}) = upper(${data.barcode})`);
+      .where(sql`replace(upper(${schema.libCopy.barcode}), '-', '') = replace(upper(${data.barcode}), '-', '')`);
     if (!copy) throw new AppError(404, 'copy_not_found', `Không tìm thấy bản sách có mã ${data.barcode}.`, { barcode: data.barcode });
     const now = ctx.clock.now();
     const l = schema.libCountLine;

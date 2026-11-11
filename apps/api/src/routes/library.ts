@@ -12,11 +12,6 @@ export function libraryRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'get', path: '/api/v1/library/titles', access: 'session', summary: 'Library titles with copy counts', query: library.TitlesQuery }, async ({ ctx, query }) =>
     library.listTitles(ctx, query),
   );
-  defineRoute(
-    app,
-    { method: 'get', path: '/api/v1/library/titles/next-code', access: 'library.manage', summary: 'Next free library code for a language', query: z.object({ lang: z.enum(['vi', 'en']) }) },
-    async ({ ctx, query }) => library.nextCode(ctx, query.lang),
-  );
   defineRoute(app, { method: 'post', path: '/api/v1/library/titles', access: 'library.manage', summary: 'Add a title', status: 201, body: library.TitleSchema }, async ({ ctx, body }) => library.createTitle(ctx, body));
   defineRoute(app, { method: 'get', path: '/api/v1/library/titles/:id', access: 'session', summary: 'Title with copies and reservations', params: IdParams }, async ({ ctx, params }) => library.getTitle(ctx, params.id));
   defineRoute(app, { method: 'patch', path: '/api/v1/library/titles/:id', access: 'library.manage', summary: 'Edit a title', params: IdParams, body: library.TitleSchema }, async ({ ctx, params, body }) =>

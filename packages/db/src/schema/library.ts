@@ -16,8 +16,8 @@ export const libTitle = library.table(
   'lib_title',
   {
     id: id(),
-    /** Staff-set library code printed on the book label (FR-LIB-01), stored upper case. */
-    code: text().notNull(),
+    /** Library code from before call numbers (11 Nov 2026); kept for history, not shown (FR-LIB-01). */
+    code: text(),
     title: text().notNull(),
     authors: text().array().notNull().default(sql`'{}'::text[]`),
     isbn13: text(),
@@ -25,6 +25,10 @@ export const libTitle = library.table(
     year: integer(),
     language: text().notNull(),
     category: text(),
+    /** Dewey number (`891.733`) and Cutter with the title letter (`D67c`); null while unclassified. */
+    dewey: text(),
+    cutter: text(),
+    /** Call number composed from Dewey and Cutter (`891.733 D67c`); titles may share one. */
     callNo: text(),
     searchText: text().notNull().default(''),
     createdAt: createdAt(),
@@ -32,7 +36,6 @@ export const libTitle = library.table(
     version: version(),
   },
   (t) => [
-    uniqueIndex('lib_title_code_uq').on(sql`lower(${t.code})`),
     index('lib_title_search_trgm_idx').using('gin', sql`${t.searchText} gin_trgm_ops`),
     check('lib_title_language_ck', inList(t.language, LIB_LANGUAGES)),
   ],
@@ -46,7 +49,7 @@ export const libCopy = library.table(
       .notNull()
       .references(() => libTitle.id),
     copyNo: integer().notNull(),
-    /** Library code plus copy number (`VN-0123-2`); not rewritten when the code changes. */
+    /** Accession number (`EN-000125`), given by the system and never changed (FR-LIB-01). */
     barcode: text().notNull(),
     status: text().notNull().default('available'),
     condition: text(),
@@ -246,3 +249,9 @@ export const libCountLine = library.table(
   },
   (t) => [uniqueIndex('lib_count_line_uq').on(t.countId, t.copyId), check('lib_count_line_status_ck', inList(t.expectedStatus, LIB_COPY_STATUSES))],
 );
+
+/** Running accession-number series per language prefix (FR-LIB-01, TDD §4.x Library). */
+export const libAccessionCounter = library.table('lib_accession_counter', {
+  prefix: text().primaryKey(),
+  lastNo: integer().notNull().default(0),
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { barcodeSvg, CODE128, code128Modules, ean13Modules, isEan13 } from './barcode.js';
+import { barcodeSvg, CODE128, code128Modules, code128Values, ean13Modules, isEan13 } from './barcode.js';
 
 describe('Code 128 table', () => {
   it('every symbol is 11 modules wide (stop 13) and all patterns are distinct', () => {
@@ -10,10 +10,24 @@ describe('Code 128 table', () => {
     expect(new Set(CODE128).size).toBe(107);
   });
 
+  it('switches to set C for a trailing run of four or more digits', () => {
+    // EN-000001: start B, E N -, Code C, 00 00 01.
+    expect(code128Values('EN-000001')).toEqual([104, 37, 46, 13, 99, 0, 0, 1]);
+    // An odd run keeps its first digit in set B.
+    expect(code128Values('A12345')).toEqual([104, 33, 17, 99, 23, 45]);
+    // Short runs stay in set B (old copy codes like VN-0123-2).
+    expect(code128Values('VN-0123-2')).toEqual([104, 54, 46, 13, 16, 17, 18, 19, 13, 18]);
+    // 8 symbols + check + stop; check = (104 + 37 + 46·2 + 13·3 + 99·4 + 0·5 + 0·6 + 1·7) mod 103 = 57.
+    const m = code128Modules('EN-000001');
+    expect(m.length).toBe(9 * 11 + 13);
+    const bars = (v: number) => [...CODE128[v]!].map((w, i) => (i % 2 ? '0' : '1').repeat(Number(w))).join('');
+    expect(m.slice(-24, -13)).toBe(bars(57));
+  });
+
   it('encodes start B, data, mod-103 check and stop', () => {
-    // "VPP-0012": 8 data symbols + start + check + stop = 10 × 11 + 13 modules.
-    const m = code128Modules('VPP-0012');
-    expect(m.length).toBe(10 * 11 + 13);
+    // "VPP-012": 7 data symbols (a 3-digit run stays in set B) + start + check + stop = 9 × 11 + 13 modules.
+    const m = code128Modules('VPP-012');
+    expect(m.length).toBe(9 * 11 + 13);
     expect(m.startsWith('11010010000')).toBe(true); // start B = 211214
     expect(m.endsWith('1100011101011')).toBe(true); // stop = 2331112
   });

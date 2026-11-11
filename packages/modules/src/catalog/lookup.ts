@@ -1,10 +1,11 @@
-import { normalizeIsbn } from '@bookstore/domain';
+import { normalizeIsbn, vietnameseNaturalOrder } from '@bookstore/domain';
 import { schema } from '@bookstore/db';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import * as files from '../files/index.js';
 import type { StorageAdapter } from '../files/index.js';
 import { BookLookupError, type BookHit, type BookLookupAdapter } from '../integrations/openlibrary.js';
+import type { Permission } from '@bookstore/domain';
 import { AppError, requirePermission, tsParam, type Ctx } from '../platform/index.js';
 
 /**
@@ -79,24 +80,32 @@ async function matchPublishers(ctx: Ctx, names: string[]): Promise<Map<string, s
   return new Map(keyOf.flatMap((r) => (byKey.has(r.k) ? [[r.n, byKey.get(r.k)!] as [string, string]] : [])));
 }
 
-export async function lookupBooks(ctx: Ctx, adapter: BookLookupAdapter, input: z.input<typeof BookLookupQuery>): Promise<{ items: BookLookupResult[] }> {
-  requirePermission(ctx, 'catalog.edit');
+/** `permission`: catalog.edit for the product form, library.manage for library titles (FR-LIB-02a). */
+export async function lookupBooks(ctx: Ctx, adapter: BookLookupAdapter, input: z.input<typeof BookLookupQuery>, permission: Permission = 'catalog.edit'): Promise<{ items: BookLookupResult[] }> {
+  requirePermission(ctx, permission);
   const q = BookLookupQuery.parse(input);
   let hits: BookHit[];
   if (q.isbn) {
     const isbn13 = normalizeIsbn(q.isbn);
     if (!isbn13) throw new AppError(400, 'invalid_isbn', 'ISBN không hợp lệ.');
-    hits = await cached(ctx, `isbn:${isbn13}`, () => adapter.byIsbn(isbn13));
+    hits = await cached(ctx, `v2:isbn:${isbn13}`, () => adapter.byIsbn(isbn13));
   } else {
     const title = q.q!.normalize('NFC').replace(/\s+/g, ' ').toLowerCase();
-    hits = await cached(ctx, `q:${title}`, () => adapter.search(title));
+    hits = await cached(ctx, `v2:q:${title}`, () => adapter.search(title));
   }
   const publishers = await matchPublishers(ctx, hits.map((h) => h.publisher ?? ''));
-  return { items: hits.slice(0, 8).map((h) => ({ ...h, publisherId: h.publisher ? (publishers.get(h.publisher) ?? null) : null })) };
+  return {
+    items: hits.slice(0, 8).map((h) => ({
+      ...h,
+      // Library records put Vietnamese family names last; show them in natural order (Nguyễn Nhật Ánh).
+      authors: h.language === 'vi' ? h.authors.map(vietnameseNaturalOrder) : h.authors,
+      publisherId: h.publisher ? (publishers.get(h.publisher) ?? null) : null,
+    })),
+  };
 }
 
-export async function bookDescription(ctx: Ctx, adapter: BookLookupAdapter, input: z.input<typeof BookDescriptionQuery>): Promise<{ description: string | null }> {
-  requirePermission(ctx, 'catalog.edit');
+export async function bookDescription(ctx: Ctx, adapter: BookLookupAdapter, input: z.input<typeof BookDescriptionQuery>, permission: Permission = 'catalog.edit'): Promise<{ description: string | null }> {
+  requirePermission(ctx, permission);
   const { work } = BookDescriptionQuery.parse(input);
   return { description: await cached(ctx, `work:${work}`, () => adapter.description(work)) };
 }

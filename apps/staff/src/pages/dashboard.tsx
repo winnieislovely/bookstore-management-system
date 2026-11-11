@@ -27,7 +27,7 @@ interface Dashboard {
   libraryOverview?: LibraryOverviewData;
   /** Units on hand by product type, for users who see stock (FR-RPT-01). */
   productMix?: { kind: MixKind; units: number }[];
-  overdueLoans: { loanId: string; title: string; code: string; customerName: string; customerPhone: string | null; dueAt: string; daysLate: number }[];
+  overdueLoans: { loanId: string; title: string; callNo: string | null; customerName: string; customerPhone: string | null; dueAt: string; daysLate: number }[];
 }
 // ---------------------------------------------------------------------------------------------
 // Date ranges in store time (Design §12.5): presets plus a custom range, max 366 days (TDD §4.11).
