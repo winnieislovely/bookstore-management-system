@@ -1,15 +1,16 @@
 import { ORDER_SOURCES } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { ArrowLeft, Calculator, CheckCircle, HandCoins, MoreHorizontal, Package, PackageCheck, Plus, RefreshCw, Store, Trash2, Truck, Undo2, XCircle } from 'lucide-react';
+import { ArrowLeft, Calculator, CheckCircle, HandCoins, MoreHorizontal, Package, PackageCheck, Plus, Store, Trash2, Truck, Undo2, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useDebounced, useListParam, useParam, type Column } from '../components/data';
+import { CustomerPicker, type CustomerChoice } from '../components/customer-picker';
 import { Combobox, CopyCode, ORDER_SOURCE, OrderStatusChip, PaymentChip, REVIEW_REASON, StatusTimeline, type TimelineEntry } from '../components/order-ui';
 import { ProductSearch, hitTitle, type ProductHit } from '../components/product-search';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton } from '../components/ui';
 import { ApiError, api, get, post } from '../lib/api';
-import { formatDateTime, formatNumber, formatPhone, formatRelative, formatVnd } from '../lib/format';
+import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { can, useMe } from '../lib/session';
 import { Dialog, MoneyInput } from '../pos/widgets';
 
@@ -92,13 +93,6 @@ export function OrdersPage() {
     <>
       <PageHeader
         title="Giao hàng"
-        subtitle={
-          list.dataUpdatedAt ? (
-            <span className="inline-flex items-center gap-1">
-              <RefreshCw size={14} aria-hidden /> Cập nhật {formatRelative(new Date(list.dataUpdatedAt))}
-            </span>
-          ) : undefined
-        }
         actions={
           <>
             <Button variant="secondary" icon={HandCoins} onClick={() => navigate('/orders/cod')}>
@@ -160,13 +154,6 @@ interface Channel {
   kind: string;
   active: boolean;
 }
-interface CustomerHit {
-  id: string;
-  name: string;
-  phoneE164: string | null;
-  tierName?: string | null;
-  pointsBalance: number;
-}
 
 function useProvinces() {
   return useQuery({ queryKey: ['geo-provinces'], queryFn: () => get<{ items: { id: number; name: string }[] }>('/api/v1/geo/provinces'), staleTime: 3600_000 });
@@ -186,8 +173,6 @@ export function OrderNewPage() {
   const [f, setF] = useState({
     source: 'facebook',
     channelId: '',
-    phone: '',
-    name: '',
     delivery: 'ship' as 'ship' | 'pickup',
     provinceId: null as number | null,
     wardCode: '',
@@ -205,26 +190,19 @@ export function OrderNewPage() {
   const wards = useWards(f.provinceId);
   const kindChannels = (channels.data?.items ?? []).filter((c) => c.kind === f.source);
 
-  // Find the customer by phone (FR-SOC-03, Design §10.3 “Phone”).
-  const phoneDigits = useDebounced(f.phone.replace(/\D/g, ''), 400);
-  const match = useQuery({
-    queryKey: ['customer-by-phone', phoneDigits],
-    enabled: phoneDigits.length >= 9,
-    queryFn: async () => (await get<{ items: CustomerHit[] }>('/api/v1/customers', { q: phoneDigits, limit: 5 })).items.find((c) => c.phoneE164?.endsWith(phoneDigits.slice(-9))) ?? null,
-  });
-  useEffect(() => {
-    if (match.data && !f.name) setF((x) => ({ ...x, name: match.data!.name }));
-  }, [match.data, f.name]);
+  // Existing customer found by phone or name, or a new one (FR-SOC-03, Design §12.9).
+  const [cust, setCust] = useState<CustomerChoice>(null);
+  const customerId = cust?.kind === 'existing' ? cust.customer.id : null;
 
   const body = useMemo(
     () => ({
       source: f.source,
-      ...(match.data && { customerId: match.data.id }),
+      ...(customerId && { customerId }),
       lines: lines.map((l) => ({ variantId: l.hit.variantId, qty: l.qty, ...(l.discountVnd ? { manualDiscount: { kind: 'amount', vnd: l.discountVnd * l.qty } } : {}) })),
       shippingVnd: f.delivery === 'ship' ? (f.shippingVnd ?? 0) : 0,
       couponCode: f.couponCode.trim() || null,
     }),
-    [f.source, f.delivery, f.shippingVnd, f.couponCode, lines, match.data],
+    [f.source, f.delivery, f.shippingVnd, f.couponCode, lines, customerId],
   );
   // GHN fee recalculated whenever the ward or the items change, unless staff typed a fee (FR-ORD-10).
   const [feeManual, setFeeManual] = useState(false);
@@ -256,7 +234,9 @@ export function OrderNewPage() {
   const save = async () => {
     setError(null);
     if (!lines.length) return setError('Đơn chưa có sản phẩm.');
-    if (!f.phone.trim() || !f.name.trim()) return setError('Cần nhập số điện thoại và tên người nhận.');
+    if (!cust) return setError('Chọn khách cũ hoặc nhập khách mới.');
+    const recipient = cust.kind === 'existing' ? { name: cust.customer.name, phone: cust.customer.phoneE164 ?? '' } : { name: cust.name.trim(), phone: cust.phone.trim() };
+    if (!recipient.phone || !recipient.name) return setError(cust.kind === 'existing' ? 'Khách này chưa có số điện thoại. Hãy nhập như khách mới.' : 'Cần nhập số điện thoại và tên người nhận.');
     setBusy(true);
     try {
       const r = await api<{ id: string; docNo: string; status: string }>('POST', '/api/v1/orders', {
@@ -264,7 +244,7 @@ export function OrderNewPage() {
         body: {
           ...body,
           channelId: f.channelId || null,
-          recipient: { name: f.name.trim(), phone: f.phone.trim() },
+          recipient,
           delivery: f.delivery,
           address: f.delivery === 'ship' ? { ...(f.provinceId !== null && { provinceId: f.provinceId }), ...(f.wardCode && { wardCode: f.wardCode }), line: f.line.trim() } : null,
           paymentMethod: f.paymentMethod,
@@ -306,7 +286,31 @@ export function OrderNewPage() {
       />
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex min-w-0 flex-col gap-6">
-          {/* Products first (Design §12.4); each line: name, price, stock on their own lines, discount behind a toggle. */}
+          <Card title="Nguồn đơn">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <SelectField label="Kênh" required value={f.source} onChange={(e) => setF({ ...f, source: e.target.value, channelId: '' })}>
+                {ORDER_SOURCES.filter((s) => s !== 'website').map((s) => (
+                  <option key={s} value={s}>
+                    {ORDER_SOURCE[s]}
+                  </option>
+                ))}
+              </SelectField>
+              {kindChannels.length > 0 ? (
+                <SelectField label="Trang / tài khoản" value={f.channelId} onChange={set('channelId')}>
+                  <option value="">—</option>
+                  {kindChannels.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </SelectField>
+              ) : (
+                <div className="max-sm:hidden" />
+              )}
+            </div>
+          </Card>
+
+          {/* Each line: name, price, stock on their own lines, discount behind a toggle (Design §12.4). */}
           <Card title="Sản phẩm">
             <ProductSearch onPick={add} placeholder="Nhập SKU / tên sản phẩm" scanIcon={false} />
             {lines.length > 0 && (
@@ -354,42 +358,8 @@ export function OrderNewPage() {
             )}
           </Card>
 
-          <Card title="Nguồn đơn">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <SelectField label="Kênh" required value={f.source} onChange={(e) => setF({ ...f, source: e.target.value, channelId: '' })}>
-                {ORDER_SOURCES.filter((s) => s !== 'website').map((s) => (
-                  <option key={s} value={s}>
-                    {ORDER_SOURCE[s]}
-                  </option>
-                ))}
-              </SelectField>
-              {kindChannels.length > 0 ? (
-                <SelectField label="Trang / tài khoản" value={f.channelId} onChange={set('channelId')}>
-                  <option value="">—</option>
-                  {kindChannels.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </SelectField>
-              ) : (
-                <div className="max-sm:hidden" />
-              )}
-            </div>
-          </Card>
-
           <Card title="Khách hàng">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Số điện thoại" required inputMode="tel" value={f.phone} onChange={set('phone')} />
-              <Field label="Tên người nhận" required value={f.name} onChange={set('name')} />
-            </div>
-            {match.data && (
-              <p className="mt-3 text-sm text-ink-700">
-                Đã có khách hàng: <span className="font-semibold">{match.data.name}</span>
-                {match.data.tierName && ` · ${match.data.tierName}`} · {formatNumber(match.data.pointsBalance)} điểm
-              </p>
-            )}
-            {!match.data && phoneDigits.length >= 9 && match.isFetched && <p className="mt-3 text-sm text-ink-500">Khách mới – hồ sơ được tạo khi lưu đơn.</p>}
+            <CustomerPicker value={cust} onChange={setCust} newNameLabel="Tên người nhận" />
           </Card>
 
           <Card title="Giao hàng">

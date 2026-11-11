@@ -1,14 +1,15 @@
 import { normalizePaymentRef, paymentRefFromBytes } from '@bookstore/domain';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Plus, Trash2, User, UserPlus, X } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { ConfirmDialog, SelectField, TextArea, toast, useDebounced } from '../components/data';
+import { ConfirmDialog, SelectField, TextArea, toast } from '../components/data';
+import { CustomerPicker, type CustomerChoice } from '../components/customer-picker';
 import { CopyCode } from '../components/order-ui';
 import { ProductSearch, hitTitle, type ProductHit } from '../components/product-search';
 import { Button, Field, InlineAlert, StatusChip, type Tone } from '../components/ui';
-import { get, post } from '../lib/api';
-import { formatNumber, formatPhone, formatVnd } from '../lib/format';
+import { post } from '../lib/api';
+import { formatVnd } from '../lib/format';
 import type { CartCustomer, CartPreorder } from './cart';
 import { Dialog, MoneyInput } from './widgets';
 
@@ -79,91 +80,11 @@ export function PreorderDialog({ shiftId, online, customer, onClose }: { shiftId
   );
 }
 
-/**
- * Customer of the pre-order: an existing customer found by phone or name, or a new one with phone
- * and name (FR-POS-04, BR-16 – the server links a known phone to its customer).
- */
-function CustomerPicker({ value, onChange }: { value: CustomerChoice; onChange: (v: CustomerChoice) => void }) {
-  const [q, setQ] = useState('');
-  const term = useDebounced(q.trim(), 300);
-  const found = useQuery({
-    queryKey: ['preorder-customer', term],
-    enabled: term.length >= 2 && !value,
-    queryFn: () => get<{ items: CartCustomer[] }>('/api/v1/customers', { q: term, limit: 6 }),
-  });
-  if (value?.kind === 'existing') {
-    const c = value.customer;
-    return (
-      <div className="flex flex-col gap-1">
-        <p className="text-[13px] font-medium text-ink-700">Khách hàng</p>
-        <div className="flex items-center gap-3 rounded-md border border-paper-300 p-3 text-sm">
-          <User size={20} aria-hidden />
-          <span className="min-w-0 flex-1">
-            <span className="block font-semibold">{c.name}</span>
-            <span className="text-ink-500 num">
-              {c.phoneE164 && formatPhone(c.phoneE164)} · {formatNumber(c.pointsBalance)} điểm
-            </span>
-          </span>
-          <Button variant="ghost" icon={X} aria-label="Bỏ khách" onClick={() => onChange(null)} />
-        </div>
-      </div>
-    );
-  }
-  if (value?.kind === 'new') {
-    return (
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <p className="text-[13px] font-medium text-ink-700">Khách mới</p>
-          <Button variant="ghost" size="sm" onClick={() => onChange(null)}>
-            Tìm khách cũ
-          </Button>
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Số điện thoại" required inputMode="tel" value={value.phone} onChange={(e) => onChange({ ...value, phone: e.target.value })} />
-          <Field label="Tên khách" required value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} />
-        </div>
-      </div>
-    );
-  }
-  const items = found.data?.items ?? [];
-  const digits = q.replace(/\D/g, '');
-  return (
-    <div className="flex flex-col gap-2">
-      <p className="text-[13px] font-medium text-ink-700">Khách hàng</p>
-      <input
-        className="h-11 w-full rounded-md border border-paper-500 bg-white px-3 text-sm focus:border-navy-700"
-        placeholder="Tìm theo SĐT hoặc tên khách"
-        aria-label="Tìm khách theo số điện thoại hoặc tên"
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-      />
-      {term.length >= 2 && found.data && (
-        <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
-          {items.length === 0 && <li className="px-3 py-2 text-sm text-ink-500">Không có khách phù hợp.</li>}
-          {items.map((c) => (
-            <li key={c.id}>
-              <button type="button" className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-navy-50" onClick={() => onChange({ kind: 'existing', customer: c })}>
-                <span className="min-w-0 flex-1 font-medium">{c.name}</span>
-                <span className="whitespace-nowrap text-ink-500 num">{c.phoneE164 && formatPhone(c.phoneE164)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <Button variant="tonal" size="sm" icon={UserPlus} className="self-start" onClick={() => onChange({ kind: 'new', phone: digits.length >= 6 ? q.trim() : '', name: digits.length >= 6 ? '' : q.trim() })}>
-        Khách mới
-      </Button>
-    </div>
-  );
-}
-
 interface DepositState {
   method: 'cash' | 'transfer' | 'card';
   amountVnd: number | null;
   ref: string;
 }
-
-type CustomerChoice = { kind: 'existing'; customer: CartCustomer } | { kind: 'new'; phone: string; name: string } | null;
 
 function NewPreorder({ shiftId, initialCustomer, onDone }: { shiftId: string; initialCustomer: CartCustomer | null; onDone: () => void }) {
   const qc = useQueryClient();
@@ -197,7 +118,10 @@ function NewPreorder({ shiftId, initialCustomer, onDone }: { shiftId: string; in
   };
   return (
     <div className="flex flex-col gap-4">
-      <CustomerPicker value={cust} onChange={setCust} />
+      <div className="flex flex-col gap-1">
+        <p className="text-[13px] font-medium text-ink-700">Khách hàng</p>
+        <CustomerPicker value={cust} onChange={setCust} />
+      </div>
       <div className="flex flex-col gap-2">
         <p className="text-[13px] font-medium text-ink-700">Sản phẩm</p>
         <ProductSearch onPick={add} placeholder="Nhập SKU / tên sản phẩm" scanIcon={false} />
