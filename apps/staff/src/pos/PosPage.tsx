@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, Check, Info, LogOut, Menu, Minus, MoreHorizontal, Plus, RefreshCw, ScanBarcode, ShoppingCart, Ticket, User, Wallet, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, Check, Coins, Info, LogOut, Menu, Minus, MoreHorizontal, Plus, RefreshCw, ScanBarcode, ShoppingBasket, ShoppingCart, Ticket, User, Wallet, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Button, Field, InlineAlert, Skeleton } from '../components/ui';
@@ -466,6 +466,44 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
               <dd className="text-right text-success-700">−{formatVnd(priced.result.discountVnd).replace('−', '')}</dd>
             </>
           )}
+          <dt className="text-ink-700">Mã giảm giá</dt>
+          <dd className="flex items-center justify-end gap-1">
+            {cart.couponCode ? (
+              <>
+                <span className="code font-medium">{cart.couponCode}</span>
+                {priced?.result.couponApplied ? (
+                  <Check size={16} className="text-success-700" aria-label="Đã áp dụng" />
+                ) : (
+                  <span className="text-xs text-warning-700">không áp dụng</span>
+                )}
+                <Button variant="ghost" size="sm" icon={X} className="size-8 px-0!" aria-label="Bỏ mã giảm giá" title="Bỏ mã giảm giá" onClick={() => cart.setCoupon('')} disabled={readOnly} />
+              </>
+            ) : (
+              <Button variant="tonal" size="sm" icon={Ticket} onClick={() => setDialog({ kind: 'coupon' })} disabled={readOnly}>
+                Nhập mã
+              </Button>
+            )}
+          </dd>
+          {cart.customer && (
+            <>
+              <dt className="text-ink-700">
+                Điểm <span className="text-ink-500">(có {formatNumber(cart.customer.pointsBalance)})</span>
+              </dt>
+              <dd className="flex items-center justify-end gap-1">
+                {cart.redeemPoints ? (
+                  <>
+                    <span>{formatNumber(cart.redeemPoints)} điểm</span>
+                    {!!priced?.result.redeemValueVnd && <span className="text-success-700">−{formatVnd(priced.result.redeemValueVnd)}</span>}
+                    <Button variant="ghost" size="sm" icon={X} className="size-8 px-0!" aria-label="Bỏ dùng điểm" title="Bỏ dùng điểm" onClick={() => cart.setRedeem(0)} disabled={readOnly} />
+                  </>
+                ) : (
+                  <Button variant="tonal" size="sm" icon={Coins} onClick={() => setDialog({ kind: 'points' })} disabled={readOnly || !cart.customer.pointsBalance}>
+                    Dùng điểm
+                  </Button>
+                )}
+              </dd>
+            </>
+          )}
           <dt className="mt-1 text-base font-semibold">TỔNG</dt>
           <dd className="mt-1 text-right text-[28px] leading-9 font-bold whitespace-nowrap">{formatVnd(total)}</dd>
           {!!cart.preorder?.depositVnd && (
@@ -477,20 +515,14 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             </>
           )}
         </dl>
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          <Button variant="secondary" size="sm" onClick={holdCart} disabled={!cart.lines.length || readOnly || !!cart.preorder}>
+        <div className="mt-3 grid grid-cols-[1fr_3fr] gap-2">
+          <Button variant="secondary" size="xl" className="px-2! text-sm!" onClick={holdCart} disabled={!cart.lines.length || readOnly || !!cart.preorder}>
             Giữ giỏ
           </Button>
-          <Button variant="secondary" size="sm" icon={Ticket} onClick={() => setDialog({ kind: 'coupon' })} disabled={readOnly}>
-            {cart.couponCode || 'Mã giảm giá'}
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => setDialog({ kind: 'points' })} disabled={!cart.customer || readOnly}>
-            {cart.redeemPoints ? `${formatNumber(cart.redeemPoints)} điểm` : 'Điểm'}
+          <Button variant="accent" size="xl" full icon={Check} disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
+            Xác nhận
           </Button>
         </div>
-        <Button variant="accent" size="xl" full icon={Check} className="mt-3" disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
-          Xác nhận
-        </Button>
       </div>
     </div>
   );
@@ -503,16 +535,30 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         <button type="button" className="inline-flex size-10 items-center justify-center rounded-full hover:bg-navy-800" aria-label="Menu ca làm" onClick={() => setDialog({ kind: 'menu' })}>
           <Menu size={20} aria-hidden />
         </button>
-        <span className="min-w-0 flex-1 truncate font-medium">
-          {me.displayName} · Quầy {registerCode}
+        <span className="min-w-0 flex-1 truncate font-semibold code" title={`${me.displayName} · Quầy ${registerCode}`}>
+          {registerCode}
         </span>
         <ConnectionPill />
-        <button type="button" className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm hover:bg-navy-800" onClick={() => setDialog({ kind: 'preorder' })} disabled={readOnly}>
-          <CalendarClock size={18} aria-hidden /> Đặt trước
-          {!!badges.data?.holdsOverdue && <span className="rounded-full bg-danger-700 px-1.5 text-xs font-semibold num">{badges.data.holdsOverdue}</span>}
+        <button
+          type="button"
+          className="relative inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-800 pointer-coarse:size-11"
+          aria-label={badges.data?.holdsOverdue ? `Đặt trước – ${badges.data.holdsOverdue} phiếu quá hạn giữ hàng` : 'Đặt trước'}
+          title="Đặt trước"
+          onClick={() => setDialog({ kind: 'preorder' })}
+          disabled={readOnly}
+        >
+          <CalendarClock size={22} aria-hidden />
+          {!!badges.data?.holdsOverdue && <span className="absolute -top-0.5 -right-0.5 min-w-5 rounded-full bg-danger-700 px-1 text-center text-xs leading-5 font-semibold num" aria-hidden>{badges.data.holdsOverdue}</span>}
         </button>
-        <button type="button" className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm hover:bg-navy-800" onClick={() => setDialog({ kind: 'held' })}>
-          Giỏ chờ {heldCount}
+        <button
+          type="button"
+          className="relative inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-800 pointer-coarse:size-11"
+          aria-label={`Giỏ chờ – ${heldCount} giỏ`}
+          title="Giỏ chờ"
+          onClick={() => setDialog({ kind: 'held' })}
+        >
+          <ShoppingBasket size={22} aria-hidden />
+          {heldCount > 0 && <span className="absolute -top-0.5 -right-0.5 min-w-5 rounded-full bg-white px-1 text-center text-xs leading-5 font-semibold text-navy-700 num" aria-hidden>{heldCount}</span>}
         </button>
       </header>
       {!status.online && (
