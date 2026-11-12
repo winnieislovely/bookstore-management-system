@@ -56,7 +56,7 @@ export function PosPage() {
 
 function FullScreenLoading({ text }: { text?: string }) {
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-paper-100 p-8" role="status">
+    <div className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-white p-8" role="status">
       <Skeleton className="h-10 w-64" />
       {text && <p className="text-ink-500">{text}</p>}
     </div>
@@ -65,7 +65,7 @@ function FullScreenLoading({ text }: { text?: string }) {
 
 function FullScreenMessage({ tone, text }: { tone: 'danger' | 'info'; text: string }) {
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-paper-100 p-8">
+    <div className="flex min-h-dvh items-center justify-center bg-white p-8">
       <div className="max-w-md">
         <InlineAlert tone={tone}>{text}</InlineAlert>
         <Link to="/" className="mt-4 inline-block text-navy-700 underline">
@@ -78,7 +78,7 @@ function FullScreenMessage({ tone, text }: { tone: 'danger' | 'info'; text: stri
 
 function PosShell({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-dvh flex-col bg-paper-100">
+    <div className="flex min-h-dvh flex-col bg-white">
       <header className="on-navy flex h-14 items-center justify-between bg-navy-700 px-4 text-white">
         <span className="font-semibold">{title}</span>
         <Link to="/" className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm text-white/80 hover:bg-navy-800">
@@ -112,7 +112,7 @@ function RegisterScreen({ me, onDone }: { me: Me; onDone: (d: DeviceInfo) => voi
   return (
     <PosShell title="Đăng ký quầy">
       <form
-        className="flex w-full max-w-md flex-col gap-5 rounded-lg border border-paper-300 bg-white p-6"
+        className="flex w-full max-w-md flex-col gap-5 rounded-lg border border-paper-300 bg-white p-6 shadow-sm"
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
           setBusy(true);
@@ -154,7 +154,7 @@ function OpenShiftScreen({ me, device, onOpened }: { me: Me; device: DeviceInfo;
   return (
     <PosShell title="Mở ca">
       <form
-        className="flex w-full max-w-md flex-col gap-5 rounded-lg border border-paper-300 bg-white p-6"
+        className="flex w-full max-w-md flex-col gap-5 rounded-lg border border-paper-300 bg-white p-6 shadow-sm"
         onSubmit={async (e) => {
           e.preventDefault();
           setBusy(true);
@@ -530,7 +530,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const editing = dialog?.kind === 'line' ? cart.lines.find((l) => l.lineId === dialog.lineId) : undefined;
 
   return (
-    <div className="flex h-dvh flex-col bg-paper-100">
+    <div className="flex h-dvh flex-col bg-white">
       <header className="on-navy flex h-14 shrink-0 items-center gap-3 bg-navy-700 px-4 text-white">
         <button type="button" className="inline-flex size-10 items-center justify-center rounded-full hover:bg-navy-800" aria-label="Menu ca làm" onClick={() => setDialog({ kind: 'menu' })}>
           <Menu size={20} aria-hidden />
@@ -608,7 +608,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             </div>
           )}
           {searching ? (
-            <ul className="min-h-0 flex-1 divide-y divide-paper-300 overflow-y-auto rounded-lg border border-paper-300 bg-white">
+            <ul className="min-h-0 flex-1 divide-y divide-paper-300 overflow-y-auto rounded-lg border border-paper-300 bg-white shadow-sm">
               {results.map((r) => (
                 <li key={r.variantId}>
                   <button
@@ -639,7 +639,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             </ul>
           ) : (
             // Tablet portrait / phone: the whole cart on the selling screen, no bottom sheet (Design §13.1).
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-paper-300 bg-white lg:hidden" aria-label="Giỏ hàng">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-paper-300 bg-white shadow-sm lg:hidden" aria-label="Giỏ hàng">
               {cartPanel}
             </div>
           )}

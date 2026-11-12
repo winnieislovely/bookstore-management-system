@@ -2348,7 +2348,7 @@ export function LibraryReportPage() {
   const r = useQuery({ queryKey: ['report-library', time], enabled: !!days, queryFn: () => get<LibraryReport>('/api/v1/reports/library', { from: days![0], to: days![1] }) });
   const d = r.data;
   const kpi = (label: string, value: ReactNode) => (
-    <div className="rounded-lg border border-paper-300 bg-white p-4">
+    <div className="rounded-lg border border-paper-300 bg-white p-4 shadow-sm">
       <p className="text-[13px] text-ink-500">{label}</p>
       <p className="mt-1 text-xl font-semibold num">{value}</p>
     </div>

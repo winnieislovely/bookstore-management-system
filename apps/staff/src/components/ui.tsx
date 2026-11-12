@@ -101,7 +101,7 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field({ l
           aria-describedby={helper || error ? describedBy : undefined}
           className={clsx(
             'h-10 w-full rounded-md border bg-white px-3 text-sm text-ink-900 placeholder:text-ink-500 sm:text-sm max-sm:text-base pointer-coarse:h-11',
-            'hover:border-ink-500 focus:border-navy-700 read-only:bg-paper-50 disabled:bg-paper-200 disabled:text-ink-300',
+            'hover:border-ink-500 focus:border-navy-700 read-only:bg-paper-200 disabled:bg-paper-200 disabled:text-ink-300',
             error ? 'border-danger-700' : 'border-paper-500',
             suffix && 'pr-8 text-right num',
           )}
@@ -144,7 +144,7 @@ export function Card({
   headerNowrap?: boolean;
 }) {
   return (
-    <section className={clsx('rounded-lg border border-paper-300 bg-white p-4 sm:p-6', className)}>
+    <section className={clsx('rounded-lg border border-paper-300 bg-white p-4 shadow-sm sm:p-6', className)}>
       {(title || action) && (
         <header className={clsx('mb-4 flex items-center justify-between gap-2', headerNowrap ? 'flex-nowrap' : 'flex-wrap')}>
           {title && (

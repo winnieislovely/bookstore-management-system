@@ -215,7 +215,7 @@ export function ShareCardDialog({ variantId, onClose }: { variantId: string; onC
         <Skeleton className="h-24" />
       ) : (
         <div className="flex flex-col gap-3">
-          <pre className="rounded-lg border border-paper-300 bg-paper-50 p-4 font-sans text-sm whitespace-pre-wrap text-ink-900">{card.data.text}</pre>
+          <pre className="rounded-lg border border-paper-300 bg-paper-200 p-4 font-sans text-sm whitespace-pre-wrap text-ink-900">{card.data.text}</pre>
           {!card.data.url && <InlineAlert tone="info">Chưa có địa chỉ trang sản phẩm trên website (Cấu hình → web.product_url), nên nội dung chưa có liên kết.</InlineAlert>}
         </div>
       )}

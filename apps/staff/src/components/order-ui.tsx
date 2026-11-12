@@ -85,7 +85,7 @@ export function CopyCode({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
   const grouped = value.replace(/\s/g, '').replace(/(.{4})(?=.)/g, '$1 ');
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-paper-300 bg-paper-50 p-4">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-paper-300 bg-paper-200 p-4">
       <div className="min-w-0">
         <p className="text-sm text-ink-500">{label}</p>
         <p className="code text-[28px] leading-9 font-semibold break-all text-ink-900">{grouped}</p>

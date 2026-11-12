@@ -227,7 +227,7 @@ export function ImportWizard({ kind, kinds, onKindChange, onImported }: { kind: 
           {s.errorRows > 0 && !result && <InlineAlert tone="danger">Sửa các dòng lỗi trong tệp rồi tải lên lại. Lượt nhập ghi tất cả các dòng hoặc không dòng nào.</InlineAlert>}
           {error && <InlineAlert tone="danger">{error}</InlineAlert>}
 
-          <div className="overflow-hidden rounded-lg border border-paper-300 bg-white">
+          <div className="overflow-hidden rounded-lg border border-paper-300 bg-white shadow-sm">
             <div className="max-h-[560px] overflow-auto">
               <table className="w-full min-w-[720px] text-sm">
                 <thead className="sticky top-0 bg-paper-200 text-[13px] font-semibold text-ink-700">

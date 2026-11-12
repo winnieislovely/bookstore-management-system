@@ -204,7 +204,7 @@ export function PaymentSheet({
           </div>
         )}
         {method === 'transfer' && (
-          <div className="flex flex-col items-center gap-2 rounded-lg border border-paper-300 bg-paper-50 p-4 text-center">
+          <div className="flex flex-col items-center gap-2 rounded-lg border border-paper-300 bg-paper-200 p-4 text-center">
             <p className="text-sm text-ink-700">Khách quét mã QR in sẵn tại quầy và ghi mã tham chiếu vào nội dung chuyển khoản</p>
             <p className="text-[13px] text-ink-500">Mã tham chiếu</p>
             <p className="text-2xl leading-8 font-semibold tracking-[0.04em] num">{transferRef.replace(/(.{4})/g, '$1 ').trim()}</p>
@@ -394,7 +394,7 @@ export function CloseShiftDialog({ expectedVnd, source, onClose, onSubmit }: { e
           Thêm mệnh giá
         </Button>
       )}
-      <dl className="mt-4 grid grid-cols-2 gap-y-1 rounded-lg border border-paper-300 bg-paper-50 p-4 num">
+      <dl className="mt-4 grid grid-cols-2 gap-y-1 rounded-lg border border-paper-300 bg-paper-200 p-4 num">
         <dt className="text-ink-500">Dự kiến{source === 'device' ? ' (theo máy)' : ''}</dt>
         <dd className="text-right">{formatVnd(expectedVnd)}</dd>
         <dt className="text-ink-500">Đếm được</dt>

@@ -309,7 +309,7 @@ function ReportView({ def, timeParam, lead }: { def: ReportDef; timeParam: strin
             </p>
           )}
           {def.period && <RevenueChart table={t.data} byMonth={longRange} />}
-          <div className="overflow-hidden rounded-lg border border-paper-300 bg-white">
+          <div className="overflow-hidden rounded-lg border border-paper-300 bg-white shadow-sm">
             <div className="max-h-[640px] overflow-auto">
               <table className="w-full min-w-[640px] text-sm">
                 <thead className="sticky top-0 bg-paper-200 text-[13px] font-semibold text-ink-700">

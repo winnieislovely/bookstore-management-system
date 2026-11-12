@@ -231,7 +231,7 @@ function StatusRow({ promotion, onChanged }: { promotion: Promotion; onChanged: 
     }
   };
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-paper-300 bg-paper-50 px-4 py-3">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-paper-300 bg-paper-200 px-4 py-3">
       <span className="inline-flex items-center gap-2 text-sm text-ink-700">
         Trạng thái <StatusChip tone={STATE[state].tone}>{STATE[state].label}</StatusChip>
       </span>

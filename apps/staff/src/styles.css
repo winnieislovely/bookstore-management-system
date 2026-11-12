@@ -92,7 +92,7 @@
 
 /* shadcn/ui semantic variables (light theme only in v1) */
 :root {
-  --background: var(--color-paper-100);
+  --background: #ffffff;
   --foreground: var(--color-ink-900);
   --card: #FFFFFF;
   --card-foreground: var(--color-ink-900);

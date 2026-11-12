@@ -240,7 +240,7 @@ export function DataTable<T>({
   // Exactly 48 px (3rem) wide so the code column pinned at left-12 meets it with no see-through gap.
   const checkCell = 'sticky left-0 z-[1] w-12 min-w-12 max-w-12 px-0 text-center';
   return (
-    <div className="overflow-hidden rounded-lg border border-paper-300 bg-white">
+    <div className="overflow-hidden rounded-lg border border-paper-300 bg-white shadow-sm">
       {error ? (
         <ErrorState error={error} {...(onRetry && { onRetry })} />
       ) : rows && rows.length === 0 ? (
