@@ -1,6 +1,6 @@
 import { DENOMINATIONS_VND, normalizePaymentRef, paymentRefFromBytes, type PriceCartResult } from '@bookstore/domain';
 import { clsx } from 'clsx';
-import { Banknote, Check, CheckCircle2, CreditCard, Mail, Printer, QrCode, ShieldCheck, Trash2, User } from 'lucide-react';
+import { Banknote, Check, CheckCircle2, CreditCard, Mail, Plus, Printer, QrCode, ShieldCheck, Trash2, User } from 'lucide-react';
 import { useState } from 'react';
 import { Button, Field, InlineAlert } from '../components/ui';
 import { ApiError, post } from '../lib/api';
@@ -297,11 +297,17 @@ export function SaleDone({ outcome, online, onNew }: { outcome: SaleOutcome; onl
 // Shift close (FR-POS-18/19, Design §13.6)
 
 export function CloseShiftDialog({ expectedVnd, source, onClose, onSubmit }: { expectedVnd: number; source: 'server' | 'device'; onClose: () => void; onSubmit: (counted: number, denominations: Record<string, number>, reason: string) => Promise<void> }) {
-  const [counts, setCounts] = useState<Record<string, number>>({});
+  // One row per note counted: pick the note, then the number of notes (Design §13.6).
+  const [rows, setRows] = useState<{ id: number; note: number | null; qty: number | null }[]>([{ id: 0, note: null, qty: null }]);
+  const [nextId, setNextId] = useState(1);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const counted = DENOMINATIONS_VND.reduce((a, d) => a + d * (counts[d] ?? 0), 0);
+  const counts: Record<string, number> = {};
+  for (const r of rows) if (r.note && r.qty) counts[r.note] = (counts[r.note] ?? 0) + r.qty;
+  const counted = Object.entries(counts).reduce((a, [d, n]) => a + Number(d) * n, 0);
+  const used = new Set(rows.map((r) => r.note).filter((n): n is number => n !== null));
+  const update = (id: number, patch: Partial<(typeof rows)[number]>) => setRows(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const variance = counted - expectedVnd;
   const tone = variance === 0 ? 'text-success-700' : variance < 0 ? 'text-danger-700' : 'text-warning-700';
   return (
@@ -335,40 +341,59 @@ export function CloseShiftDialog({ expectedVnd, source, onClose, onSubmit }: { e
         </>
       }
     >
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-ink-500">
-            <th className="py-1 font-medium">Mệnh giá</th>
-            <th className="py-1 text-right font-medium">Số tờ</th>
-            <th className="py-1 text-right font-medium">Thành tiền</th>
-          </tr>
-        </thead>
-        <tbody>
-          {DENOMINATIONS_VND.map((d) => (
-            <tr key={d}>
-              <td className="py-1 num">{formatNumber(d)}</td>
-              <td className="py-1 text-right">
-                <span className="inline-flex items-center gap-1">
-                  <button type="button" className="size-10 rounded-full border border-paper-500" aria-label={`Bớt ${d}`} onClick={() => setCounts({ ...counts, [d]: Math.max(0, (counts[d] ?? 0) - 1) })}>
-                    –
-                  </button>
-                  <input
-                    inputMode="numeric"
-                    className="h-10 w-14 rounded-md border border-paper-500 text-center num"
-                    aria-label={`Số tờ ${d}`}
-                    value={counts[d] ?? 0}
-                    onChange={(e) => setCounts({ ...counts, [d]: Number(e.target.value.replace(/\D/g, '')) || 0 })}
-                  />
-                  <button type="button" className="size-10 rounded-full border border-paper-500" aria-label={`Thêm ${d}`} onClick={() => setCounts({ ...counts, [d]: (counts[d] ?? 0) + 1 })}>
-                    +
-                  </button>
-                </span>
-              </td>
-              <td className="py-1 text-right num">{formatNumber(d * (counts[d] ?? 0))}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <p className="mb-2 text-[13px] font-medium text-ink-700">Tiền mặt đếm được</p>
+      <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-2 text-sm">
+        <span className="text-ink-500">Mệnh giá</span>
+        <span className="text-ink-500">Số tờ</span>
+        <span className="text-right text-ink-500">Thành tiền</span>
+        <span aria-hidden className="w-10" />
+        {rows.map((r) => (
+          <div key={r.id} className="contents">
+            <select
+              className="h-11 min-w-0 rounded-md border border-paper-500 bg-white px-2 num"
+              aria-label="Mệnh giá"
+              value={r.note ?? ''}
+              onChange={(e) => {
+                update(r.id, { note: e.target.value ? Number(e.target.value) : null });
+                // Next: the number of notes.
+                requestAnimationFrame(() => document.getElementById(`qty-${r.id}`)?.focus());
+              }}
+            >
+              <option value="">Chọn</option>
+              {DENOMINATIONS_VND.filter((d) => d === r.note || !used.has(d)).map((d) => (
+                <option key={d} value={d}>
+                  {formatNumber(d)}
+                </option>
+              ))}
+            </select>
+            <input
+              id={`qty-${r.id}`}
+              inputMode="numeric"
+              className="h-11 min-w-0 rounded-md border border-paper-500 px-2 text-center num"
+              aria-label={r.note ? `Số tờ ${formatNumber(r.note)}` : 'Số tờ'}
+              placeholder="0"
+              value={r.qty ?? ''}
+              onChange={(e) => update(r.id, { qty: Number(e.target.value.replace(/\D/g, '')) || null })}
+            />
+            <span className="truncate text-right num">{r.note && r.qty ? formatNumber(r.note * r.qty) : '—'}</span>
+            <Button variant="ghost" icon={Trash2} aria-label="Xóa dòng" title="Xóa dòng" onClick={() => setRows(rows.filter((x) => x.id !== r.id))} />
+          </div>
+        ))}
+      </div>
+      {used.size < DENOMINATIONS_VND.length && rows.length < DENOMINATIONS_VND.length && (
+        <Button
+          variant="tonal"
+          size="sm"
+          icon={Plus}
+          className="mt-3"
+          onClick={() => {
+            setRows([...rows, { id: nextId, note: null, qty: null }]);
+            setNextId(nextId + 1);
+          }}
+        >
+          Thêm mệnh giá
+        </Button>
+      )}
       <dl className="mt-4 grid grid-cols-2 gap-y-1 rounded-lg border border-paper-300 bg-paper-50 p-4 num">
         <dt className="text-ink-500">Dự kiến{source === 'device' ? ' (theo máy)' : ''}</dt>
         <dd className="text-right">{formatVnd(expectedVnd)}</dd>
