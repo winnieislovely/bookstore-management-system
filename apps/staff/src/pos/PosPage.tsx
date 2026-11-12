@@ -516,10 +516,10 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           )}
         </dl>
         <div className="mt-3 grid grid-cols-[1fr_3fr] gap-2">
-          <Button variant="secondary" size="xl" className="px-2! text-sm!" onClick={holdCart} disabled={!cart.lines.length || readOnly || !!cart.preorder}>
+          <Button variant="secondary" size="lg" className="px-2!" onClick={holdCart} disabled={!cart.lines.length || readOnly || !!cart.preorder}>
             Giữ giỏ
           </Button>
-          <Button variant="accent" size="xl" full icon={Check} disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
+          <Button variant="accent" size="lg" full icon={Check} disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
             Xác nhận
           </Button>
         </div>

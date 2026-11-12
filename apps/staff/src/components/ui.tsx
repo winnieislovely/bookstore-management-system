@@ -13,13 +13,13 @@ export type ButtonVariant = 'primary' | 'accent' | 'tonal' | 'secondary' | 'ghos
 export type ButtonSize = 'sm' | 'md' | 'lg' | 'xl';
 
 const VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-navy-700 text-white hover:bg-navy-800 active:bg-navy-900',
-  accent: 'bg-olive-600 text-white hover:bg-olive-700',
-  tonal: 'bg-navy-50 text-navy-700 hover:bg-navy-100',
-  secondary: 'bg-white text-ink-900 border border-paper-500 hover:bg-navy-50',
-  ghost: 'bg-transparent text-ink-700 hover:bg-navy-50',
-  destructive: 'bg-danger-700 text-white hover:brightness-95',
-  'destructive-outline': 'bg-white text-danger-700 border border-danger-700 hover:bg-danger-50',
+  primary: 'bg-navy-700 text-white enabled:hover:bg-navy-800 enabled:active:bg-navy-900',
+  accent: 'bg-olive-600 text-white enabled:hover:bg-olive-700',
+  tonal: 'bg-navy-50 text-navy-700 enabled:hover:bg-navy-100',
+  secondary: 'bg-white text-ink-900 border border-paper-500 enabled:hover:bg-navy-50',
+  ghost: 'bg-transparent text-ink-700 enabled:hover:bg-navy-50',
+  destructive: 'bg-danger-700 text-white enabled:hover:brightness-95',
+  'destructive-outline': 'bg-white text-danger-700 border border-danger-700 enabled:hover:bg-danger-50',
 };
 const SIZE: Record<ButtonSize, string> = {
   sm: 'h-8 px-3 text-[13px] font-medium gap-1.5',
@@ -48,7 +48,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       ref={ref}
       className={clsx(
         'inline-flex items-center justify-center rounded-full whitespace-nowrap transition-colors duration-[120ms] select-none touch-target',
-        'disabled:bg-paper-200 disabled:text-ink-300 disabled:border-transparent disabled:cursor-not-allowed',
+        // Disabled keeps the variant's colours, faded; a loading button (aria-busy) is not faded (Design §10.1).
+        'disabled:cursor-not-allowed disabled:not-aria-busy:opacity-40',
         VARIANT[variant],
         SIZE[size],
         full && 'w-full',
