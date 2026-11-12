@@ -442,7 +442,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             )}
           </div>
         ) : (
-          <Button variant="tonal" icon={User} onClick={() => setDialog({ kind: 'customer' })} disabled={readOnly}>
+          <Button variant="primary" icon={User} onClick={() => setDialog({ kind: 'customer' })} disabled={readOnly}>
             Thêm khách
           </Button>
         )}
@@ -597,7 +597,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
               }}
               disabled={readOnly}
             />
-            <button type="button" className="inline-flex size-12 shrink-0 items-center justify-center rounded-full bg-navy-50 text-navy-700 hover:bg-navy-100" aria-label="Quét bằng camera" onClick={() => setCamera(true)}>
+            <button type="button" className="inline-flex size-12 shrink-0 items-center justify-center rounded-full bg-navy-700 text-white hover:bg-navy-800" aria-label="Quét bằng camera" onClick={() => setCamera(true)}>
               <ScanBarcode size={22} aria-hidden />
             </button>
           </form>
