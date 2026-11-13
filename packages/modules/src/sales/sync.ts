@@ -337,7 +337,6 @@ const SaleCompleted = z.object({
     redeemPoints: z.number().int().min(0).default(0),
     pointsDiscountVnd: money.default(0),
     isDeposit: z.boolean().default(false),
-    couponCode: z.string().max(40).optional(),
     /** Offline supervisor approvals checked on the device against cached verifiers (TDD §7.6). */
     approvals: z.array(z.object({ approverId: z.uuid(), action: z.enum(Object.keys(identity.APPROVAL_ACTIONS) as [identity.ApprovalAction, ...identity.ApprovalAction[]]) })).default([]),
     einvoiceRequest: z.object({ name: z.string(), taxCode: z.string().optional(), address: z.string().optional(), email: z.email().optional() }).optional(),
@@ -559,7 +558,6 @@ async function processEvent(tx: Tx, ctx: Ctx, device: Device, e: SyncEvent): Pro
       offline: true,
       soldAt,
       note: p.note ?? null,
-      couponCode: p.couponCode ?? null,
       approvedBy,
     })
     .returning({ id: schema.sale.id });
@@ -641,7 +639,7 @@ async function processEvent(tx: Tx, ctx: Ctx, device: Device, e: SyncEvent): Pro
         uses.set(pid, u);
       }
     }
-    await promotions.recordUsage(tx, [...uses].map(([promotionId, u]) => ({ promotionId, ...u })), { refType: 'sale', refId: saleId, customerId: p.customerId ?? null, couponCode: p.couponCode ?? null });
+    await promotions.recordUsage(tx, [...uses].map(([promotionId, u]) => ({ promotionId, ...u })), { refType: 'sale', refId: saleId, customerId: p.customerId ?? null });
   }
 
   // E-invoices for offline sales are issued after reconnection (FR-POS-24, BR-24).

@@ -159,9 +159,8 @@ const OrderPricingSchema = z.object({
   customerId: z.uuid().nullable().optional(),
   lines: z.array(OrderLineSchema).min(1, 'Đơn chưa có sản phẩm.').max(200),
   shippingVnd: money.default(0),
-  couponCode: z.string().trim().max(40).nullable().optional(),
-  /** Manual discount on the whole order, within the role limit (FR-ORD-02, BR-05). */
-  orderManualDiscount: ManualDiscountSchema.nullable().optional(),
+  /** Manual discount on the whole order, a percentage only, within the role limit (FR-ORD-02, BR-05). */
+  orderManualDiscount: z.object({ kind: z.literal('percent'), bp: z.number().int().min(0).max(10000) }).nullable().optional(),
   redeemPoints: z.number().int().min(0).optional(),
 });
 
@@ -222,7 +221,7 @@ async function loadVariants(tx: Tx, ids: string[]): Promise<Map<string, VariantI
 
 /**
  * Price an order like a counter sale, with the channel of its source (TDD §4.5): promotions for
- * that channel, tier discount, coupon, points, line discounts within the role limit, shipping.
+ * that channel, tier discount, points, line discounts within the role limit, shipping.
  */
 async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSchema>) {
   const variants = await loadVariants(tx, [...new Set(data.lines.map((l) => l.variantId))]);
@@ -252,12 +251,7 @@ async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSch
     channel,
     customer: customerId ? await customers.pricingProfile(tx, customerId) : null,
     promotions: await promotions.activeSnapshot(tx, ctx.clock.now(), channel, customerId),
-    couponCode: data.couponCode ?? null,
-    orderManualDiscount: data.orderManualDiscount
-      ? data.orderManualDiscount.kind === 'percent'
-        ? data.orderManualDiscount
-        : { kind: 'amount', vnd: vnd(data.orderManualDiscount.vnd) }
-      : null,
+    orderManualDiscount: data.orderManualDiscount ?? null,
     redeemPoints: data.redeemPoints ?? 0,
     shippingVnd: vnd(data.shippingVnd),
     settings: {
@@ -397,7 +391,6 @@ export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof Creat
       pointsDiscountVnd: priced.redeemValueVnd,
       // Points to credit when the order is Done (BR-19, BR-29).
       pointsEarned: priced.pointsToEarn,
-      couponCode: priced.couponApplied ? (data.couponCode?.toUpperCase() ?? null) : null,
       note: data.note ?? null,
       createdBy: opts.createdBy,
       createdAt: now,
@@ -451,7 +444,7 @@ export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof Creat
       uses.set(s.promotionId, u);
     }
   }
-  await promotions.recordUsage(tx, [...uses].map(([promotionId, u]) => ({ promotionId, ...u })), { refType: REF, refId: orderId, customerId, couponCode: order!.couponCode });
+  await promotions.recordUsage(tx, [...uses].map(([promotionId, u]) => ({ promotionId, ...u })), { refType: REF, refId: orderId, customerId });
   await audit.record(tx, ctx, { action: 'order.create', entity: REF, entityId: orderId, after: { docNo, source: data.source, totalVnd: priced.totalVnd, status } });
   await emit(tx, 'order.status_changed', { orderId, from: null, to: status });
   return { id: orderId, docNo, status, totalVnd: priced.totalVnd, paymentRef: order!.paymentRef, reviewReasons: reasons, customerId };
@@ -700,7 +693,6 @@ async function cancelTx(tx: Tx, ctx: Ctx, o: OrderRow, reason: string) {
   }
   // Promotion usage counts only orders that go ahead (FR-PRM-06).
   await tx.delete(schema.promotionUsage).where(and(eq(schema.promotionUsage.refType, REF), eq(schema.promotionUsage.refId, o.id)));
-  if (o.couponCode) await tx.update(schema.coupon).set({ used: sql`greatest(${schema.coupon.used} - 1, 0)` }).where(sql`upper(${schema.coupon.code}) = ${o.couponCode}`);
   await transition(tx, ctx, o, 'cancelled', reason, { cancelledAt: ctx.clock.now(), cancelReason: reason, reviewReasons: [] });
   await audit.record(tx, ctx, { action: 'order.cancel', entity: REF, entityId: o.id, after: { reason } });
   // A paid transfer is refunded outside the system (no payment gateway, SRS §2.6).

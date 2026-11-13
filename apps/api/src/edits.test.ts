@@ -36,21 +36,20 @@ describe('PATCH /customers/:id (FR-CRM-01)', () => {
 });
 
 describe('PATCH /promotions/:id (FR-PRM-02)', () => {
-  it('creates a new version and updates the coupon', async () => {
-    const rule = { type: 'percent', percentBp: 1000, scope: { kind: 'order' }, conditions: { couponCode: 'SALE10' } };
+  it('creates a new version; there are no coupon codes (FR-PRM-01)', async () => {
+    const rule = { type: 'percent', percentBp: 1000, scope: { kind: 'order' }, conditions: { channels: ['website'] } };
+    expect((await h.call('POST', '/api/v1/promotions', { cookie: owner, body: { name: 'Có mã', rule: { ...rule, conditions: { couponCode: 'SALE10' } }, startsAt: '2026-01-01T00:00:00.000Z' } })).status).toBe(400);
     const p = await h.call('POST', '/api/v1/promotions', { cookie: owner, body: { name: 'Giảm 10%', rule, startsAt: '2026-01-01T00:00:00.000Z' } });
     expect(p.status).toBe(201);
     const listed = (await h.call('GET', '/api/v1/promotions', { cookie: owner })).body.items[0];
     const r = await h.call('PATCH', `/api/v1/promotions/${p.body.id}`, {
       cookie: owner,
-      body: { name: 'Giảm 15%', rule: { ...rule, percentBp: 1500, conditions: { couponCode: 'sale15' } }, startsAt: '2026-01-01T00:00:00.000Z', endsAt: null, version: listed.version },
+      body: { name: 'Giảm 15%', rule: { ...rule, percentBp: 1500 }, startsAt: '2026-01-01T00:00:00.000Z', endsAt: null, version: listed.version },
     });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body.versionId).not.toBe(p.body.versionId);
     const now = (await h.call('GET', '/api/v1/promotions', { cookie: owner })).body.items[0];
     expect(now).toMatchObject({ name: 'Giảm 15%', rule: { percentBp: 1500 }, version: listed.version + 1 });
-    const [c] = await h.t.sql`select code from crm.coupon where promotion_id = ${p.body.id}`;
-    expect(c!.code).toBe('SALE15');
     expect((await h.call('PATCH', `/api/v1/promotions/${p.body.id}`, { cookie: owner, body: { name: 'x', rule, startsAt: '2026-01-01T00:00:00.000Z', version: listed.version } })).status).toBe(412);
   });
 });

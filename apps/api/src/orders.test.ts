@@ -174,7 +174,7 @@ describe('creating orders', () => {
     expect(over.status).toBe(403);
     expect(over.body.error.code).toBe('approval_required');
     // A manual discount on the whole order (FR-ORD-02): within the limit it prices, above it needs approval.
-    const whole = await h.call('POST', '/api/v1/orders/quote', { cookie: online, body: { source: 'zalo', lines: [{ variantId: book, qty: 1 }], orderManualDiscount: { kind: 'amount', vnd: 5000 } } });
+    const whole = await h.call('POST', '/api/v1/orders/quote', { cookie: online, body: { source: 'zalo', lines: [{ variantId: book, qty: 1 }], orderManualDiscount: { kind: 'percent', bp: 500 } } });
     expect(whole.status, JSON.stringify(whole.body)).toBe(200);
     expect(whole.body.discountVnd).toBe(5000);
     const wholeOver = await create({ orderManualDiscount: { kind: 'percent', bp: 3000 } });

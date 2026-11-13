@@ -85,8 +85,7 @@ export interface PriceCartInput {
   channel: SalesChannel;
   customer?: CustomerPricing | null;
   promotions: readonly PromotionSnapshot[];
-  couponCode?: string | null;
-  /** Manual discount on the whole order (orders, FR-ORD-02); not used at the POS. */
+  /** Manual discount on the whole order (FR-POS-02, FR-ORD-02). */
   orderManualDiscount?: ManualDiscount | null;
   redeemPoints?: number;
   shippingVnd?: Vnd;
@@ -119,8 +118,6 @@ export type ApprovalReason =
   | { code: 'price_override'; lineId: string };
 
 export type PricingIssue =
-  | { code: 'coupon_not_found'; couponCode: string }
-  | { code: 'coupon_not_eligible'; couponCode: string }
   | { code: 'points_below_minimum'; minimum: number }
   | { code: 'points_exceed_balance'; balance: number }
   | { code: 'points_exceed_total' };
@@ -135,7 +132,6 @@ export interface PriceCartResult {
   shippingDiscountVnd: Vnd;
   gifts: { variantId: string; qty: number; promotionId: string }[];
   appliedPromotionVersionIds: string[];
-  couponApplied: boolean;
   redeemPoints: number;
   redeemValueVnd: Vnd;
   pointsToEarn: number;
@@ -198,7 +194,6 @@ function unitsCheapestFirst(lines: WorkLine[]): { line: WorkLine; price: number 
 export function priceCart(input: PriceCartInput): PriceCartResult {
   const issues: PricingIssue[] = [];
   const approvals: ApprovalReason[] = [];
-  const coupon = input.couponCode?.trim().toUpperCase() || null;
 
   const work: WorkLine[] = input.lines.map((l) => {
     if (!Number.isSafeInteger(l.qty) || l.qty < 1) throw new RangeError(`Invalid quantity on line ${l.lineId}`);
@@ -223,26 +218,19 @@ export function priceCart(input: PriceCartInput): PriceCartResult {
 
   const goodsSubtotal = work.reduce((a, l) => a + (l.input.itemClass === 'goods' ? l.gross : 0), 0);
 
-  // Eligibility (FR-PRM-03): channel, minimum order value, coupon, usage limits, tier scope.
-  let couponMatched = false;
+  // Eligibility (FR-PRM-03): channel, minimum order value, usage limits, tier scope. Promotions apply
+  // by themselves; there are no coupon codes (FR-PRM-01), and an old rule with one never applies.
   const eligible = input.promotions.filter((p) => {
     const c = p.rule.conditions;
     if (p.usageExhausted) return false;
+    if (c.couponCode) return false;
     if (c.channels && !c.channels.includes(input.channel)) return false;
-    if (c.couponCode) {
-      if (coupon !== c.couponCode.toUpperCase()) return false;
-      couponMatched = true;
-    }
-    if (c.minOrderVnd != null && goodsSubtotal < c.minOrderVnd) {
-      if (c.couponCode) issues.push({ code: 'coupon_not_eligible', couponCode: coupon! });
-      return false;
-    }
+    if (c.minOrderVnd != null && goodsSubtotal < c.minOrderVnd) return false;
     if (p.rule.scope.kind === 'tier' && !(input.customer && p.rule.scope.tierCodes.includes(input.customer.tierCode))) {
       return false;
     }
     return true;
   });
-  if (coupon && !couponMatched) issues.push({ code: 'coupon_not_found', couponCode: coupon });
 
   const sorted = [...eligible].sort((a, b) => b.rule.priority - a.rule.priority || a.versionId.localeCompare(b.versionId));
   const gifts: PriceCartResult['gifts'] = [];
@@ -463,7 +451,6 @@ export function priceCart(input: PriceCartInput): PriceCartResult {
     shippingDiscountVnd: vnd(shippingDiscount),
     gifts,
     appliedPromotionVersionIds: [...applied],
-    couponApplied: coupon !== null && couponMatched && sorted.some((p) => p.rule.conditions.couponCode),
     redeemPoints,
     redeemValueVnd: vnd(redeemValue),
     pointsToEarn: Math.max(0, pointsToEarn),

@@ -23,6 +23,7 @@ export type SalesChannel = z.infer<typeof SalesChannel>;
 export const PromotionConditions = z.object({
   minOrderVnd: z.number().int().min(0).optional(),
   channels: z.array(SalesChannel).min(1).optional(),
+  /** Withdrawn 13 Nov 2026 (FR-PRM-01): kept only so old versions still parse; a rule with a code never applies. */
   couponCode: z.string().min(1).optional(),
   perCustomerLimit: z.number().int().min(1).optional(),
   totalLimit: z.number().int().min(1).optional(),

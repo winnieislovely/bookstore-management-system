@@ -1,17 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, Check, Coins, Info, LogOut, Menu, Minus, MoreHorizontal, Percent, Plus, RefreshCw, ScanBarcode, Search, ShoppingBasket, ShoppingCart, Ticket, User, Wallet, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, Check, ChevronRight, Coins, Gift, Info, LogOut, Menu, Minus, Plus, RefreshCw, ScanBarcode, Search, ShoppingBasket, ShoppingCart, User, Wallet, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Button, Field, InlineAlert, Skeleton } from '../components/ui';
 import { get } from '../lib/api';
-import { formatDateTime, formatNumber, formatVnd } from '../lib/format';
+import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { can, useMe, type Me } from '../lib/session';
 import { cashMovement, closeShift, completeSale, expectedCash, openShift, refreshShift, type LocalShift, type Payment, type SaleOutcome } from './actions';
 import { findByCode, isPreorderLine, priceLocally, searchItems, useCart, type CartApproval, type PricedCart } from './cart';
 import { db, itemTitle, kvGet, kvSet, type CachedItem } from './db';
 import { deviceInfo, registerDevice, type DeviceInfo } from './device';
-import { ApprovalDialog, CloseShiftDialog, CustomerDialog, LineDialog, OrderDiscountDialog, PaymentSheet, SaleDone } from './dialogs';
+import { ApprovalDialog, CloseShiftDialog, CustomerDialog, PaymentSheet, SaleDone } from './dialogs';
+import { DiscountInput } from '../components/discount-input';
 import { PreorderDialog, toCart, type PreorderRow } from './preorders';
 import { bootstrap, flush, leaseState, startSync, usePosStatus } from './sync';
 import { CameraScanner, Dialog, MoneyInput } from './widgets';
@@ -206,8 +207,8 @@ function ConnectionPill() {
   return null;
 }
 
-const stepBtn = 'inline-flex size-11 items-center justify-center rounded-full disabled:opacity-40';
-const stepCircle = 'inline-flex size-7 items-center justify-center rounded-full border border-paper-500 bg-white text-ink-900 hover:bg-navy-50';
+// Small stepper (Design §13.1): bare icons 32 × 44 px touch area, the quantity in a 32 × 28 px box.
+const stepBtn = 'inline-flex h-11 w-8 items-center justify-center rounded-md text-ink-700 hover:text-navy-700 disabled:opacity-40';
 
 interface Result extends CachedItem {
   available?: number;
@@ -221,7 +222,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const [notFound, setNotFound] = useState<string | null>(null);
   const [camera, setCamera] = useState(false);
   const [priced, setPriced] = useState<PricedCart | null>(null);
-  const [dialog, setDialog] = useState<null | { kind: 'customer' } | { kind: 'line'; lineId: string } | { kind: 'approval'; action: CartApproval['action']; reason: string } | { kind: 'pay' } | { kind: 'done'; outcome: SaleOutcome } | { kind: 'close'; expected: number; source: 'server' | 'device' } | { kind: 'cash' } | { kind: 'held' } | { kind: 'coupon' } | { kind: 'points' } | { kind: 'orderDiscount' } | { kind: 'menu' } | { kind: 'preorder' }>(null);
+  const [dialog, setDialog] = useState<null | { kind: 'customer' } | { kind: 'approval'; action: CartApproval['action']; reason: string } | { kind: 'pay' } | { kind: 'done'; outcome: SaleOutcome } | { kind: 'close'; expected: number; source: 'server' | 'device' } | { kind: 'cash' } | { kind: 'held' } | { kind: 'points' } | { kind: 'menu' } | { kind: 'preorder' }>(null);
   const [message, setMessage] = useState<{ tone: 'danger' | 'info' | 'success'; text: string } | null>(null);
   const [registerCode, setRegisterCode] = useState('');
   const [heldCount, setHeldCount] = useState(0);
@@ -251,10 +252,21 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     return () => {
       live = false;
     };
-  }, [cart.lines, cart.customer, cart.couponCode, cart.redeemPoints, cart.orderDiscount, cart.preorder, grants]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cart.lines, cart.customer, cart.redeemPoints, cart.orderDiscount, cart.preorder, grants]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The order discount as spread over the lines by the pricing engine (FR-POS-02).
-  const orderDiscountVnd = priced?.result.lines.reduce((a, l) => a + l.manualDiscountVnd, 0) ?? 0;
+  const manualDiscountVnd = priced?.result.lines.reduce((a, l) => a + l.manualDiscountVnd, 0) ?? 0;
+  // The customer has enough points for a reward once the balance reaches the redemption minimum (FR-CRM-04).
+  const [minRedeem, setMinRedeem] = useState<number | null>(null);
+  const [discountOpen, setDiscountOpen] = useState(false);
+  useEffect(() => {
+    void kvGet<{ minRedeemPoints: number }>('settings').then((x) => setMinRedeem(x?.minRedeemPoints ?? null));
+  }, []);
+  const pointsReady = !!cart.customer && !cart.preorder && minRedeem != null && cart.customer.pointsBalance >= Math.max(1, minRedeem);
+  const pointsDiscountVnd = priced?.result.lines.reduce((a, l) => a + l.pointsDiscountVnd, 0) ?? 0;
+  // Promotions apply by themselves (FR-POS-05, FR-PRM-01); the Khuyến mãi row names them.
+  const autoPromoVnd = Math.max(0, (priced?.result.discountVnd ?? 0) - manualDiscountVnd - pointsDiscountVnd);
+  const promoNames = [...new Map((priced?.result.lines ?? []).flatMap((l) => l.savings).map((x) => [x.promotionId, x.label])).values()];
 
   // Live search as you type; Enter adds an exact code (scanner) or the single result.
   useEffect(() => {
@@ -296,7 +308,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     const issue = priced.result.issues[0];
     if (issue) {
       const text =
-        issue.code === 'coupon_not_found' ? `Mã giảm giá ${issue.couponCode} không đúng hoặc đã hết hạn.` : issue.code === 'points_below_minimum' ? `Cần đổi tối thiểu ${issue.minimum} điểm.` : issue.code === 'points_exceed_balance' ? 'Khách không đủ điểm.' : 'Không áp dụng được mã giảm giá hoặc điểm.';
+        issue.code === 'points_below_minimum' ? `Cần đổi tối thiểu ${issue.minimum} điểm.` : issue.code === 'points_exceed_balance' ? 'Khách không đủ điểm.' : 'Không dùng được số điểm này.';
       setMessage({ tone: 'danger', text });
       return;
     }
@@ -311,7 +323,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
 
   const pay = async (payments: Payment[]) => {
     const outcome = await completeSale(
-      { shift, cashierId: me.id, lines: cart.lines, customer: cart.customer, couponCode: cart.couponCode, redeemPoints: cart.redeemPoints, orderDiscount: cart.orderDiscount, approvals: cart.approvals, payments, priced: priced!.result, items: priced!.items, preorderId: cart.preorder?.id ?? null },
+      { shift, cashierId: me.id, lines: cart.lines, customer: cart.customer, redeemPoints: cart.redeemPoints, orderDiscount: cart.orderDiscount, approvals: cart.approvals, payments, priced: priced!.result, items: priced!.items, preorderId: cart.preorder?.id ?? null },
       saleKey.current,
     );
     setDialog({ kind: 'done', outcome });
@@ -340,7 +352,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         // A cart in progress goes to the held carts first.
         const c = useCart.getState();
         if (c.lines.length && !c.preorder) {
-          await db.heldCarts.put({ id: crypto.randomUUID(), label: c.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: c.lines, customer: c.customer, couponCode: c.couponCode, redeemPoints: c.redeemPoints, orderDiscount: c.orderDiscount }, heldAt: new Date().toISOString() });
+          await db.heldCarts.put({ id: crypto.randomUUID(), label: c.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: c.lines, customer: c.customer, redeemPoints: c.redeemPoints, orderDiscount: c.orderDiscount }, heldAt: new Date().toISOString() });
           setHeldCount(await db.heldCarts.count());
           setMessage({ tone: 'info', text: 'Đã chuyển giỏ hàng đang bán vào Giỏ chờ.' });
         }
@@ -355,7 +367,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
 
   const holdCart = async () => {
     if (!cart.lines.length) return;
-    await db.heldCarts.put({ id: crypto.randomUUID(), label: cart.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: cart.lines, customer: cart.customer, couponCode: cart.couponCode, redeemPoints: cart.redeemPoints, orderDiscount: cart.orderDiscount }, heldAt: new Date().toISOString() });
+    await db.heldCarts.put({ id: crypto.randomUUID(), label: cart.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: cart.lines, customer: cart.customer, redeemPoints: cart.redeemPoints, orderDiscount: cart.orderDiscount }, heldAt: new Date().toISOString() });
     setHeldCount(await db.heldCarts.count());
     newSale();
     setMessage({ tone: 'success', text: 'Đã giữ giỏ hàng.' });
@@ -386,29 +398,22 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
       <li key={l.lineId} className={clsx('px-4 py-3 transition-colors duration-[600ms]', cart.flashLineId === l.lineId && 'bg-sand-50')}>
         <div className="flex gap-2">
           <p className="line-clamp-2 flex-1 font-semibold">{item ? itemTitle(item) : '…'}</p>
-          <button type="button" className="inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-50" aria-label="Tùy chọn dòng" onClick={() => setDialog({ kind: 'line', lineId: l.lineId })}>
-            <MoreHorizontal size={20} aria-hidden />
-          </button>
         </div>
-        <p className="-mt-1 text-sm whitespace-nowrap text-ink-700 num">{formatVnd(pl?.unitPriceVnd ?? item?.priceVnd ?? 0)}</p>
-        <div className="mt-2 flex items-center gap-2">
-          {/* Compact stepper: 28 px circles, 44 px touch area each (Design §13.1, NFR-USE-02). */}
-          <span className="-mx-2 inline-flex items-center">
+        {/* Unit price, then the small stepper at the right (Design §13.1, NFR-USE-02).
+            No line menu – the price cannot be changed at the POS (FR-POS-02). */}
+        <div className="flex items-center gap-2">
+          <p className="flex-1 text-sm whitespace-nowrap text-ink-700 num">{formatVnd(pl?.unitPriceVnd ?? item?.priceVnd ?? 0)}</p>
+          <span className="-my-2 -mr-1 inline-flex items-center">
             <button type="button" className={stepBtn} aria-label="Giảm số lượng" onClick={() => (l.qty === 1 ? cart.remove(l.lineId) : cart.setQty(l.lineId, l.qty - 1))}>
-              <span className={stepCircle}>
-                <Minus size={14} aria-hidden />
-              </span>
+              <Minus size={16} aria-hidden />
             </button>
-            <span className="w-8 text-center font-semibold num" aria-label="Số lượng">
+            <span className="inline-flex h-7 min-w-8 items-center justify-center rounded-sm border border-paper-500 bg-white px-1 text-sm font-semibold num" aria-label="Số lượng">
               {l.qty}
             </span>
             <button type="button" className={stepBtn} aria-label="Tăng số lượng" onClick={() => cart.setQty(l.lineId, l.qty + 1)}>
-              <span className={stepCircle}>
-                <Plus size={14} aria-hidden />
-              </span>
+              <Plus size={16} aria-hidden />
             </button>
           </span>
-          <span className="ml-auto text-right font-semibold whitespace-nowrap num">{formatVnd(pl?.totalVnd ?? 0)}</span>
         </div>
         {pl?.savings.map((s) => (
           <p key={s.promotionId} className="mt-1 text-[13px] text-success-700 num">
@@ -421,34 +426,46 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   });
   const searching = results.length > 0 || q.trim().length >= 2;
 
+  /** Customer row under the search field, outside the cart (Design §13.1): name and phone only, no points. */
+  const customerRow = (
+    <div>
+    <div className="flex min-h-11 items-center gap-2">
+      {cart.customer ? (
+        <>
+          <User size={18} className="shrink-0 text-ink-700" aria-hidden />
+          {/* Name, then the phone on the line below (Design §13.1). */}
+          <div className="min-w-0">
+            <p className="truncate font-semibold">{cart.customer.name}</p>
+            {cart.customer.phoneE164 && <p className="text-[13px] text-ink-500 num">{formatPhone(cart.customer.phoneE164)}</p>}
+          </div>
+          <button
+            type="button"
+            className="ml-auto inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-50"
+            aria-label={cart.preorder ? 'Bỏ nhận hàng đặt trước' : 'Bỏ khách hàng'}
+            onClick={() => (cart.preorder ? cart.clear() : cart.setCustomer(null))}
+            disabled={readOnly}
+          >
+            <X size={18} aria-hidden />
+          </button>
+        </>
+      ) : (
+        <Button variant="primary" size="sm" icon={User} className="relative min-h-0! before:absolute before:inset-x-0 before:-inset-y-1.5 before:content-['']" onClick={() => setDialog({ kind: 'customer' })} disabled={readOnly}>
+          Thêm khách
+        </Button>
+      )}
+    </div>
+      {pointsReady && (
+        <span className="-mt-1 ml-6 inline-flex items-center gap-1 rounded-full bg-success-50 px-2 py-0.5 text-xs font-medium text-success-700">
+          <Gift size={14} aria-hidden /> Đủ điểm nhận ưu đãi
+        </span>
+      )}
+    </div>
+  );
+
   const cartPanel = (
     <div className="flex h-full flex-col">
-      <div className="border-b border-paper-300 p-4">
-        {cart.customer ? (
-          <div className="flex items-center gap-3">
-            <User size={20} aria-hidden />
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-semibold">{cart.customer.name}</p>
-              <p className="text-[13px] text-ink-500 num">
-                {formatNumber(cart.customer.pointsBalance)} điểm{priced?.result.pointsToEarn ? ` · +${priced.result.pointsToEarn} điểm đơn này` : ''}
-              </p>
-            </div>
-            {cart.preorder ? (
-              <button type="button" className="inline-flex size-10 items-center justify-center rounded-full hover:bg-navy-50" aria-label="Bỏ nhận hàng đặt trước" onClick={() => cart.clear()}>
-                <X size={18} aria-hidden />
-              </button>
-            ) : (
-              <button type="button" className="inline-flex size-10 items-center justify-center rounded-full hover:bg-navy-50" aria-label="Bỏ khách hàng" onClick={() => cart.setCustomer(null)}>
-                <X size={18} aria-hidden />
-              </button>
-            )}
-          </div>
-        ) : (
-          <Button variant="primary" icon={User} onClick={() => setDialog({ kind: 'customer' })} disabled={readOnly}>
-            Thêm khách
-          </Button>
-        )}
-      </div>
+      {/* Card title, like the other cards (Design §13.1). */}
+      <h2 className="px-4 pt-3 pb-2 text-sm font-semibold text-ink-900">Thông tin sản phẩm</h2>
       <ul className="flex-1 divide-y divide-paper-300 overflow-y-auto" aria-live="polite">
         {cart.lines.length === 0 && (
           <li className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-ink-500">
@@ -462,53 +479,33 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 text-sm num">
           <dt className="text-ink-700">Tạm tính</dt>
           <dd className="text-right">{formatVnd(priced?.result.subtotalVnd ?? 0)}</dd>
-          {!!priced?.result.discountVnd && (
+          {autoPromoVnd > 0 && (
             <>
-              <dt className="text-ink-700">Khuyến mãi / giảm giá</dt>
-              <dd className="text-right text-success-700">−{formatVnd(priced.result.discountVnd).replace('−', '')}</dd>
+              <dt className="text-ink-700">Khuyến mãi</dt>
+              <dd className="text-right text-success-700">−{formatVnd(autoPromoVnd)}</dd>
+              {promoNames.length > 0 && <dd className="col-span-2 -mt-1 text-xs text-ink-500">{promoNames.join(' · ')}</dd>}
             </>
           )}
+          {/* Manual discount on the whole order (FR-POS-02, BR-05): “Giảm giá ›” opens the field below the row (Design §13.1). */}
           {can(me, 'sale.discount') && (
             <>
-              <dt className="text-ink-700">Giảm giá đơn</dt>
-              <dd className="flex items-center justify-end gap-1">
-                {cart.orderDiscount ? (
-                  <>
-                    <span>{cart.orderDiscount.kind === 'percent' ? `${cart.orderDiscount.bp / 100}%` : formatVnd(cart.orderDiscount.vnd)}</span>
-                    {orderDiscountVnd > 0 && <span className="text-success-700">−{formatVnd(orderDiscountVnd)}</span>}
-                    <Button variant="ghost" size="sm" icon={X} className="size-8 px-0!" aria-label="Bỏ giảm giá đơn" title="Bỏ giảm giá đơn" onClick={() => cart.setOrderDiscount(null)} disabled={readOnly} />
-                  </>
-                ) : (
-                  <Button variant="tonal" size="sm" icon={Percent} onClick={() => setDialog({ kind: 'orderDiscount' })} disabled={readOnly || !cart.lines.length}>
-                    Giảm giá
-                  </Button>
-                )}
-              </dd>
+              <dt>
+                <button type="button" className="-mx-1 inline-flex min-h-8 items-center gap-0.5 rounded-sm px-1 text-ink-700 hover:text-navy-700" aria-expanded={discountOpen} onClick={() => setDiscountOpen((o) => !o)}>
+                  Giảm giá
+                  <ChevronRight size={16} className={clsx('transition-transform', discountOpen && 'rotate-90')} aria-hidden />
+                </button>
+              </dt>
+              <dd className="text-right whitespace-nowrap text-success-700">{manualDiscountVnd > 0 ? `−${formatVnd(manualDiscountVnd)}` : ''}</dd>
+              {discountOpen && (
+                <dd className="col-span-2 pb-1 text-right">
+                  <DiscountInput value={cart.orderDiscount} onChange={cart.setOrderDiscount} disabled={readOnly || !cart.lines.length} />
+                </dd>
+              )}
             </>
           )}
-          <dt className="text-ink-700">Mã giảm giá</dt>
-          <dd className="flex items-center justify-end gap-1">
-            {cart.couponCode ? (
-              <>
-                <span className="code font-medium">{cart.couponCode}</span>
-                {priced?.result.couponApplied ? (
-                  <Check size={16} className="text-success-700" aria-label="Đã áp dụng" />
-                ) : (
-                  <span className="text-xs text-warning-700">không áp dụng</span>
-                )}
-                <Button variant="ghost" size="sm" icon={X} className="size-8 px-0!" aria-label="Bỏ mã giảm giá" title="Bỏ mã giảm giá" onClick={() => cart.setCoupon('')} disabled={readOnly} />
-              </>
-            ) : (
-              <Button variant="tonal" size="sm" icon={Ticket} onClick={() => setDialog({ kind: 'coupon' })} disabled={readOnly}>
-                Nhập mã
-              </Button>
-            )}
-          </dd>
-          {cart.customer && (
+          {cart.customer && pointsReady && (
             <>
-              <dt className="text-ink-700">
-                Điểm <span className="text-ink-500">(có {formatNumber(cart.customer.pointsBalance)})</span>
-              </dt>
+              <dt className="text-ink-700">Điểm</dt>
               <dd className="flex items-center justify-end gap-1">
                 {cart.redeemPoints ? (
                   <>
@@ -525,7 +522,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             </>
           )}
           <dt className="mt-1 text-base font-semibold">TỔNG</dt>
-          <dd className="mt-1 text-right text-[28px] leading-9 font-bold whitespace-nowrap">{formatVnd(total)}</dd>
+          <dd className="mt-1 text-right text-[22px] leading-7 font-bold whitespace-nowrap">{formatVnd(total)}</dd>
           {!!cart.preorder?.depositVnd && (
             <>
               <dt className="text-ink-700">Đã đặt cọc</dt>
@@ -539,7 +536,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           <Button variant="secondary" size="lg" className="px-2!" onClick={holdCart} disabled={!cart.lines.length || readOnly || !!cart.preorder}>
             Giữ giỏ
           </Button>
-          <Button variant="accent" size="lg" full icon={Check} disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
+          <Button variant="primary" size="lg" full icon={Check} disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
             Xác nhận
           </Button>
         </div>
@@ -547,7 +544,6 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     </div>
   );
 
-  const editing = dialog?.kind === 'line' ? cart.lines.find((l) => l.lineId === dialog.lineId) : undefined;
 
   return (
     <div className="flex h-dvh flex-col bg-white">
@@ -624,6 +620,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
               <ScanBarcode size={22} aria-hidden />
             </button>
           </form>
+          {customerRow}
           {notFound && <InlineAlert tone="danger">Không tìm thấy mã {notFound}. Thử tìm theo tên sản phẩm.</InlineAlert>}
           {message && (
             <div onClick={() => setMessage(null)}>
@@ -690,23 +687,6 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           }}
         />
       )}
-      {dialog?.kind === 'line' && editing && (
-        <LineDialog
-          line={editing}
-          title={(() => { const it = priced?.items.get(editing.variantId); return it ? itemTitle(it) : ''; })()}
-          unitPriceVnd={priced?.items.get(editing.variantId)?.priceVnd ?? 0}
-          canOverride={true}
-          onClose={() => setDialog(null)}
-          onRemove={() => {
-            cart.remove(editing.lineId);
-            setDialog(null);
-          }}
-          onSave={(patch) => {
-            cart.update(editing.lineId, patch);
-            setDialog(null);
-          }}
-        />
-      )}
       {dialog?.kind === 'approval' && (
         <ApprovalDialog
           action={dialog.action}
@@ -730,30 +710,6 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         />
       )}
       {dialog?.kind === 'done' && <SaleDone outcome={dialog.outcome} online={status.online} onNew={newSale} />}
-      {dialog?.kind === 'orderDiscount' && (
-        <OrderDiscountDialog
-          initial={cart.orderDiscount}
-          // What the discount applies to: the order after automatic promotions and tier discounts.
-          baseVnd={priced ? priced.result.lines.reduce((a, l) => a + l.grossVnd - l.promoDiscountVnd - l.tierDiscountVnd - l.orderDiscountVnd, 0) : 0}
-          onClose={() => setDialog(null)}
-          onSave={(d) => {
-            cart.setOrderDiscount(d);
-            setDialog(null);
-          }}
-        />
-      )}
-      {dialog?.kind === 'coupon' && (
-        <SimpleInput
-          title="Mã giảm giá"
-          label="Nhập mã"
-          initial={cart.couponCode}
-          onClose={() => setDialog(null)}
-          onSave={(v) => {
-            cart.setCoupon(v.trim().toUpperCase());
-            setDialog(null);
-          }}
-        />
-      )}
       {dialog?.kind === 'points' && cart.customer && (
         <SimpleInput
           title="Đổi điểm"

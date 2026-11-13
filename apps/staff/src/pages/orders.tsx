@@ -1,4 +1,4 @@
-import { ORDER_SOURCES } from '@bookstore/domain';
+import { ORDER_SOURCES, type ManualDiscount } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { ArrowLeft, Calculator, CheckCircle, HandCoins, MoreHorizontal, Package, PackageCheck, Plus, Trash2, Truck, Undo2, X, XCircle } from 'lucide-react';
@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useDebounced, useListParam, useParam, type Column } from '../components/data';
 import type { PickedCustomer } from '../components/customer-picker';
+import { DiscountInput } from '../components/discount-input';
 import { Combobox, CopyCode, ORDER_SOURCE, OrderStatusChip, PaymentChip, REVIEW_REASON, StatusTimeline, type TimelineEntry } from '../components/order-ui';
 import { ProductSearch, hitTitle, type ProductHit } from '../components/product-search';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton } from '../components/ui';
@@ -139,6 +140,7 @@ interface Line {
 interface Quote {
   subtotalVnd: number;
   discountVnd: number;
+  lines: { manualDiscountVnd: number; savings: { promotionId: string; label: string; amountVnd: number }[] }[];
   shippingVnd: number;
   shippingDiscountVnd: number;
   totalVnd: number;
@@ -257,9 +259,6 @@ export function OrderNewPage() {
     line: '',
     paymentMethod: 'cod' as 'cod' | 'transfer',
     shippingVnd: 0 as number | null,
-    couponCode: '',
-    orderDiscount: null as number | null,
-    orderDiscountKind: 'percent' as 'amount' | 'percent',
     note: '',
   });
   const [lines, setLines] = useState<Line[]>([]);
@@ -271,6 +270,8 @@ export function OrderNewPage() {
   const kindChannels = (channels.data?.items ?? []).filter((c) => c.kind === f.source);
 
   // Existing customer found by phone or name, or a new one (FR-SOC-03, Design §12.9).
+  const { data: me } = useMe();
+  const [discount, setDiscount] = useState<ManualDiscount | null>(null);
   const [rcpt, setRcpt] = useState({ phone: '', name: '' });
   const [linked, setLinked] = useState<PickedCustomer | null>(null);
   const customerId = linked?.id ?? null;
@@ -291,12 +292,11 @@ export function OrderNewPage() {
       source: f.source,
       ...(customerId && { customerId }),
       lines: lines.map((l) => ({ variantId: l.hit.variantId, qty: l.qty })),
-      // One manual discount for the whole order (FR-ORD-02).
-      orderManualDiscount: f.orderDiscount ? (f.orderDiscountKind === 'percent' ? { kind: 'percent', bp: Math.min(10000, f.orderDiscount * 100) } : { kind: 'amount', vnd: f.orderDiscount }) : null,
+      // A manual discount for the whole order; promotions apply by themselves (FR-ORD-02).
+      orderManualDiscount: discount,
       shippingVnd: f.delivery === 'ship' ? (f.shippingVnd ?? 0) : 0,
-      couponCode: f.couponCode.trim() || null,
     }),
-    [f.source, f.delivery, f.shippingVnd, f.couponCode, f.orderDiscount, f.orderDiscountKind, lines, customerId],
+    [f.source, f.delivery, f.shippingVnd, discount, lines, customerId],
   );
   // GHN fee recalculated whenever the ward or the items change, unless staff typed a fee (FR-ORD-10).
   const [feeManual, setFeeManual] = useState(false);
@@ -367,6 +367,10 @@ export function OrderNewPage() {
 
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const q = quote.data;
+  // The manual discount vs promotions, which apply by themselves (Design §12.9).
+  const manualVnd = q ? q.lines.reduce((a, l) => a + l.manualDiscountVnd, 0) : 0;
+  const autoVnd = q ? Math.max(0, q.discountVnd - manualVnd) : 0;
+  const promoNames = [...new Map((q?.lines ?? []).flatMap((l) => l.savings).map((x) => [x.promotionId, x.label])).values()];
   return (
     <div className="pb-20">
       <PageHeader
@@ -524,35 +528,13 @@ export function OrderNewPage() {
                   )}
                 </div>
               )}
-              <Field label="Mã giảm giá" value={f.couponCode} onChange={set('couponCode')} className="code" />
-              <div className="flex flex-col gap-1">
-                <label htmlFor="order-discount" className="text-[13px] font-medium text-ink-700">
-                  Giảm giá đơn
-                </label>
-                {/* Amount and, beside it, the kind: % by default or ₫ (Design §12.9). */}
-                <div className="flex gap-2">
-                  <input
-                    id="order-discount"
-                    inputMode="numeric"
-                    className="h-10 min-w-0 flex-1 rounded-md border border-paper-500 bg-white px-3 text-right text-sm num focus:border-navy-700 max-sm:text-base pointer-coarse:h-11"
-                    placeholder="0"
-                    value={f.orderDiscount === null ? '' : f.orderDiscountKind === 'amount' ? formatNumber(f.orderDiscount) : String(f.orderDiscount)}
-                    onChange={(e) => {
-                      const n = Number(e.target.value.replace(/\D/g, ''));
-                      setF({ ...f, orderDiscount: n ? (f.orderDiscountKind === 'percent' ? Math.min(100, n) : n) : null });
-                    }}
-                  />
-                  <select
-                    aria-label="Kiểu giảm giá"
-                    className="h-10 w-20 shrink-0 rounded-md border border-paper-500 bg-white px-2 text-sm focus:border-navy-700 max-sm:text-base pointer-coarse:h-11"
-                    value={f.orderDiscountKind}
-                    onChange={(e) => setF({ ...f, orderDiscountKind: e.target.value as 'amount' | 'percent', orderDiscount: null })}
-                  >
-                    <option value="percent">%</option>
-                    <option value="amount">₫</option>
-                  </select>
+              {can(me, 'sale.discount') && (
+                <div className="flex flex-col gap-1">
+                  <span className="text-[13px] font-medium text-ink-700">Giảm giá</span>
+                  <DiscountInput size="md" value={discount} onChange={setDiscount} disabled={!lines.length} />
+                  <p className="text-[13px] text-ink-500">{manualVnd > 0 ? `= ${formatVnd(manualVnd)}` : 'Vượt hạn mức sẽ cần quản lý duyệt.'}</p>
                 </div>
-              </div>
+              )}
               <TextArea label="Ghi chú nội bộ" value={f.note} onChange={set('note')} />
             </div>
           </Card>
@@ -561,18 +543,24 @@ export function OrderNewPage() {
               <Facts
                 items={[
                   ['Tạm tính', <span className="num">{formatVnd(q.subtotalVnd)}</span>],
-                  ['Giảm giá', <span className="num">{q.discountVnd ? `−${formatVnd(q.discountVnd)}` : '0 ₫'}</span>],
+                  ...(autoVnd
+                    ? ([
+                        [
+                          'Khuyến mãi',
+                          <span className="flex flex-col items-end">
+                            <span className="num text-success-700">−{formatVnd(autoVnd)}</span>
+                            {promoNames.length > 0 && <span className="text-xs text-ink-500">{promoNames.join(' · ')}</span>}
+                          </span>,
+                        ],
+                      ] as [string, React.ReactNode][])
+                    : []),
+                  ...(manualVnd ? ([['Giảm giá', <span className="num text-success-700">−{formatVnd(manualVnd)}</span>]] as [string, React.ReactNode][]) : []),
                   ['Phí giao hàng', <span className="num">{formatVnd(q.shippingVnd - q.shippingDiscountVnd)}</span>],
                   ['Tổng', <span className="text-lg font-bold num">{formatVnd(q.totalVnd)}</span>],
                 ]}
               />
             ) : (
               <p className="text-sm text-ink-500">{lines.length ? 'Đang tính…' : 'Thêm sản phẩm để tính tiền.'}</p>
-            )}
-            {q?.issues.some((i) => i.code.startsWith('coupon')) && (
-              <div className="mt-3">
-                <InlineAlert tone="warning">Mã giảm giá không dùng được cho đơn này.</InlineAlert>
-              </div>
             )}
             {quote.error && (
               <div className="mt-3">

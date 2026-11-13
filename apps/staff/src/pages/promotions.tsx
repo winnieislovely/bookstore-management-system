@@ -25,7 +25,7 @@ interface Rule {
   giftVariantId?: string;
   giftQty?: number;
   scope: { kind: ScopeKind | 'event_ticket'; variantIds?: string[]; categoryIds?: string[]; publisherIds?: string[]; brandIds?: string[]; tierCodes?: string[] };
-  conditions: { minOrderVnd?: number; channels?: string[]; couponCode?: string; perCustomerLimit?: number; totalLimit?: number };
+  conditions: { minOrderVnd?: number; channels?: string[]; perCustomerLimit?: number; totalLimit?: number };
   priority: number;
   stackable: boolean;
 }
@@ -92,11 +92,10 @@ export function PromotionsPage() {
   const term = foldText(q).trim();
   const range = timeRange(time);
   const rows = list.data?.items.filter(
-    (p) => (!term || foldText(`${p.name} ${p.rule.conditions.couponCode ?? ''}`).includes(term)) && (!states.length || states.includes(p.state)) && overlaps(p, range.from, range.to),
+    (p) => (!term || foldText(p.name).includes(term)) && (!states.length || states.includes(p.state)) && overlaps(p, range.from, range.to),
   );
   const filtered = !!(term || time || states.length);
   const columns: Column<Promotion>[] = [
-    { header: 'Mã', className: 'whitespace-nowrap', cell: (p) => (p.rule.conditions.couponCode ? <span className="code">{p.rule.conditions.couponCode}</span> : <span className="text-ink-500">—</span>) },
     { header: 'Chương trình', cell: (p) => <span className="font-medium">{p.name}</span> },
     { header: 'Ưu đãi', cell: (p) => summary(p.rule) },
     { header: 'Áp dụng', cell: (p) => SCOPE_LABEL[p.rule.scope.kind] },
@@ -114,7 +113,7 @@ export function PromotionsPage() {
         }
       />
       <div className="mb-4 flex items-center gap-2">
-        <SearchBox value={q} onChange={setQ} placeholder="Tìm theo tên hoặc mã chương trình…" />
+        <SearchBox value={q} onChange={setQ} placeholder="Tìm theo tên chương trình…" />
         <FilterMenu
           groups={[
             { kind: 'custom', label: 'Thời gian', summary: timeLabel(time), active: !!time, onClear: () => setTime(''), content: <TimeFilter value={time} onChange={setTime} /> },
@@ -261,7 +260,6 @@ function PromotionForm({ promotion, onClose, onSaved }: { promotion: Promotion |
   const [ids, setIds] = useState<string[]>(r?.scope.variantIds ?? r?.scope.categoryIds ?? r?.scope.publisherIds ?? r?.scope.brandIds ?? r?.scope.tierCodes ?? []);
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [minOrder, setMinOrder] = useState(String(r?.conditions.minOrderVnd ?? ''));
-  const [coupon, setCoupon] = useState(r?.conditions.couponCode ?? '');
   const [perCustomer, setPerCustomer] = useState(String(r?.conditions.perCustomerLimit ?? ''));
   const [total, setTotal] = useState(String(r?.conditions.totalLimit ?? ''));
   const [channels, setChannels] = useState<string[]>(r?.conditions.channels ?? []);
@@ -280,7 +278,6 @@ function PromotionForm({ promotion, onClose, onSaved }: { promotion: Promotion |
         : { kind: scope, [{ product: 'variantIds', category: 'categoryIds', publisher: 'publisherIds', brand: 'brandIds', tier: 'tierCodes' }[scope]]: ids };
     const conditions: Rule['conditions'] = {
       ...(num(minOrder) !== undefined && { minOrderVnd: num(minOrder)! }),
-      ...(coupon.trim() && { couponCode: coupon.trim().toUpperCase() }),
       ...(num(perCustomer) && { perCustomerLimit: num(perCustomer)! }),
       ...(num(total) && { totalLimit: num(total)! }),
       ...(channels.length && { channels }),
@@ -409,7 +406,6 @@ function PromotionForm({ promotion, onClose, onSaved }: { promotion: Promotion |
 
         <fieldset className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <legend className="mb-2 text-sm font-semibold">Điều kiện</legend>
-          <Field label="Mã giảm giá (để trống nếu tự áp dụng)" className="code" value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} />
           <Field label="Đơn tối thiểu" suffix="₫" inputMode="numeric" value={minOrder ? formatNumber(num(minOrder) ?? 0) : ''} onChange={(e) => setMinOrder(e.target.value)} />
           <Field label="Giới hạn mỗi khách" inputMode="numeric" value={perCustomer} onChange={(e) => setPerCustomer(e.target.value)} />
           <Field label="Tổng lượt dùng" inputMode="numeric" value={total} onChange={(e) => setTotal(e.target.value)} />

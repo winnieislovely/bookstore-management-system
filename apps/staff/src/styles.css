@@ -136,9 +136,22 @@ html { font-family: var(--font-sans); color: var(--foreground); background: var(
 .num { font-variant-numeric: tabular-nums; }
 body { font-size: 14px; line-height: 22px; }
 
-/* Design §4.6 focus ring: 2 px navy + 2 px white offset; on navy surfaces sand */
-:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-.on-navy :focus-visible { outline-color: var(--sidebar-ring); }
+/* Design §4.6 focus ring: 2 px navy + 2 px white offset; on navy surfaces sand. In the base layer so
+   utilities (outline-none, …) can override it. Text fields, selects and text areas get no ring: their
+   border turns navy instead, so they do not look doubled while typing (Design §4.6, §8). */
+@layer base {
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .on-navy :focus-visible { outline-color: var(--sidebar-ring); }
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"]):focus-visible,
+  textarea:focus-visible,
+  select:focus-visible { outline: none; }
+}
+/* …and their border turns navy instead (in the utilities layer, so it wins over border-paper-500). */
+@layer utilities {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"], [aria-invalid="true"]):focus,
+  textarea:not([aria-invalid="true"]):focus,
+  select:not([aria-invalid="true"]):focus { border-color: var(--color-navy-700); }
+}
 
 /* Design §6.5 touch density */
 @media (pointer: coarse) {

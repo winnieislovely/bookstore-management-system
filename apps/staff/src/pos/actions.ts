@@ -136,7 +136,6 @@ export interface SaleInput {
   cashierId: string;
   lines: CartLine[];
   customer: CartCustomer | null;
-  couponCode: string;
   redeemPoints: number;
   orderDiscount: ManualDiscount | null;
   approvals: CartApproval[];
@@ -176,7 +175,6 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
           shiftId: input.shift.serverId,
           lines: input.lines.map((l) => ({ lineId: l.lineId, variantId: l.variantId, qty: l.qty, priceOverrideVnd: l.priceOverrideVnd ?? null, manualDiscount: l.manualDiscount ?? null, ...(l.note && { note: l.note }) })),
           customerId: input.customer?.id ?? null,
-          couponCode: input.couponCode || null,
           orderManualDiscount: input.orderDiscount,
           redeemPoints: input.redeemPoints,
           approvals,
@@ -224,7 +222,6 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
       vatVnd: p.vatVnd,
       redeemPoints: p.redeemPoints,
       pointsDiscountVnd: p.redeemValueVnd,
-      ...(input.couponCode && p.couponApplied && { couponCode: input.couponCode }),
       approvals: input.approvals.filter((a) => a.approverId).map((a) => ({ approverId: a.approverId, action: a.action })),
     }),
     true,

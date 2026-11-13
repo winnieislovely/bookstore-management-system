@@ -7,12 +7,13 @@ import { errors, requirePermission, type Ctx, type Tx } from '../platform/index.
 
 /**
  * Promotions (FR-PRM-01..06, TDD §4.9). Each edit creates a `promotion_version`; sales store the
- * version they applied. Coupon codes are the `couponCode` condition of a rule.
+ * version they applied. There are no coupon codes (FR-PRM-01).
  */
 
 export const PromotionSchema = z.object({
   name: z.string().trim().min(1).max(160),
-  rule: PromotionRule,
+  // No coupon codes (FR-PRM-01): a programme applies by itself to the orders that meet its conditions.
+  rule: PromotionRule.refine((r) => !r.conditions.couponCode, { message: 'Khuyến mãi không dùng mã giảm giá.' }),
   startsAt: z.iso.datetime(),
   endsAt: z.iso.datetime().nullable().default(null),
 });
@@ -27,9 +28,6 @@ export async function create(ctx: Ctx, input: z.input<typeof PromotionSchema>) {
       .values({ promotionId: p!.id, version: 1, rule: data.rule, startsAt: new Date(data.startsAt), endsAt: data.endsAt ? new Date(data.endsAt) : null, createdBy: actor.userId })
       .returning({ id: schema.promotionVersion.id });
     await tx.update(schema.promotion).set({ currentVersionId: v!.id }).where(eq(schema.promotion.id, p!.id));
-    if (data.rule.conditions.couponCode) {
-      await tx.insert(schema.coupon).values({ code: data.rule.conditions.couponCode.toUpperCase(), promotionId: p!.id, usageLimit: data.rule.conditions.totalLimit ?? null });
-    }
     await audit.record(tx, ctx, { action: 'promotion.create', entity: 'promotion', entityId: p!.id, after: data });
     return { id: p!.id, versionId: v!.id };
   });
@@ -51,10 +49,6 @@ export async function update(ctx: Ctx, id: string, input: z.input<typeof Promoti
       .values({ promotionId: id, version: (last?.n ?? 0) + 1, rule: data.rule, startsAt: new Date(data.startsAt), endsAt: data.endsAt ? new Date(data.endsAt) : null, createdBy: actor.userId })
       .returning({ id: schema.promotionVersion.id });
     await tx.update(schema.promotion).set({ name: data.name, currentVersionId: v!.id, updatedAt: ctx.clock.now(), version: p.version + 1 }).where(eq(schema.promotion.id, id));
-    const code = data.rule.conditions.couponCode?.toUpperCase();
-    const [coupon] = await tx.select().from(schema.coupon).where(eq(schema.coupon.promotionId, id));
-    if (code && coupon) await tx.update(schema.coupon).set({ code, usageLimit: data.rule.conditions.totalLimit ?? null }).where(eq(schema.coupon.id, coupon.id));
-    else if (code) await tx.insert(schema.coupon).values({ code, promotionId: id, usageLimit: data.rule.conditions.totalLimit ?? null });
     await audit.record(tx, ctx, { action: 'promotion.update', entity: 'promotion', entityId: id, after: data });
     return { versionId: v!.id, version: p.version + 1 };
   });
@@ -123,16 +117,13 @@ export async function activeSnapshot(tx: Tx, now: Date, _channel: SalesChannel, 
   });
 }
 
-/** Record use of the promotions a sale applied (FR-PRM-06) and count coupon use. */
+/** Record use of the promotions a sale or order applied (FR-PRM-06). */
 export async function recordUsage(
   tx: Tx,
   uses: { promotionId: string; discountVnd: number; revenueVnd: number }[],
-  ref: { refType: string; refId: string; customerId: string | null; couponCode: string | null },
+  ref: { refType: string; refId: string; customerId: string | null },
 ): Promise<void> {
   for (const u of uses) {
     await tx.insert(schema.promotionUsage).values({ promotionId: u.promotionId, customerId: ref.customerId, refType: ref.refType, refId: ref.refId, discountVnd: u.discountVnd, revenueVnd: u.revenueVnd });
-  }
-  if (ref.couponCode) {
-    await tx.update(schema.coupon).set({ used: sql`${schema.coupon.used} + 1` }).where(sql`upper(${schema.coupon.code}) = ${ref.couponCode.toUpperCase()}`);
   }
 }

@@ -258,7 +258,8 @@ export const CartLineSchema = z.object({
   lineId: z.string().min(1).max(40),
   variantId: z.uuid(),
   qty: z.number().int().positive(),
-  priceOverrideVnd: money.nullable().optional(),
+  // The selling price cannot be changed at the POS (FR-POS-02).
+  priceOverrideVnd: z.null().optional(),
   manualDiscount: z
     .discriminatedUnion('kind', [
       z.object({ kind: z.literal('percent'), bp: z.number().int().min(0).max(10000) }),
@@ -272,15 +273,8 @@ export const CartLineSchema = z.object({
 export const CartSchema = z.object({
   lines: z.array(CartLineSchema).min(1, 'Giỏ hàng đang trống.').max(200),
   customerId: z.uuid().nullable().optional(),
-  couponCode: z.string().trim().max(40).nullable().optional(),
-  /** Manual discount on the whole order (FR-POS-02, BR-05). */
-  orderManualDiscount: z
-    .discriminatedUnion('kind', [
-      z.object({ kind: z.literal('percent'), bp: z.number().int().min(0).max(10000) }),
-      z.object({ kind: z.literal('amount'), vnd: money }),
-    ])
-    .nullable()
-    .optional(),
+  /** Manual discount on the whole order, a percentage only (FR-POS-02, BR-05). There are no coupon codes (FR-PRM-01). */
+  orderManualDiscount: z.object({ kind: z.literal('percent'), bp: z.number().int().min(0).max(10000) }).nullable().optional(),
   redeemPoints: z.number().int().min(0).optional(),
 });
 export type CartInput = z.input<typeof CartSchema>;
@@ -383,12 +377,7 @@ async function priceForCart(tx: Tx, ctx: Ctx, cart: z.infer<typeof CartSchema>, 
     channel: 'counter',
     customer,
     promotions: promos,
-    couponCode: cart.couponCode ?? null,
-    orderManualDiscount: cart.orderManualDiscount
-      ? cart.orderManualDiscount.kind === 'percent'
-        ? cart.orderManualDiscount
-        : { kind: 'amount', vnd: vnd(cart.orderManualDiscount.vnd) }
-      : null,
+    orderManualDiscount: cart.orderManualDiscount ?? null,
     redeemPoints: cart.redeemPoints ?? 0,
     settings: {
       cashierDiscountMaxBp: cfg['sale.cashier_discount_max_bp'],
@@ -606,7 +595,6 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
         isDeposit: data.isDeposit,
         soldAt: now,
         note: data.note ?? null,
-        couponCode: priced.couponApplied ? (data.couponCode?.toUpperCase() ?? null) : null,
         approvedBy,
         createdAt: now,
       })
@@ -681,7 +669,6 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
       refType: 'sale',
       refId: saleId,
       customerId: data.customerId ?? null,
-      couponCode: priced.couponApplied ? (data.couponCode ?? null) : null,
     });
 
     // E-invoice (FR-POS-15/16, BR-24): every sale by default; a buyer request also asks MISA to email it.

@@ -110,13 +110,11 @@ describe('priceCart', () => {
     expect(run({ promotions: [w] }).discountVnd).toBe(0);
   });
 
-  it('coupon codes must match (case-insensitive) and unknown coupons are reported', () => {
+  it('applies promotions by themselves; an old rule with a coupon code never applies (FR-PRM-01)', () => {
     const c = promo('c', { type: 'fixed', amountVnd: 20000, scope: { kind: 'order' }, conditions: { couponCode: 'SACH20' } });
     expect(run({ promotions: [c] }).discountVnd).toBe(0);
-    const ok = run({ promotions: [c], couponCode: 'sach20' });
-    expect(ok.discountVnd).toBe(20000);
-    expect(ok.couponApplied).toBe(true);
-    expect(run({ promotions: [c], couponCode: 'NOPE' }).issues).toContainEqual({ code: 'coupon_not_found', couponCode: 'NOPE' });
+    const auto = promo('a', { type: 'fixed', amountVnd: 20000, scope: { kind: 'order' } });
+    expect(run({ promotions: [auto] }).discountVnd).toBe(20000);
   });
 
   it('caps automatic discounts per category (FR-PRM-05)', () => {

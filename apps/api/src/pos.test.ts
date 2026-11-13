@@ -174,9 +174,20 @@ describe('completing a sale (FR-POS-06, UC-01)', () => {
     expect(within.body).toMatchObject({ totalVnd: 88200, discountVnd: 9800 });
     const over = await h.call('POST', '/api/v1/pos/sales', {
       cookie: cashier,
-      body: { ...cart([{ variantId: book, qty: 1 }], { orderManualDiscount: { kind: 'amount', vnd: 20000 } }), shiftId, payments: [{ method: 'cash', amountVnd: 78000 }] },
+      body: { ...cart([{ variantId: book, qty: 1 }], { orderManualDiscount: { kind: 'percent', bp: 2000 } }), shiftId, payments: [{ method: 'cash', amountVnd: 78400 }] },
     });
     expect(over.body.error).toMatchObject({ code: 'approval_required', details: { action: 'discount_over_limit', lineId: 'order' } });
+    // A percentage only: no fixed-amount order discount (FR-POS-02).
+    const amount = await h.call('POST', '/api/v1/pos/sales', { cookie: cashier, body: { ...cart([{ variantId: book, qty: 1 }], { orderManualDiscount: { kind: 'amount', vnd: 5000 } }), shiftId, payments: [{ method: 'cash', amountVnd: 93000 }] } });
+    expect(amount.status).toBe(400);
+  });
+
+  it('never takes a changed selling price (FR-POS-02)', async () => {
+    const r = await h.call('POST', '/api/v1/pos/sales', {
+      cookie: manager,
+      body: { ...cart([{ variantId: book, qty: 1, priceOverrideVnd: 50000 }]), shiftId, payments: [{ method: 'cash', amountVnd: 50000 }] },
+    });
+    expect(r.status).toBe(400);
   });
 
   it('redeems points as a discount (BR-07)', async () => {

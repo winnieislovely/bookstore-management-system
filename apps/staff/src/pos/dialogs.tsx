@@ -1,4 +1,4 @@
-import { DENOMINATIONS_VND, normalizePaymentRef, paymentRefFromBytes, vnd, type PriceCartResult, type ManualDiscount } from '@bookstore/domain';
+import { DENOMINATIONS_VND, normalizePaymentRef, paymentRefFromBytes, type PriceCartResult } from '@bookstore/domain';
 import { clsx } from 'clsx';
 import { Banknote, Check, CheckCircle2, CreditCard, Mail, Plus, Printer, QrCode, ShieldCheck, Trash2, User } from 'lucide-react';
 import { useState } from 'react';
@@ -6,9 +6,9 @@ import { Button, Field, InlineAlert } from '../components/ui';
 import { ApiError, post } from '../lib/api';
 import { formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { printSlip } from '../lib/print';
-import { approveOffline, approveOnline, findCustomerByPhone, searchCustomersByName, type CartApproval, type CartCustomer, type CartLine } from './cart';
+import { approveOffline, approveOnline, findCustomerByPhone, searchCustomersByName, type CartApproval, type CartCustomer } from './cart';
 import type { Payment, SaleOutcome } from './actions';
-import { Dialog, Keypad, MoneyInput, PinPad } from './widgets';
+import { Dialog, Keypad, PinPad } from './widgets';
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -89,12 +89,9 @@ export function PaymentSheet({
   onPay: (payments: Payment[]) => Promise<void>;
   onClose: () => void;
 }) {
-  const total = priced.totalVnd - depositVnd;
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const paid = payments.reduce((a, p) => a + p.amountVnd, 0);
-  const remaining = total - paid;
+  // One method pays the whole amount (FR-POS-06): no per-method amount field, no split payment.
+  const amount = priced.totalVnd - depositVnd;
   const [method, setMethod] = useState<Method>('cash');
-  const [amount, setAmount] = useState<number | null>(remaining);
   const [tendered, setTendered] = useState<string>('');
   const [cardRef, setCardRef] = useState('');
   const [transferRef] = useState(newRef);
@@ -107,13 +104,12 @@ export function PaymentSheet({
   const pick = (m: Method) => {
     setMethod(m);
     setError(null);
-    setAmount(remaining);
   };
 
   /** Build the current tender; returns null when it is not complete yet. */
   const current = (): Payment | null => {
-    const amt = amount ?? 0;
-    if (amt <= 0 || amt > remaining) return null;
+    const amt = amount;
+    if (amt <= 0) return null;
     if (method === 'cash') return tenderedVnd && tenderedVnd < amt ? null : { method, amountVnd: amt, tenderedVnd: tenderedVnd || amt };
     if (method === 'card') return cardRef.trim() ? { method, amountVnd: amt, ref: cardRef.trim() } : null;
     return transferOk ? { method, amountVnd: amt, ref: normalizePaymentRef(transferRef) } : null;
@@ -131,44 +127,17 @@ export function PaymentSheet({
     }
   };
 
-  const addTender = () => {
+  const pay = () => {
     const p = current();
-    if (!p) return;
-    const list = [...payments, p];
-    const left = total - list.reduce((a, x) => a + x.amountVnd, 0);
-    setPayments(list);
-    setTendered('');
-    setCardRef('');
-    setTransferOk(false);
-    setAmount(left);
-    if (left === 0) void finish(list);
+    if (p) void finish([p]);
   };
 
-  const change = method === 'cash' && tenderedVnd > (amount ?? 0) ? tenderedVnd - (amount ?? 0) : 0;
-  const quick = [amount ?? 0, 50000, 100000, 200000, 500000].filter((v, i, a) => v >= (amount ?? 0) && a.indexOf(v) === i);
+  const change = method === 'cash' && tenderedVnd > amount ? tenderedVnd - amount : 0;
 
   return (
     <Dialog title="Thanh toán" size="lg" onClose={busy ? undefined : onClose}>
       <div className="flex flex-col gap-4">
-        <div className="text-center">
-          <p className="text-[13px] text-ink-500">{payments.length ? 'Còn phải trả' : 'Số tiền phải trả'}</p>
-          <p className="text-[28px] leading-9 font-bold whitespace-nowrap num">{formatVnd(remaining)}</p>
-          {depositVnd > 0 && (
-            <p className="text-sm text-ink-700 num">
-              Tổng {formatVnd(priced.totalVnd)} · Đã đặt cọc {formatVnd(depositVnd)}
-            </p>
-          )}
-          {payments.length > 0 && (
-            <ul className="mt-2 text-sm text-ink-700">
-              {payments.map((p, i) => (
-                <li key={i} className="num">
-                  {TILES.find((tl) => tl.method === p.method)?.label}: {formatVnd(p.amountVnd)}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        {/* Method tiles always on one row (Design §13.4). */}
+        {/* Method tiles first, always on one row (Design §13.4). */}
         <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }} role="radiogroup" aria-label="Phương thức thanh toán">
           {tiles.map((tl) => (
             <button
@@ -184,21 +153,26 @@ export function PaymentSheet({
             </button>
           ))}
         </div>
-        <MoneyInput label="Số tiền theo phương thức này" value={amount} onChange={setAmount} />
+        <div>
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="text-ink-700">Tổng giá trị đơn</p>
+            <p className="text-xl leading-7 font-bold whitespace-nowrap num">{formatVnd(amount)}</p>
+          </div>
+          {depositVnd > 0 && (
+            <p className="text-right text-[13px] text-ink-500 num">
+              Tổng {formatVnd(priced.totalVnd)} · Đã đặt cọc {formatVnd(depositVnd)}
+            </p>
+          )}
+        </div>
         {method === 'cash' && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
               <p className="text-[13px] font-medium text-ink-700">Khách đưa</p>
               <p className="h-12 rounded-md border border-paper-500 px-3 text-right text-lg leading-[46px] num">{tendered ? formatNumber(Number(tendered)) : '—'} ₫</p>
-              <div className="flex flex-wrap gap-2">
-                {quick.map((v) => (
-                  <button key={v} type="button" className="h-10 rounded-full border border-paper-500 px-3 text-sm num hover:bg-navy-50" onClick={() => setTendered(String(v))}>
-                    {formatNumber(v)}
-                  </button>
-                ))}
+              <div className="mt-1 flex items-baseline justify-between gap-3">
+                <p className="text-ink-700">Tiền thừa</p>
+                <p className="text-xl leading-7 font-bold whitespace-nowrap text-success-700 num">{formatVnd(change)}</p>
               </div>
-              <p className="mt-2 text-[13px] text-ink-500">Tiền thừa</p>
-              <p className="text-[28px] leading-9 font-bold whitespace-nowrap text-success-700 num">{formatVnd(change)}</p>
             </div>
             <Keypad onKey={(k) => setTendered((v) => (k === 'del' ? v.slice(0, -1) : (v + k).replace(/^0+/, '').slice(0, 10)))} />
           </div>
@@ -221,8 +195,8 @@ export function PaymentSheet({
           <Button variant="secondary" size="lg" onClick={onClose} disabled={busy}>
             Hủy
           </Button>
-          <Button variant="primary" size="lg" full icon={Check} loading={busy} disabled={!current()} onClick={addTender}>
-            {method === 'transfer' ? 'Đã nhận tiền' : (amount ?? 0) < remaining ? 'Thêm khoản thanh toán' : 'Hoàn tất'}
+          <Button variant="primary" size="lg" full icon={Check} loading={busy} disabled={!current()} onClick={pay}>
+            {method === 'transfer' ? 'Đã nhận tiền' : 'Hoàn tất'}
           </Button>
         </div>
       </div>
@@ -500,106 +474,6 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
             <InlineAlert tone="warning">Không tìm thấy khách hàng{online ? '' : ' trong dữ liệu trên máy'}.</InlineAlert>
           ))}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
-      </div>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Line actions: discount, price override, note, remove (FR-POS-02)
-
-export function LineDialog({ line, title, unitPriceVnd, canOverride, onSave, onRemove, onClose }: { line: CartLine; title: string; unitPriceVnd: number; canOverride: boolean; onSave: (patch: Partial<CartLine>) => void; onRemove: () => void; onClose: () => void }) {
-  const [price, setPrice] = useState<number | null>(line.priceOverrideVnd ?? null);
-  const [note, setNote] = useState(line.note ?? '');
-  return (
-    <Dialog
-      title={title}
-      size="sm"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="destructive-outline" icon={Trash2} onClick={onRemove}>
-            Xóa dòng
-          </Button>
-          <Button
-            variant="primary"
-            onClick={() =>
-              onSave({
-                // No per-item discount: the manual discount is for the whole order (FR-POS-02).
-                manualDiscount: null,
-                priceOverrideVnd: price !== null && price !== unitPriceVnd ? price : null,
-                note: note.trim(),
-              })
-            }
-          >
-            Lưu
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-4">
-        {canOverride ? <MoneyInput label="Sửa giá bán" value={price} onChange={setPrice} /> : <p className="text-sm text-ink-500">Sửa giá cần quyền hoặc quản lý duyệt khi thanh toán.</p>}
-        <Field label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} />
-      </div>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Manual discount on the whole order (FR-POS-02, BR-05, Design §13.1)
-
-export function OrderDiscountDialog({ initial, baseVnd, onSave, onClose }: { initial: ManualDiscount | null; baseVnd: number; onSave: (d: ManualDiscount | null) => void; onClose: () => void }) {
-  const [kind, setKind] = useState<'percent' | 'amount'>(initial?.kind ?? 'percent');
-  const [value, setValue] = useState(initial ? (initial.kind === 'percent' ? String(initial.bp / 100) : String(initial.vnd)) : '');
-  const bp = kind === 'percent' ? Math.min(10000, Math.round(Number(value.replace(',', '.') || 0) * 100)) : 0;
-  const amountVnd = kind === 'amount' ? Math.min(baseVnd, Number(value.replace(/\D/g, '') || 0)) : Math.round((baseVnd * bp) / 10000);
-  return (
-    <Dialog
-      title="Giảm giá đơn"
-      size="sm"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Hủy
-          </Button>
-          <Button variant="primary" onClick={() => onSave(amountVnd > 0 ? (kind === 'percent' ? { kind: 'percent', bp } : { kind: 'amount', vnd: vnd(amountVnd) }) : null)}>
-            Áp dụng
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-1">
-        <label htmlFor="order-discount" className="text-[13px] font-medium text-ink-700">
-          Giảm giá
-        </label>
-        <div className="flex gap-2">
-          <input
-            id="order-discount"
-            autoFocus
-            inputMode={kind === 'percent' ? 'decimal' : 'numeric'}
-            className="h-11 min-w-0 flex-1 rounded-md border border-paper-500 bg-white px-3 text-right num focus:border-navy-700"
-            placeholder="0"
-            aria-describedby="order-discount-help"
-            value={kind === 'amount' && value ? formatNumber(Number(value.replace(/\D/g, ''))) : value}
-            onChange={(e) => setValue(kind === 'amount' ? e.target.value.replace(/\D/g, '') : e.target.value)}
-          />
-          <select
-            aria-label="Kiểu giảm giá"
-            className="h-11 w-20 shrink-0 rounded-md border border-paper-500 bg-white px-2 focus:border-navy-700"
-            value={kind}
-            onChange={(e) => {
-              setKind(e.target.value as 'percent' | 'amount');
-              setValue('');
-            }}
-          >
-            <option value="percent">%</option>
-            <option value="amount">₫</option>
-          </select>
-        </div>
-        <p id="order-discount-help" className="text-[13px] text-ink-500">
-          {amountVnd > 0 ? `= ${formatVnd(amountVnd)}` : 'Vượt hạn mức sẽ cần quản lý duyệt.'}
-        </p>
       </div>
     </Dialog>
   );

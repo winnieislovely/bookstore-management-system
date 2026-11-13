@@ -6,7 +6,7 @@ import { db, kvGet, kvSet, type CachedCustomer, type CachedItem } from './db';
 import type { PosSettings } from './sync';
 
 /**
- * Cart (FR-POS-01..05): lines, customer, coupon and points; priced with the same pure engine the
+ * Cart (FR-POS-01..05): lines, customer, order discount and points (no coupon codes, FR-PRM-01); priced with the same pure engine the
  * server uses (TDD §4.4), from the cached catalogue, promotions and tiers.
  */
 
@@ -46,7 +46,6 @@ export interface CartApproval {
 interface CartState {
   lines: CartLine[];
   customer: CartCustomer | null;
-  couponCode: string;
   redeemPoints: number;
   /** Manual discount on the whole order (FR-POS-02, BR-05). */
   orderDiscount: ManualDiscount | null;
@@ -59,11 +58,10 @@ interface CartState {
   update: (lineId: string, patch: Partial<CartLine>) => void;
   remove: (lineId: string) => void;
   setCustomer: (c: CartCustomer | null) => void;
-  setCoupon: (code: string) => void;
   setRedeem: (points: number) => void;
   setOrderDiscount: (d: ManualDiscount | null) => void;
   addApproval: (a: CartApproval) => void;
-  load: (s: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints'> & { orderDiscount?: ManualDiscount | null }) => void;
+  load: (s: Pick<CartState, 'lines' | 'customer' | 'redeemPoints'> & { orderDiscount?: ManualDiscount | null }) => void;
   /** Start a new cart from a pre-order (FR-POS-09). */
   loadPreorder: (p: CartPreorder, customer: CartCustomer) => void;
   clear: () => void;
@@ -75,7 +73,6 @@ export const isPreorderLine = (lineId: string) => lineId.startsWith('pre-');
 export const useCart = create<CartState>((set) => ({
   lines: [],
   customer: null,
-  couponCode: '',
   redeemPoints: 0,
   orderDiscount: null,
   approvals: [],
@@ -93,13 +90,12 @@ export const useCart = create<CartState>((set) => ({
   update: (lineId, patch) => set((s) => ({ lines: s.lines.map((l) => (l.lineId === lineId ? { ...l, ...patch } : l)), approvals: [] })),
   remove: (lineId) => set((s) => ({ lines: s.lines.filter((l) => l.lineId !== lineId) })),
   setCustomer: (customer) => set({ customer, redeemPoints: 0 }),
-  setCoupon: (couponCode) => set({ couponCode }),
   setRedeem: (redeemPoints) => set({ redeemPoints }),
   setOrderDiscount: (orderDiscount) => set({ orderDiscount, approvals: [] }),
   addApproval: (a) => set((s) => ({ approvals: [...s.approvals.filter((x) => x.action !== a.action), a] })),
   load: (c) => set({ orderDiscount: null, ...c, approvals: [], preorder: null, flashLineId: null }),
-  loadPreorder: (p, customer) => set({ lines: p.lines.map((l, i) => ({ lineId: `pre-${i + 1}`, variantId: l.variantId, qty: l.qty })), customer, couponCode: '', redeemPoints: 0, orderDiscount: null, approvals: [], preorder: p, flashLineId: null }),
-  clear: () => set({ lines: [], customer: null, couponCode: '', redeemPoints: 0, orderDiscount: null, approvals: [], preorder: null, flashLineId: null }),
+  loadPreorder: (p, customer) => set({ lines: p.lines.map((l, i) => ({ lineId: `pre-${i + 1}`, variantId: l.variantId, qty: l.qty })), customer, redeemPoints: 0, orderDiscount: null, approvals: [], preorder: p, flashLineId: null }),
+  clear: () => set({ lines: [], customer: null, redeemPoints: 0, orderDiscount: null, approvals: [], preorder: null, flashLineId: null }),
 }));
 
 // ---------------------------------------------------------------------------------------------
@@ -158,7 +154,7 @@ export interface PricedCart {
   items: Map<string, CachedItem>;
 }
 
-export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints' | 'preorder' | 'orderDiscount'>, grants: { discountUnlimited: boolean; priceOverride: boolean }): Promise<PricedCart | null> {
+export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 'redeemPoints' | 'preorder' | 'orderDiscount'>, grants: { discountUnlimited: boolean; priceOverride: boolean }): Promise<PricedCart | null> {
   const settings = await kvGet<PosSettings>('settings');
   if (!settings || !cart.lines.length) return null;
   const items = new Map((await db.items.bulkGet(cart.lines.map((l) => l.variantId))).filter((i): i is CachedItem => !!i).map((i) => [i.variantId, i]));
@@ -191,7 +187,6 @@ export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 
       ? { tierCode: cart.customer.tierCode ?? 'standard', tierDiscountBp: tier?.benefits.discountBp ?? 0, pointsMultiplierBp: tier?.benefits.pointsMultiplierBp ?? 10000, pointsBalance: cart.customer.pointsBalance }
       : null,
     promotions,
-    couponCode: cart.couponCode || null,
     orderManualDiscount: cart.orderDiscount,
     redeemPoints: cart.redeemPoints,
     settings: {
