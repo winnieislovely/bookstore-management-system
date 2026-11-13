@@ -35,7 +35,7 @@ beforeAll(async () => {
       body: {
         supplierId: supplier,
         line: {
-          item: { kind: 'book', i18n: { en: { title: sku, description: sku } }, categoryIds: [cat] },
+          item: { kind: 'book', i18n: { en: { title: sku, description: sku }, ...(sku === 'BOOK' && { vi: { title: 'Cho tôi xin một vé' } }) }, categoryIds: [cat] },
           variant: { sku, weightG: 100, vatBp: 0 },
           imageFileIds: ['00000000-0000-7000-8000-00000000000a'],
           costVnd: price / 2,
@@ -113,6 +113,11 @@ describe('device registration and authentication (TDD §7.2)', () => {
     expect(b.status, JSON.stringify(b.body)).toBe(200);
     expect(b.body.items.map((i: { sku: string }) => i.sku)).toEqual(['BOOK', 'PEN']);
     expect(b.body.items[0]).not.toHaveProperty('avgCostVnd');
+    // Both titles, so the POS finds a product by its Vietnamese title too (TDD §7.3).
+    expect(b.body.items.map((i: { title: string; titleVi: string | null }) => [i.title, i.titleVi])).toEqual([
+      ['BOOK', 'Cho tôi xin một vé'],
+      ['PEN', null],
+    ]);
     expect(b.body.cursor).toBeGreaterThan(0);
     expect(b.body.customers[0]).toMatchObject({ id: customerId, pointsBalance: 0 });
     const approver = b.body.approvers.find((a: { username: string }) => a.username === 'quanly');

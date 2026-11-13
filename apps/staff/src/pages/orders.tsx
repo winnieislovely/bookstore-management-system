@@ -1,11 +1,11 @@
 import { ORDER_SOURCES } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { ArrowLeft, Calculator, CheckCircle, HandCoins, MoreHorizontal, Package, PackageCheck, Plus, Store, Trash2, Truck, Undo2, XCircle } from 'lucide-react';
+import { ArrowLeft, Calculator, CheckCircle, HandCoins, MoreHorizontal, Package, PackageCheck, Plus, Trash2, Truck, Undo2, X, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useDebounced, useListParam, useParam, type Column } from '../components/data';
-import { CustomerPicker, type CustomerChoice } from '../components/customer-picker';
+import type { PickedCustomer } from '../components/customer-picker';
 import { Combobox, CopyCode, ORDER_SOURCE, OrderStatusChip, PaymentChip, REVIEW_REASON, StatusTimeline, type TimelineEntry } from '../components/order-ui';
 import { ProductSearch, hitTitle, type ProductHit } from '../components/product-search';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton } from '../components/ui';
@@ -135,8 +135,6 @@ export function OrdersPage() {
 interface Line {
   hit: ProductHit;
   qty: number;
-  discountOn: boolean;
-  discountVnd: number | null;
 }
 interface Quote {
   subtotalVnd: number;
@@ -153,6 +151,86 @@ interface Channel {
   name: string;
   kind: string;
   active: boolean;
+}
+
+/**
+ * Recipient phone and name; from 4 digits typed, customers whose phone matches are suggested
+ * under the phone field, and picking one links the order to them (FR-SOC-03, Design §12.9).
+ */
+function RecipientFields({
+  value,
+  linked,
+  onChange,
+  onPick,
+  onUnlink,
+}: {
+  value: { phone: string; name: string };
+  linked: PickedCustomer | null;
+  onChange: (v: { phone: string; name: string }) => void;
+  onPick: (c: PickedCustomer) => void;
+  onUnlink: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const digits = useDebounced(value.phone.replace(/\D/g, ''), 300);
+  const found = useQuery({
+    queryKey: ['recipient-suggest', digits],
+    enabled: digits.length >= 4 && !linked,
+    queryFn: async () => (await get<{ items: PickedCustomer[] }>('/api/v1/customers', { q: digits, limit: 6 })).items.filter((c) => c.phoneE164 && c.phoneE164.replace(/\D/g, '').includes(digits.replace(/^0/, ''))),
+  });
+  const items = !linked && digits.length >= 4 ? (found.data ?? []) : [];
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="relative">
+          <Field
+            label="Số điện thoại"
+            required
+            inputMode="tel"
+            autoComplete="off"
+            value={value.phone}
+            onChange={(e) => {
+              onChange({ ...value, phone: e.target.value });
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setOpen(false)}
+          />
+          {open && items.length > 0 && (
+            <ul className="absolute inset-x-0 top-full z-20 mt-1 divide-y divide-paper-300 overflow-hidden rounded-md border border-paper-300 bg-white shadow-md" aria-label="Khách có số điện thoại này">
+              {items.map((c) => (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    className="flex w-full flex-col items-start px-3 py-2 text-left text-sm hover:bg-navy-50"
+                    // mousedown keeps the field from losing focus before the pick.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setOpen(false);
+                      onPick(c);
+                    }}
+                  >
+                    <span className="font-medium">{c.name}</span>
+                    <span className="text-ink-500 num">{[c.phoneE164 && formatPhone(c.phoneE164), c.tierName, `${formatNumber(c.pointsBalance)} điểm`].filter(Boolean).join(' · ')}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <Field label="Tên người nhận" required value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} />
+      </div>
+      {linked && (
+        <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-700">
+          <span>
+            Khách cũ{linked.tierName ? ` · ${linked.tierName}` : ''} · {formatNumber(linked.pointsBalance)} điểm
+          </span>
+          <button type="button" className="inline-flex items-center gap-1 font-medium text-navy-700 underline" onClick={onUnlink}>
+            <X size={14} aria-hidden /> Bỏ liên kết
+          </button>
+        </p>
+      )}
+    </div>
+  );
 }
 
 function useProvinces() {
@@ -180,6 +258,8 @@ export function OrderNewPage() {
     paymentMethod: 'cod' as 'cod' | 'transfer',
     shippingVnd: 0 as number | null,
     couponCode: '',
+    orderDiscount: null as number | null,
+    orderDiscountKind: 'percent' as 'amount' | 'percent',
     note: '',
   });
   const [lines, setLines] = useState<Line[]>([]);
@@ -191,18 +271,32 @@ export function OrderNewPage() {
   const kindChannels = (channels.data?.items ?? []).filter((c) => c.kind === f.source);
 
   // Existing customer found by phone or name, or a new one (FR-SOC-03, Design §12.9).
-  const [cust, setCust] = useState<CustomerChoice>(null);
-  const customerId = cust?.kind === 'existing' ? cust.customer.id : null;
+  const [rcpt, setRcpt] = useState({ phone: '', name: '' });
+  const [linked, setLinked] = useState<PickedCustomer | null>(null);
+  const customerId = linked?.id ?? null;
+  // A known customer fills the recipient and, when they have one, their latest delivery address (FR-SOC-03).
+  const pickCustomer = async (c: PickedCustomer) => {
+    setLinked(c);
+    setRcpt({ phone: c.phoneE164 ? formatPhone(c.phoneE164) : rcpt.phone, name: c.name });
+    try {
+      const r = await get<{ address: { provinceId: number; wardCode: string; line: string } | null }>('/api/v1/orders/last-address', { customerId: c.id });
+      if (r.address) setF((x) => ({ ...x, delivery: 'ship', provinceId: r.address!.provinceId, wardCode: r.address!.wardCode, line: r.address!.line }));
+    } catch {
+      /* no address to fill: staff enter it */
+    }
+  };
 
   const body = useMemo(
     () => ({
       source: f.source,
       ...(customerId && { customerId }),
-      lines: lines.map((l) => ({ variantId: l.hit.variantId, qty: l.qty, ...(l.discountVnd ? { manualDiscount: { kind: 'amount', vnd: l.discountVnd * l.qty } } : {}) })),
+      lines: lines.map((l) => ({ variantId: l.hit.variantId, qty: l.qty })),
+      // One manual discount for the whole order (FR-ORD-02).
+      orderManualDiscount: f.orderDiscount ? (f.orderDiscountKind === 'percent' ? { kind: 'percent', bp: Math.min(10000, f.orderDiscount * 100) } : { kind: 'amount', vnd: f.orderDiscount }) : null,
       shippingVnd: f.delivery === 'ship' ? (f.shippingVnd ?? 0) : 0,
       couponCode: f.couponCode.trim() || null,
     }),
-    [f.source, f.delivery, f.shippingVnd, f.couponCode, lines, customerId],
+    [f.source, f.delivery, f.shippingVnd, f.couponCode, f.orderDiscount, f.orderDiscountKind, lines, customerId],
   );
   // GHN fee recalculated whenever the ward or the items change, unless staff typed a fee (FR-ORD-10).
   const [feeManual, setFeeManual] = useState(false);
@@ -227,16 +321,15 @@ export function OrderNewPage() {
   const add = (h: ProductHit) =>
     setLines((ls) => {
       const i = ls.findIndex((l) => l.hit.variantId === h.variantId);
-      if (i < 0) return [...ls, { hit: h, qty: 1, discountOn: false, discountVnd: null }];
+      if (i < 0) return [...ls, { hit: h, qty: 1 }];
       return ls.map((l, j) => (j === i ? { ...l, qty: l.qty + 1 } : l));
     });
 
   const save = async () => {
     setError(null);
     if (!lines.length) return setError('Đơn chưa có sản phẩm.');
-    if (!cust) return setError('Chọn khách cũ hoặc nhập khách mới.');
-    const recipient = cust.kind === 'existing' ? { name: cust.customer.name, phone: cust.customer.phoneE164 ?? '' } : { name: cust.name.trim(), phone: cust.phone.trim() };
-    if (!recipient.phone || !recipient.name) return setError(cust.kind === 'existing' ? 'Khách này chưa có số điện thoại. Hãy nhập như khách mới.' : 'Cần nhập số điện thoại và tên người nhận.');
+    const recipient = { name: rcpt.name.trim(), phone: rcpt.phone.trim() };
+    if (!recipient.phone || !recipient.name) return setError('Cần nhập số điện thoại và tên người nhận.');
     setBusy(true);
     try {
       const r = await api<{ id: string; docNo: string; status: string }>('POST', '/api/v1/orders', {
@@ -286,8 +379,8 @@ export function OrderNewPage() {
       />
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex min-w-0 flex-col gap-6">
-          <Card title="Nguồn đơn">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Card title="Thông tin đơn hàng">
+            <div className="grid grid-cols-1 gap-4">
               <SelectField label="Kênh" required value={f.source} onChange={(e) => setF({ ...f, source: e.target.value, channelId: '' })}>
                 {ORDER_SOURCES.filter((s) => s !== 'website').map((s) => (
                   <option key={s} value={s}>
@@ -304,15 +397,12 @@ export function OrderNewPage() {
                     </option>
                   ))}
                 </SelectField>
-              ) : (
-                <div className="max-sm:hidden" />
-              )}
+              ) : null}
             </div>
-          </Card>
-
-          {/* Each line: name, price, stock on their own lines, discount behind a toggle (Design §12.4). */}
-          <Card title="Sản phẩm">
-            <ProductSearch onPick={add} placeholder="Nhập SKU / tên sản phẩm" scanIcon={false} />
+            <div className="h-5" aria-hidden />
+            {/* Each line: name, price and stock, then quantity, Tag (discount) and delete (Design §12.9). */}
+            <p className="mb-1 text-[13px] font-medium text-ink-700">Sản phẩm</p>
+            <ProductSearch onPick={add} placeholder="Nhập SKU / tên sản phẩm" />
             {lines.length > 0 && (
               <ul className="mt-4 divide-y divide-paper-300">
                 {lines.map((l, i) => {
@@ -323,34 +413,18 @@ export function OrderNewPage() {
                         <div className="min-w-0 flex-1">
                           <p className="font-medium">{hitTitle(l.hit)}</p>
                           <p className="text-ink-700 num">{formatVnd(l.hit.priceVnd)}</p>
-                          <p className="text-[13px] text-ink-500">Tồn: {formatNumber(l.hit.available)}</p>
+                          {/* Stock is not shown; only an out-of-stock product is flagged (Design §12.9). */}
+                          {l.hit.available <= 0 && <span className="mt-1 inline-block rounded-full bg-danger-50 px-2 text-xs leading-5 font-medium text-danger-700">Hết hàng</span>}
                         </div>
                         <input
                           aria-label={`Số lượng ${hitTitle(l.hit)}`}
                           inputMode="numeric"
                           className="h-10 w-16 rounded-md border border-paper-500 text-center num"
                           value={l.qty}
-                          onChange={(e) => update({ qty: Math.max(1, Number(e.target.value.replace(/D/g, '')) || 1) })}
+                          onChange={(e) => update({ qty: Math.max(1, Number(e.target.value.replace(/\D/g, '')) || 1) })}
                         />
                         <Button variant="ghost" icon={Trash2} aria-label={`Xóa ${hitTitle(l.hit)}`} onClick={() => setLines(lines.filter((_, j) => j !== i))} />
                       </div>
-                      <label className="inline-flex w-fit cursor-pointer items-center gap-2">
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={l.discountOn}
-                          onClick={() => update({ discountOn: !l.discountOn, discountVnd: l.discountOn ? null : l.discountVnd })}
-                          className={clsx('relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors', l.discountOn ? 'bg-navy-700' : 'bg-ink-300')}
-                        >
-                          <span className={clsx('inline-block size-4 rounded-full bg-white shadow-sm transition-transform', l.discountOn ? 'translate-x-[18px]' : 'translate-x-0.5')} />
-                        </button>
-                        Giảm giá
-                      </label>
-                      {l.discountOn && (
-                        <div className="max-w-60">
-                          <MoneyInput label="Giảm mỗi sản phẩm" value={l.discountVnd} onChange={(v) => update({ discountVnd: v })} />
-                        </div>
-                      )}
                     </li>
                   );
                 })}
@@ -358,30 +432,20 @@ export function OrderNewPage() {
             )}
           </Card>
 
-          <Card title="Khách hàng">
-            <CustomerPicker value={cust} onChange={setCust} newNameLabel="Tên người nhận" />
-          </Card>
-
-          <Card title="Giao hàng">
-            <div className="mb-4 flex gap-2" role="radiogroup" aria-label="Hình thức nhận hàng">
-              {(
-                [
-                  ['ship', 'Giao tận nơi', Truck],
-                  ['pickup', 'Nhận tại cửa hàng', Store],
-                ] as const
-              ).map(([k, label, Icon]) => (
-                <button
-                  key={k}
-                  type="button"
-                  role="radio"
-                  aria-checked={f.delivery === k}
-                  onClick={() => setF({ ...f, delivery: k })}
-                  className={clsx('inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm', f.delivery === k ? 'border-navy-700 bg-navy-50 font-semibold text-navy-700' : 'border-paper-500')}
-                >
-                  <Icon size={18} aria-hidden /> {label}
-                </button>
-              ))}
-            </div>
+          <Card title="Thông tin giao hàng">
+            <RecipientFields
+              value={rcpt}
+              linked={linked}
+              onChange={(v) => {
+                // Changing the phone after a pick unlinks the customer; changing the name does not.
+                if (linked && v.phone !== rcpt.phone) setLinked(null);
+                setRcpt(v);
+              }}
+              onPick={(c) => void pickCustomer(c)}
+              onUnlink={() => setLinked(null)}
+            />
+            <div className="h-5" aria-hidden />
+            {/* Always delivered by carrier: store pickup for chat customers goes through the POS (FR-ORD-02). */}
             {f.delivery === 'ship' && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Combobox
@@ -406,7 +470,6 @@ export function OrderNewPage() {
                 </div>
               </div>
             )}
-            {f.delivery === 'pickup' && <p className="text-sm text-ink-700">Khách nhận tại cửa hàng bằng mã nhận hàng khi đơn đã sẵn sàng.</p>}
           </Card>
 
         </div>
@@ -462,6 +525,34 @@ export function OrderNewPage() {
                 </div>
               )}
               <Field label="Mã giảm giá" value={f.couponCode} onChange={set('couponCode')} className="code" />
+              <div className="flex flex-col gap-1">
+                <label htmlFor="order-discount" className="text-[13px] font-medium text-ink-700">
+                  Giảm giá đơn
+                </label>
+                {/* Amount and, beside it, the kind: % by default or ₫ (Design §12.9). */}
+                <div className="flex gap-2">
+                  <input
+                    id="order-discount"
+                    inputMode="numeric"
+                    className="h-10 min-w-0 flex-1 rounded-md border border-paper-500 bg-white px-3 text-right text-sm num focus:border-navy-700 max-sm:text-base pointer-coarse:h-11"
+                    placeholder="0"
+                    value={f.orderDiscount === null ? '' : f.orderDiscountKind === 'amount' ? formatNumber(f.orderDiscount) : String(f.orderDiscount)}
+                    onChange={(e) => {
+                      const n = Number(e.target.value.replace(/\D/g, ''));
+                      setF({ ...f, orderDiscount: n ? (f.orderDiscountKind === 'percent' ? Math.min(100, n) : n) : null });
+                    }}
+                  />
+                  <select
+                    aria-label="Kiểu giảm giá"
+                    className="h-10 w-20 shrink-0 rounded-md border border-paper-500 bg-white px-2 text-sm focus:border-navy-700 max-sm:text-base pointer-coarse:h-11"
+                    value={f.orderDiscountKind}
+                    onChange={(e) => setF({ ...f, orderDiscountKind: e.target.value as 'amount' | 'percent', orderDiscount: null })}
+                  >
+                    <option value="percent">%</option>
+                    <option value="amount">₫</option>
+                  </select>
+                </div>
+              </div>
               <TextArea label="Ghi chú nội bộ" value={f.note} onChange={set('note')} />
             </div>
           </Card>

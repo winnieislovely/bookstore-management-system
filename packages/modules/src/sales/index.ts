@@ -273,6 +273,14 @@ export const CartSchema = z.object({
   lines: z.array(CartLineSchema).min(1, 'Giỏ hàng đang trống.').max(200),
   customerId: z.uuid().nullable().optional(),
   couponCode: z.string().trim().max(40).nullable().optional(),
+  /** Manual discount on the whole order (FR-POS-02, BR-05). */
+  orderManualDiscount: z
+    .discriminatedUnion('kind', [
+      z.object({ kind: z.literal('percent'), bp: z.number().int().min(0).max(10000) }),
+      z.object({ kind: z.literal('amount'), vnd: money }),
+    ])
+    .nullable()
+    .optional(),
   redeemPoints: z.number().int().min(0).optional(),
 });
 export type CartInput = z.input<typeof CartSchema>;
@@ -366,7 +374,7 @@ async function priceForCart(tx: Tx, ctx: Ctx, cart: z.infer<typeof CartSchema>, 
     };
   });
   // Without the discount permission a cashier cannot give any manual discount (SRS Appendix A).
-  if (!can(actor, 'sale.discount') && lines.some((l) => l.manualDiscount)) throw errors.forbidden('sale.discount');
+  if (!can(actor, 'sale.discount') && (lines.some((l) => l.manualDiscount) || cart.orderManualDiscount)) throw errors.forbidden('sale.discount');
   const cfg = await settings.snapshot(ctx, tx);
   const customer = cart.customerId ? await customers.pricingProfile(tx, cart.customerId) : null;
   const promos = await promotions.activeSnapshot(tx, ctx.clock.now(), 'counter', cart.customerId ?? null);
@@ -376,6 +384,11 @@ async function priceForCart(tx: Tx, ctx: Ctx, cart: z.infer<typeof CartSchema>, 
     customer,
     promotions: promos,
     couponCode: cart.couponCode ?? null,
+    orderManualDiscount: cart.orderManualDiscount
+      ? cart.orderManualDiscount.kind === 'percent'
+        ? cart.orderManualDiscount
+        : { kind: 'amount', vnd: vnd(cart.orderManualDiscount.vnd) }
+      : null,
     redeemPoints: cart.redeemPoints ?? 0,
     settings: {
       cashierDiscountMaxBp: cfg['sale.cashier_discount_max_bp'],

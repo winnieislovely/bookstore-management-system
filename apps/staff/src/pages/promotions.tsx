@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { foldText } from '@bookstore/domain';
-import { BadgePercent, Pause, Play, Plus, X } from 'lucide-react';
+import { BadgePercent, Pause, Play, Plus, Search, X } from 'lucide-react';
 import { useState } from 'react';
 import { DataTable, FilterMenu, SearchBox, SelectField, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Field, InlineAlert, PageHeader, StatusChip, type Tone } from '../components/ui';
@@ -187,7 +187,7 @@ function ProductPicker({ value, labels, onChange, single }: { value: string[]; l
           </span>
         ))}
       </div>
-      <Field label={single ? 'Sản phẩm quà tặng' : 'Thêm sản phẩm'} placeholder="Tìm tên hoặc SKU" value={q} onChange={(e) => setQ(e.target.value)} />
+      <Field label={single ? 'Sản phẩm quà tặng' : 'Thêm sản phẩm'} leadingIcon={Search} placeholder="Tìm tên hoặc SKU" value={q} onChange={(e) => setQ(e.target.value)} />
       {found.data && q.trim().length >= 2 && (
         <ul className="max-h-48 divide-y divide-paper-300 overflow-y-auto rounded-md border border-paper-300">
           {found.data.items.map((r) => (

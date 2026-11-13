@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, Check, Coins, Info, LogOut, Menu, Minus, MoreHorizontal, Plus, RefreshCw, ScanBarcode, ShoppingBasket, ShoppingCart, Ticket, User, Wallet, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, Check, Coins, Info, LogOut, Menu, Minus, MoreHorizontal, Percent, Plus, RefreshCw, ScanBarcode, Search, ShoppingBasket, ShoppingCart, Ticket, User, Wallet, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Button, Field, InlineAlert, Skeleton } from '../components/ui';
@@ -9,9 +9,9 @@ import { formatDateTime, formatNumber, formatVnd } from '../lib/format';
 import { can, useMe, type Me } from '../lib/session';
 import { cashMovement, closeShift, completeSale, expectedCash, openShift, refreshShift, type LocalShift, type Payment, type SaleOutcome } from './actions';
 import { findByCode, isPreorderLine, priceLocally, searchItems, useCart, type CartApproval, type PricedCart } from './cart';
-import { db, kvGet, kvSet, type CachedItem } from './db';
+import { db, itemTitle, kvGet, kvSet, type CachedItem } from './db';
 import { deviceInfo, registerDevice, type DeviceInfo } from './device';
-import { ApprovalDialog, CloseShiftDialog, CustomerDialog, LineDialog, PaymentSheet, SaleDone } from './dialogs';
+import { ApprovalDialog, CloseShiftDialog, CustomerDialog, LineDialog, OrderDiscountDialog, PaymentSheet, SaleDone } from './dialogs';
 import { PreorderDialog, toCart, type PreorderRow } from './preorders';
 import { bootstrap, flush, leaseState, startSync, usePosStatus } from './sync';
 import { CameraScanner, Dialog, MoneyInput } from './widgets';
@@ -221,7 +221,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const [notFound, setNotFound] = useState<string | null>(null);
   const [camera, setCamera] = useState(false);
   const [priced, setPriced] = useState<PricedCart | null>(null);
-  const [dialog, setDialog] = useState<null | { kind: 'customer' } | { kind: 'line'; lineId: string } | { kind: 'approval'; action: CartApproval['action']; reason: string } | { kind: 'pay' } | { kind: 'done'; outcome: SaleOutcome } | { kind: 'close'; expected: number; source: 'server' | 'device' } | { kind: 'cash' } | { kind: 'held' } | { kind: 'coupon' } | { kind: 'points' } | { kind: 'menu' } | { kind: 'preorder' }>(null);
+  const [dialog, setDialog] = useState<null | { kind: 'customer' } | { kind: 'line'; lineId: string } | { kind: 'approval'; action: CartApproval['action']; reason: string } | { kind: 'pay' } | { kind: 'done'; outcome: SaleOutcome } | { kind: 'close'; expected: number; source: 'server' | 'device' } | { kind: 'cash' } | { kind: 'held' } | { kind: 'coupon' } | { kind: 'points' } | { kind: 'orderDiscount' } | { kind: 'menu' } | { kind: 'preorder' }>(null);
   const [message, setMessage] = useState<{ tone: 'danger' | 'info' | 'success'; text: string } | null>(null);
   const [registerCode, setRegisterCode] = useState('');
   const [heldCount, setHeldCount] = useState(0);
@@ -251,7 +251,10 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     return () => {
       live = false;
     };
-  }, [cart.lines, cart.customer, cart.couponCode, cart.redeemPoints, cart.preorder, grants]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cart.lines, cart.customer, cart.couponCode, cart.redeemPoints, cart.orderDiscount, cart.preorder, grants]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The order discount as spread over the lines by the pricing engine (FR-POS-02).
+  const orderDiscountVnd = priced?.result.lines.reduce((a, l) => a + l.manualDiscountVnd, 0) ?? 0;
 
   // Live search as you type; Enter adds an exact code (scanner) or the single result.
   useEffect(() => {
@@ -308,7 +311,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
 
   const pay = async (payments: Payment[]) => {
     const outcome = await completeSale(
-      { shift, cashierId: me.id, lines: cart.lines, customer: cart.customer, couponCode: cart.couponCode, redeemPoints: cart.redeemPoints, approvals: cart.approvals, payments, priced: priced!.result, items: priced!.items, preorderId: cart.preorder?.id ?? null },
+      { shift, cashierId: me.id, lines: cart.lines, customer: cart.customer, couponCode: cart.couponCode, redeemPoints: cart.redeemPoints, orderDiscount: cart.orderDiscount, approvals: cart.approvals, payments, priced: priced!.result, items: priced!.items, preorderId: cart.preorder?.id ?? null },
       saleKey.current,
     );
     setDialog({ kind: 'done', outcome });
@@ -337,7 +340,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         // A cart in progress goes to the held carts first.
         const c = useCart.getState();
         if (c.lines.length && !c.preorder) {
-          await db.heldCarts.put({ id: crypto.randomUUID(), label: c.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: c.lines, customer: c.customer, couponCode: c.couponCode, redeemPoints: c.redeemPoints }, heldAt: new Date().toISOString() });
+          await db.heldCarts.put({ id: crypto.randomUUID(), label: c.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: c.lines, customer: c.customer, couponCode: c.couponCode, redeemPoints: c.redeemPoints, orderDiscount: c.orderDiscount }, heldAt: new Date().toISOString() });
           setHeldCount(await db.heldCarts.count());
           setMessage({ tone: 'info', text: 'Đã chuyển giỏ hàng đang bán vào Giỏ chờ.' });
         }
@@ -352,7 +355,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
 
   const holdCart = async () => {
     if (!cart.lines.length) return;
-    await db.heldCarts.put({ id: crypto.randomUUID(), label: cart.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: cart.lines, customer: cart.customer, couponCode: cart.couponCode, redeemPoints: cart.redeemPoints }, heldAt: new Date().toISOString() });
+    await db.heldCarts.put({ id: crypto.randomUUID(), label: cart.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: cart.lines, customer: cart.customer, couponCode: cart.couponCode, redeemPoints: cart.redeemPoints, orderDiscount: cart.orderDiscount }, heldAt: new Date().toISOString() });
     setHeldCount(await db.heldCarts.count());
     newSale();
     setMessage({ tone: 'success', text: 'Đã giữ giỏ hàng.' });
@@ -366,7 +369,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     if (cart.preorder && isPreorderLine(l.lineId)) {
       return (
         <li key={l.lineId} className="bg-olive-50 px-4 py-3">
-          <p className="line-clamp-2 font-semibold">{item?.title ?? '…'}</p>
+          <p className="line-clamp-2 font-semibold">{item ? itemTitle(item) : '…'}</p>
           <p className="text-[13px] text-olive-700">
             Đặt trước <span className="code">{cart.preorder!.docNo}</span> · giá đã thỏa thuận
           </p>
@@ -382,7 +385,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     return (
       <li key={l.lineId} className={clsx('px-4 py-3 transition-colors duration-[600ms]', cart.flashLineId === l.lineId && 'bg-sand-50')}>
         <div className="flex gap-2">
-          <p className="line-clamp-2 flex-1 font-semibold">{item?.title ?? '…'}</p>
+          <p className="line-clamp-2 flex-1 font-semibold">{item ? itemTitle(item) : '…'}</p>
           <button type="button" className="inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-50" aria-label="Tùy chọn dòng" onClick={() => setDialog({ kind: 'line', lineId: l.lineId })}>
             <MoreHorizontal size={20} aria-hidden />
           </button>
@@ -412,7 +415,6 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             Giảm {formatVnd(s.amountVnd)} – {s.label}
           </p>
         ))}
-        {pl && pl.manualDiscountVnd > 0 && <p className="mt-1 text-[13px] text-success-700 num">Giảm tay {formatVnd(pl.manualDiscountVnd)}</p>}
         {l.note && <p className="mt-1 text-[13px] text-ink-500">{l.note}</p>}
       </li>
     );
@@ -464,6 +466,24 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             <>
               <dt className="text-ink-700">Khuyến mãi / giảm giá</dt>
               <dd className="text-right text-success-700">−{formatVnd(priced.result.discountVnd).replace('−', '')}</dd>
+            </>
+          )}
+          {can(me, 'sale.discount') && (
+            <>
+              <dt className="text-ink-700">Giảm giá đơn</dt>
+              <dd className="flex items-center justify-end gap-1">
+                {cart.orderDiscount ? (
+                  <>
+                    <span>{cart.orderDiscount.kind === 'percent' ? `${cart.orderDiscount.bp / 100}%` : formatVnd(cart.orderDiscount.vnd)}</span>
+                    {orderDiscountVnd > 0 && <span className="text-success-700">−{formatVnd(orderDiscountVnd)}</span>}
+                    <Button variant="ghost" size="sm" icon={X} className="size-8 px-0!" aria-label="Bỏ giảm giá đơn" title="Bỏ giảm giá đơn" onClick={() => cart.setOrderDiscount(null)} disabled={readOnly} />
+                  </>
+                ) : (
+                  <Button variant="tonal" size="sm" icon={Percent} onClick={() => setDialog({ kind: 'orderDiscount' })} disabled={readOnly || !cart.lines.length}>
+                    Giảm giá
+                  </Button>
+                )}
+              </dd>
             </>
           )}
           <dt className="text-ink-700">Mã giảm giá</dt>
@@ -584,10 +604,12 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
       <div className="flex min-h-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col gap-3 p-4">
           <form onSubmit={submitSearch} className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+            <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
             <input
               ref={search}
               autoFocus
-              className={clsx('h-12 min-w-0 flex-1 rounded-md border bg-white px-4 text-base code focus:border-navy-700', notFound ? 'border-danger-700' : 'border-paper-500')}
+              className={clsx('h-12 w-full rounded-md border bg-white pr-4 pl-10 text-base code focus:border-navy-700', notFound ? 'border-danger-700' : 'border-paper-500')}
               placeholder="Nhập SKUs/tên sản phẩm"
               aria-label="Nhập SKUs/tên sản phẩm"
               value={q}
@@ -597,6 +619,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
               }}
               disabled={readOnly}
             />
+            </div>
             <button type="button" className="inline-flex size-12 shrink-0 items-center justify-center rounded-full bg-navy-700 text-white hover:bg-navy-800" aria-label="Quét bằng camera" onClick={() => setCamera(true)}>
               <ScanBarcode size={22} aria-hidden />
             </button>
@@ -625,7 +648,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
                       <BookOpen size={16} className="text-ink-300" aria-hidden />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="line-clamp-2 font-medium">{r.title}</span>
+                      <span className="line-clamp-2 font-medium">{itemTitle(r)}</span>
                       <span className="block text-[13px] text-ink-500">
                         {r.authors.join(', ')} {r.authors.length ? '· ' : ''}
                         <span className="code">{r.sku}</span>
@@ -670,9 +693,8 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
       {dialog?.kind === 'line' && editing && (
         <LineDialog
           line={editing}
-          title={priced?.items.get(editing.variantId)?.title ?? ''}
+          title={(() => { const it = priced?.items.get(editing.variantId); return it ? itemTitle(it) : ''; })()}
           unitPriceVnd={priced?.items.get(editing.variantId)?.priceVnd ?? 0}
-          canDiscount={can(me, 'sale.discount')}
           canOverride={true}
           onClose={() => setDialog(null)}
           onRemove={() => {
@@ -708,6 +730,18 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         />
       )}
       {dialog?.kind === 'done' && <SaleDone outcome={dialog.outcome} online={status.online} onNew={newSale} />}
+      {dialog?.kind === 'orderDiscount' && (
+        <OrderDiscountDialog
+          initial={cart.orderDiscount}
+          // What the discount applies to: the order after automatic promotions and tier discounts.
+          baseVnd={priced ? priced.result.lines.reduce((a, l) => a + l.grossVnd - l.promoDiscountVnd - l.tierDiscountVnd - l.orderDiscountVnd, 0) : 0}
+          onClose={() => setDialog(null)}
+          onSave={(d) => {
+            cart.setOrderDiscount(d);
+            setDialog(null);
+          }}
+        />
+      )}
       {dialog?.kind === 'coupon' && (
         <SimpleInput
           title="Mã giảm giá"

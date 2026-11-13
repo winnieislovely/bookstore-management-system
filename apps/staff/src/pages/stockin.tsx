@@ -157,7 +157,6 @@ export function StockInForm({ initial = [], onClose, onPosted }: { initial?: Sto
           <ProductSearch
             autoFocus
             placeholder="Tìm SKU, tên sản phẩm"
-            scanIcon={false}
             onPick={(h) =>
               setLines((ls) => {
                 const same = ls.find((l) => l.variantId === h.variantId);

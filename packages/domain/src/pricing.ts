@@ -16,6 +16,8 @@ import { vatIncluded } from './vat.js';
  *   5. the cashier's manual line discount, checked against the role limit (FR-POS-02, BR-05)
  *   6. order-level promotions spread across lines proportionally; fixed-amount promotions are
  *      always taken once per order, whatever the scope (FR-PRM-01)
+ *   6b. a manual order discount (orders, FR-ORD-02), spread across the discountable lines and
+ *      recorded as their manual discount, checked against the role limit (BR-05)
  *   7. redeemed loyalty points: a discount, not a payment (FR-POS-05, BR-07), spread over the
  *      point-earning lines
  */
@@ -84,6 +86,8 @@ export interface PriceCartInput {
   customer?: CustomerPricing | null;
   promotions: readonly PromotionSnapshot[];
   couponCode?: string | null;
+  /** Manual discount on the whole order (orders, FR-ORD-02); not used at the POS. */
+  orderManualDiscount?: ManualDiscount | null;
   redeemPoints?: number;
   shippingVnd?: Vnd;
   settings: PricingSettings;
@@ -365,6 +369,25 @@ export function priceCart(input: PriceCartInput): PriceCartResult {
       if (!l.versionIds.includes(p.versionId)) l.versionIds.push(p.versionId);
       l.savings.push({ promotionId: p.promotionId, label: p.name, amountVnd: vnd(amount) });
     });
+  }
+
+  // 6b. Manual order discount (FR-ORD-02): spread over the discountable lines in proportion to
+  // what they still carry, recorded as manual discount, checked as a share of their gross (BR-05).
+  const omd = input.orderManualDiscount;
+  if (omd) {
+    const targets = work.filter((l) => DISCOUNTABLE[l.input.itemClass]);
+    const weights = targets.map((l) => l.gross - l.promo - l.tier - l.manual - l.order);
+    const base = weights.reduce((a, b) => a + b, 0);
+    const amount = base <= 0 ? 0 : Math.max(0, Math.min(base, omd.kind === 'percent' ? applyBp(vnd(base), omd.bp) : omd.vnd));
+    if (amount > 0) {
+      const parts = allocate(vnd(amount), weights);
+      targets.forEach((l, i) => (l.manual += parts[i]!));
+      const gross = targets.reduce((a, l) => a + l.gross, 0);
+      const effectiveBp = gross === 0 ? 0 : Math.ceil((amount * BP_100) / gross);
+      if (!input.grants.discountUnlimited && effectiveBp > input.settings.cashierDiscountMaxBp) {
+        approvals.push({ code: 'discount_over_limit', lineId: 'order', discountBp: effectiveBp, limitBp: input.settings.cashierDiscountMaxBp });
+      }
+    }
   }
 
   // 7. Points redemption (FR-POS-05, BR-07): a discount on the point-earning lines, checked against

@@ -111,6 +111,24 @@ describe('creating orders', () => {
     expect(again.body.customerId).toBe(r.body.customerId);
   });
 
+  it('gives the address of the customer’s latest delivery order to prefill Tạo đơn giao (FR-SOC-03)', async () => {
+    const first = (await create({ recipient: { name: 'Bảo', phone: '0977000111' } })).body;
+    const latest = (await create({ recipient: { name: 'Bảo', phone: '0977000111' }, address: { ...ward('1A0101'), line: '99 Hàng Bài' } })).body;
+    expect(latest.customerId).toBe(first.customerId);
+    const lastAddress = (customerId: string, cookie = online) => h.call('GET', `/api/v1/orders/last-address?customerId=${customerId}`, { cookie });
+    const r = await lastAddress(first.customerId);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.address).toMatchObject({ wardCode: '1A0101', line: '99 Hàng Bài' });
+    // A customer with no delivery order gets nothing to fill in.
+    const pickupOnly = (await create({ delivery: 'pickup', address: null, recipient: { name: 'Cúc', phone: '0977000222' } })).body;
+    expect((await lastAddress(pickupOnly.customerId)).body).toEqual({ address: null });
+    expect((await lastAddress(first.customerId, cashier)).status).toBe(403);
+    // Release the stock these orders reserved, so later tests see the same levels.
+    for (const o of [first, latest, pickupOnly]) {
+      expect((await h.call('POST', `/api/v1/orders/${o.id}/cancel`, { cookie: online, body: { reason: 'Đơn thử địa chỉ' } })).status).toBe(200);
+    }
+  });
+
   it('gives a transfer order a payment reference and keeps it New until paid (UC-08)', async () => {
     const r = await create({ paymentMethod: 'transfer' });
     expect(r.status).toBe(201);
@@ -155,6 +173,13 @@ describe('creating orders', () => {
     const over = await create({ lines: [{ variantId: book, qty: 1, manualDiscount: { kind: 'percent', bp: 3000 } }] });
     expect(over.status).toBe(403);
     expect(over.body.error.code).toBe('approval_required');
+    // A manual discount on the whole order (FR-ORD-02): within the limit it prices, above it needs approval.
+    const whole = await h.call('POST', '/api/v1/orders/quote', { cookie: online, body: { source: 'zalo', lines: [{ variantId: book, qty: 1 }], orderManualDiscount: { kind: 'amount', vnd: 5000 } } });
+    expect(whole.status, JSON.stringify(whole.body)).toBe(200);
+    expect(whole.body.discountVnd).toBe(5000);
+    const wholeOver = await create({ orderManualDiscount: { kind: 'percent', bp: 3000 } });
+    expect(wholeOver.status).toBe(403);
+    expect(wholeOver.body.error.code).toBe('approval_required');
   });
 
   it('refuses users without online.manage', async () => {

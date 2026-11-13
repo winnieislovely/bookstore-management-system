@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Plus, User, X } from 'lucide-react';
+import { Plus, Search, User, X } from 'lucide-react';
 import { useState } from 'react';
 import { get } from '../lib/api';
 import { formatNumber, formatPhone } from '../lib/format';
@@ -95,13 +95,16 @@ export function CustomerPicker({ value, onChange, newNameLabel = 'Tên khách' }
   const startNew = () => pick({ kind: 'new', phone: isPhone ? q.trim() : '', name: isPhone ? '' : q.trim() });
   return (
     <div className="flex flex-col gap-2">
-      <input
-        className="h-11 w-full rounded-md border border-paper-500 bg-white px-3 text-sm focus:border-navy-700"
-        placeholder="Tìm theo SĐT hoặc tên khách"
-        aria-label="Tìm khách theo số điện thoại hoặc tên"
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-      />
+      <div className="relative">
+        <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
+        <input
+          className="h-11 w-full rounded-md border border-paper-500 bg-white pr-3 pl-10 text-sm focus:border-navy-700"
+          placeholder="Tìm theo SĐT hoặc tên khách"
+          aria-label="Tìm khách theo số điện thoại hoặc tên"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
       {term.length >= 2 && found.data ? (
         <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
           {items.map((c) => (

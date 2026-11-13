@@ -124,7 +124,7 @@ function NewPreorder({ shiftId, initialCustomer, onDone }: { shiftId: string; in
       </div>
       <div className="flex flex-col gap-2">
         <p className="text-[13px] font-medium text-ink-700">Sản phẩm</p>
-        <ProductSearch onPick={add} placeholder="Nhập SKU / tên sản phẩm" scanIcon={false} />
+        <ProductSearch onPick={add} placeholder="Nhập SKU / tên sản phẩm" />
         {items.length > 0 && (
           <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
             {items.map((x, i) => (

@@ -153,6 +153,8 @@ interface CachedVariant {
   itemId: string;
   sku: string;
   title: string;
+  /** Vietnamese title, null when the item has none (TDD §7.3). */
+  titleVi: string | null;
   authors: string[];
   priceVnd: number;
   vatBp: number;
@@ -169,6 +171,7 @@ async function sellableVariants(tx: Tx, itemIds?: string[]): Promise<CachedVaria
     item_id: string;
     sku: string;
     title: string;
+    title_vi: string | null;
     authors: string[];
     price_vnd: string;
     vat_bp: number;
@@ -178,7 +181,7 @@ async function sellableVariants(tx: Tx, itemIds?: string[]): Promise<CachedVaria
     brand_id: string | null;
     kind: string;
   }>(sql`
-    select v.id, v.item_id, v.sku, i.i18n -> 'en' ->> 'title' as title, i.authors, v.price_vnd, v.vat_bp, i.publisher_id, i.brand_id, i.kind,
+    select v.id, v.item_id, v.sku, i.i18n -> 'en' ->> 'title' as title, nullif(i.i18n -> 'vi' ->> 'title', '') as title_vi, i.authors, v.price_vnd, v.vat_bp, i.publisher_id, i.brand_id, i.kind,
            (select array_agg(b.code) from catalog.barcode b where b.variant_id = v.id) as barcodes,
            (select array_agg(ic.category_id) from catalog.item_category ic where ic.item_id = i.id) as category_ids
     from catalog.item_variant v join catalog.item i on i.id = v.item_id
@@ -190,6 +193,7 @@ async function sellableVariants(tx: Tx, itemIds?: string[]): Promise<CachedVaria
     itemId: r.item_id,
     sku: r.sku,
     title: r.title,
+    titleVi: r.title_vi,
     authors: r.authors,
     priceVnd: Number(r.price_vnd),
     vatBp: r.vat_bp,

@@ -11,6 +11,8 @@ export interface CachedItem {
   itemId: string;
   sku: string;
   title: string;
+  /** Vietnamese title (null when none); shown in preference to `title`. */
+  titleVi?: string | null;
   authors: string[];
   priceVnd: number;
   vatBp: number;
@@ -19,7 +21,7 @@ export interface CachedItem {
   publisherId: string | null;
   brandId: string | null;
   isBundle: boolean;
-  /** Folded search text: title, authors, SKU, barcodes (diacritic-insensitive). */
+  /** Folded search text: both titles, authors, SKU, barcodes (diacritic-insensitive). */
   search: string;
 }
 
@@ -89,6 +91,9 @@ class PosDb extends Dexie {
 }
 
 export const db = new PosDb();
+
+/** The title the POS shows: Vietnamese when the item has one (TDD §7.3). */
+export const itemTitle = (i: Pick<CachedItem, 'title' | 'titleVi'>) => i.titleVi || i.title;
 
 export async function kvGet<T>(key: string): Promise<T | undefined> {
   return (await db.kv.get(key))?.value as T | undefined;

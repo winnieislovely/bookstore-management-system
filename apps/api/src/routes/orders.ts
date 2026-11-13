@@ -23,6 +23,10 @@ export function orderRoutes(app: OpenAPIHono<AppEnv>, carrier: CarrierAdapter, w
   defineRoute(app, { method: 'post', path: '/api/v1/orders/bulk-confirm', access: 'session', summary: 'Confirm several orders', body: orders.BulkConfirmSchema }, async ({ ctx, body }) =>
     orders.bulkConfirm(ctx, body),
   );
+  // Before /orders/:id, which would otherwise take the path.
+  defineRoute(app, { method: 'get', path: '/api/v1/orders/last-address', access: 'online.manage', summary: "The customer's latest delivery address (FR-SOC-03)", query: orders.LastAddressQuery }, async ({ ctx, query }) =>
+    orders.lastAddress(ctx, query),
+  );
   defineRoute(app, { method: 'get', path: '/api/v1/orders/:id', access: 'session', summary: 'Order record (marks it read)', params: IdParams }, async ({ ctx, params }) => orders.getOrder(ctx, params.id));
   defineRoute(app, { method: 'post', path: '/api/v1/orders/:id/confirm', access: 'session', summary: 'Confirm: reserve stock', params: IdParams }, async ({ ctx, params }) => orders.confirm(ctx, params.id));
   defineRoute(app, { method: 'post', path: '/api/v1/orders/:id/pack', access: 'online.manage', summary: 'Start packing', params: IdParams }, async ({ ctx, params }) => orders.pack(ctx, params.id));

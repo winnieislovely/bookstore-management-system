@@ -142,17 +142,16 @@ async function resolveAddress(tx: Tx, a: { provinceId?: number | undefined; ward
 // =============================================================================================
 // Creating an order (FR-ORD-02, FR-SOC-03, UC-09)
 
+const ManualDiscountSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('percent'), bp: z.number().int().min(0).max(10000) }),
+  z.object({ kind: z.literal('amount'), vnd: money }),
+]);
+
 export const OrderLineSchema = z.object({
   lineId: z.string().min(1).max(40).optional(),
   variantId: z.uuid(),
   qty: z.number().int().positive(),
-  manualDiscount: z
-    .discriminatedUnion('kind', [
-      z.object({ kind: z.literal('percent'), bp: z.number().int().min(0).max(10000) }),
-      z.object({ kind: z.literal('amount'), vnd: money }),
-    ])
-    .nullable()
-    .optional(),
+  manualDiscount: ManualDiscountSchema.nullable().optional(),
 });
 
 const OrderPricingSchema = z.object({
@@ -161,6 +160,8 @@ const OrderPricingSchema = z.object({
   lines: z.array(OrderLineSchema).min(1, 'Đơn chưa có sản phẩm.').max(200),
   shippingVnd: money.default(0),
   couponCode: z.string().trim().max(40).nullable().optional(),
+  /** Manual discount on the whole order, within the role limit (FR-ORD-02, BR-05). */
+  orderManualDiscount: ManualDiscountSchema.nullable().optional(),
   redeemPoints: z.number().int().min(0).optional(),
 });
 
@@ -252,6 +253,11 @@ async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSch
     customer: customerId ? await customers.pricingProfile(tx, customerId) : null,
     promotions: await promotions.activeSnapshot(tx, ctx.clock.now(), channel, customerId),
     couponCode: data.couponCode ?? null,
+    orderManualDiscount: data.orderManualDiscount
+      ? data.orderManualDiscount.kind === 'percent'
+        ? data.orderManualDiscount
+        : { kind: 'amount', vnd: vnd(data.orderManualDiscount.vnd) }
+      : null,
     redeemPoints: data.redeemPoints ?? 0,
     shippingVnd: vnd(data.shippingVnd),
     settings: {
@@ -536,6 +542,21 @@ export async function listOrders(ctx: Ctx, input: z.input<typeof OrdersQuery>) {
     counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) as Partial<Record<OrderStatus, number>>,
     ...(q.scope === 'delivery' && { stages: Object.fromEntries(stageCounts.map((c) => [c.stage, c.n])) as Record<string, number> }),
   };
+}
+
+export const LastAddressQuery = z.object({ customerId: z.uuid() });
+
+/** Address of the customer's most recent delivery order, to prefill “Tạo đơn giao” (FR-SOC-03). */
+export async function lastAddress(ctx: Ctx, input: z.input<typeof LastAddressQuery>) {
+  requirePermission(ctx, 'online.manage');
+  const q = LastAddressQuery.parse(input);
+  const [o] = await ctx.db
+    .select({ address: schema.webOrder.address })
+    .from(schema.webOrder)
+    .where(and(eq(schema.webOrder.customerId, q.customerId), eq(schema.webOrder.delivery, 'ship')))
+    .orderBy(desc(schema.webOrder.createdAt))
+    .limit(1);
+  return { address: o?.address ?? null };
 }
 
 export async function getOrder(ctx: Ctx, id: string, opts: { markRead?: boolean } = { markRead: true }) {

@@ -70,13 +70,15 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 // Inputs (§10.2): label above, helper below, error replaces helper with an icon.
 
 export interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
+  /** Icon at the start of the field, e.g. `Search` for a lookup field (Design §10.3). */
+  leadingIcon?: LucideIcon;
   label: ReactNode;
   helper?: string | undefined;
   error?: string | undefined;
   suffix?: string;
 }
 
-export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field({ label, helper, error, required, suffix, className, id, ...rest }, ref) {
+export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field({ label, helper, error, required, suffix, leadingIcon: Leading, className, id, ...rest }, ref) {
   const autoId = useId();
   const inputId = id ?? autoId;
   const describedBy = `${inputId}-desc`;
@@ -94,6 +96,7 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field({ l
         )}
       </label>
       <div className="relative">
+        {Leading && <Leading size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />}
         <input
           ref={ref}
           id={inputId}
@@ -105,6 +108,7 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field({ l
             'hover:border-ink-500 focus:border-navy-700 read-only:bg-paper-200 disabled:bg-paper-200 disabled:text-ink-300',
             error ? 'border-danger-700' : 'border-paper-500',
             suffix && 'pr-8 text-right num',
+            Leading && 'pl-10',
           )}
           {...rest}
         />

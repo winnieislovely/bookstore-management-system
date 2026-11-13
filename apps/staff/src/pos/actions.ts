@@ -1,7 +1,7 @@
-import type { PriceCartResult } from '@bookstore/domain';
+import type { ManualDiscount, PriceCartResult } from '@bookstore/domain';
 import { ApiError, get, post } from '../lib/api';
 import type { CartApproval, CartCustomer, CartLine } from './cart';
-import { kvGet, kvSet, type CachedItem } from './db';
+import { itemTitle, kvGet, kvSet, type CachedItem } from './db';
 import { deviceInfo } from './device';
 import { enqueue } from './sync';
 
@@ -138,6 +138,7 @@ export interface SaleInput {
   customer: CartCustomer | null;
   couponCode: string;
   redeemPoints: number;
+  orderDiscount: ManualDiscount | null;
   approvals: CartApproval[];
   payments: Payment[];
   priced: PriceCartResult;
@@ -176,6 +177,7 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
           lines: input.lines.map((l) => ({ lineId: l.lineId, variantId: l.variantId, qty: l.qty, priceOverrideVnd: l.priceOverrideVnd ?? null, manualDiscount: l.manualDiscount ?? null, ...(l.note && { note: l.note }) })),
           customerId: input.customer?.id ?? null,
           couponCode: input.couponCode || null,
+          orderManualDiscount: input.orderDiscount,
           redeemPoints: input.redeemPoints,
           approvals,
           payments: input.payments.map((p) => (p.method === 'cash' ? { method: 'cash', amountVnd: p.amountVnd, tenderedVnd: p.tenderedVnd } : p)),
@@ -206,7 +208,7 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
       soldAt: new Date().toISOString(),
       lines: p.lines.map((l) => ({
         variantId: l.variantId,
-        description: input.items.get(l.variantId)?.title ?? '',
+        description: (() => { const it = input.items.get(l.variantId); return it ? itemTitle(it) : ''; })(),
         qty: l.qty,
         unitPriceVnd: l.unitPriceVnd,
         discountVnd: l.discountVnd,

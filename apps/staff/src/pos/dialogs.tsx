@@ -1,4 +1,4 @@
-import { DENOMINATIONS_VND, normalizePaymentRef, paymentRefFromBytes, type PriceCartResult } from '@bookstore/domain';
+import { DENOMINATIONS_VND, normalizePaymentRef, paymentRefFromBytes, vnd, type PriceCartResult, type ManualDiscount } from '@bookstore/domain';
 import { clsx } from 'clsx';
 import { Banknote, Check, CheckCircle2, CreditCard, Mail, Plus, Printer, QrCode, ShieldCheck, Trash2, User } from 'lucide-react';
 import { useState } from 'react';
@@ -508,11 +508,9 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
 // ---------------------------------------------------------------------------------------------
 // Line actions: discount, price override, note, remove (FR-POS-02)
 
-export function LineDialog({ line, title, unitPriceVnd, canDiscount, canOverride, onSave, onRemove, onClose }: { line: CartLine; title: string; unitPriceVnd: number; canDiscount: boolean; canOverride: boolean; onSave: (patch: Partial<CartLine>) => void; onRemove: () => void; onClose: () => void }) {
-  const [pct, setPct] = useState(line.manualDiscount?.kind === 'percent' ? String(line.manualDiscount.bp / 100) : '');
+export function LineDialog({ line, title, unitPriceVnd, canOverride, onSave, onRemove, onClose }: { line: CartLine; title: string; unitPriceVnd: number; canOverride: boolean; onSave: (patch: Partial<CartLine>) => void; onRemove: () => void; onClose: () => void }) {
   const [price, setPrice] = useState<number | null>(line.priceOverrideVnd ?? null);
   const [note, setNote] = useState(line.note ?? '');
-  const bp = Math.round(Number(pct.replace(',', '.') || 0) * 100);
   return (
     <Dialog
       title={title}
@@ -527,7 +525,8 @@ export function LineDialog({ line, title, unitPriceVnd, canDiscount, canOverride
             variant="primary"
             onClick={() =>
               onSave({
-                manualDiscount: bp > 0 ? { kind: 'percent', bp: Math.min(bp, 10000) } : null,
+                // No per-item discount: the manual discount is for the whole order (FR-POS-02).
+                manualDiscount: null,
                 priceOverrideVnd: price !== null && price !== unitPriceVnd ? price : null,
                 note: note.trim(),
               })
@@ -539,9 +538,68 @@ export function LineDialog({ line, title, unitPriceVnd, canDiscount, canOverride
       }
     >
       <div className="flex flex-col gap-4">
-        {canDiscount && <Field label="Giảm giá dòng" inputMode="decimal" suffix="%" value={pct} onChange={(e) => setPct(e.target.value)} helper={bp > 0 ? `= ${formatVnd(Math.round((unitPriceVnd * line.qty * bp) / 10000))}` : 'Vượt hạn mức sẽ cần quản lý duyệt.'} />}
         {canOverride ? <MoneyInput label="Sửa giá bán" value={price} onChange={setPrice} /> : <p className="text-sm text-ink-500">Sửa giá cần quyền hoặc quản lý duyệt khi thanh toán.</p>}
         <Field label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} />
+      </div>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Manual discount on the whole order (FR-POS-02, BR-05, Design §13.1)
+
+export function OrderDiscountDialog({ initial, baseVnd, onSave, onClose }: { initial: ManualDiscount | null; baseVnd: number; onSave: (d: ManualDiscount | null) => void; onClose: () => void }) {
+  const [kind, setKind] = useState<'percent' | 'amount'>(initial?.kind ?? 'percent');
+  const [value, setValue] = useState(initial ? (initial.kind === 'percent' ? String(initial.bp / 100) : String(initial.vnd)) : '');
+  const bp = kind === 'percent' ? Math.min(10000, Math.round(Number(value.replace(',', '.') || 0) * 100)) : 0;
+  const amountVnd = kind === 'amount' ? Math.min(baseVnd, Number(value.replace(/\D/g, '') || 0)) : Math.round((baseVnd * bp) / 10000);
+  return (
+    <Dialog
+      title="Giảm giá đơn"
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Hủy
+          </Button>
+          <Button variant="primary" onClick={() => onSave(amountVnd > 0 ? (kind === 'percent' ? { kind: 'percent', bp } : { kind: 'amount', vnd: vnd(amountVnd) }) : null)}>
+            Áp dụng
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-1">
+        <label htmlFor="order-discount" className="text-[13px] font-medium text-ink-700">
+          Giảm giá
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="order-discount"
+            autoFocus
+            inputMode={kind === 'percent' ? 'decimal' : 'numeric'}
+            className="h-11 min-w-0 flex-1 rounded-md border border-paper-500 bg-white px-3 text-right num focus:border-navy-700"
+            placeholder="0"
+            aria-describedby="order-discount-help"
+            value={kind === 'amount' && value ? formatNumber(Number(value.replace(/\D/g, ''))) : value}
+            onChange={(e) => setValue(kind === 'amount' ? e.target.value.replace(/\D/g, '') : e.target.value)}
+          />
+          <select
+            aria-label="Kiểu giảm giá"
+            className="h-11 w-20 shrink-0 rounded-md border border-paper-500 bg-white px-2 focus:border-navy-700"
+            value={kind}
+            onChange={(e) => {
+              setKind(e.target.value as 'percent' | 'amount');
+              setValue('');
+            }}
+          >
+            <option value="percent">%</option>
+            <option value="amount">₫</option>
+          </select>
+        </div>
+        <p id="order-discount-help" className="text-[13px] text-ink-500">
+          {amountVnd > 0 ? `= ${formatVnd(amountVnd)}` : 'Vượt hạn mức sẽ cần quản lý duyệt.'}
+        </p>
       </div>
     </Dialog>
   );

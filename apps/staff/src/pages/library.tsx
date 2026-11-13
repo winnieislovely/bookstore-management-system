@@ -270,14 +270,17 @@ function BorrowerPicker({ value, onChange }: { value: PickedCustomer | null; onC
   const digits = q.replace(/\D/g, '');
   return (
     <div className="flex flex-col gap-2">
+      <div className="relative">
+      <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
       <input
-        className="h-11 w-full rounded-md border border-paper-500 bg-white px-3 focus:border-navy-700"
+        className="h-11 w-full rounded-md border border-paper-500 bg-white pr-3 pl-10 focus:border-navy-700"
         placeholder="Nhập số điện thoại/tên khách"
         aria-label="Số điện thoại hoặc tên khách"
         autoFocus
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
+      </div>
       {term.length >= 2 && found.data && (
         <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
           {items.length === 0 && <li className="px-3 py-2 text-sm text-ink-500">Không có khách phù hợp.</li>}
@@ -657,13 +660,16 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
                 void add();
               }}
             >
-              <input
-                className="h-11 min-w-0 flex-1 rounded-md border border-paper-500 bg-white px-3 focus:border-navy-700"
-                placeholder="Nhập mã cá biệt/tên sách"
-                aria-label="Mã cá biệt"
-                value={scan}
-                onChange={(e) => setScan(e.target.value)}
-              />
+              <div className="relative min-w-0 flex-1">
+                <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
+                <input
+                  className="h-11 w-full rounded-md border border-paper-500 bg-white pr-3 pl-10 focus:border-navy-700"
+                  placeholder="Nhập mã cá biệt/tên sách"
+                  aria-label="Mã cá biệt"
+                  value={scan}
+                  onChange={(e) => setScan(e.target.value)}
+                />
+              </div>
               <button type="button" className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-navy-50 text-navy-700 hover:bg-navy-100" aria-label="Quét mã bằng camera" onClick={() => setCamera(true)}>
                 <ScanBarcode size={20} aria-hidden />
               </button>
@@ -919,6 +925,7 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
             <div className="flex items-end gap-2">
               <Field
                 label="Mã cá biệt"
+                leadingIcon={Search}
                 className="flex-1"
                 autoFocus
                 value={barcode}

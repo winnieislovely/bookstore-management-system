@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { clsx } from 'clsx';
-import { ScanBarcode } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { useRef, useState, type FormEvent } from 'react';
 import { ApiError, get } from '../lib/api';
 import { formatNumber, formatVnd } from '../lib/format';
@@ -23,7 +22,7 @@ export interface ProductHit {
 
 export const hitTitle = (h: Pick<ProductHit, 'title' | 'titleVi'>) => h.titleVi || h.title;
 
-export function ProductSearch({ onPick, onUnknownCode, placeholder = 'Quét mã vạch hoặc nhập SKU / tên sản phẩm', autoFocus, scanIcon = true }: { onPick: (h: ProductHit) => void; onUnknownCode?: (code: string) => void; placeholder?: string; autoFocus?: boolean; scanIcon?: boolean }) {
+export function ProductSearch({ onPick, onUnknownCode, placeholder = 'Quét mã vạch hoặc nhập SKU / tên sản phẩm', autoFocus }: { onPick: (h: ProductHit) => void; onUnknownCode?: (code: string) => void; placeholder?: string; autoFocus?: boolean }) {
   const [q, setQ] = useState('');
   const [miss, setMiss] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -61,11 +60,11 @@ export function ProductSearch({ onPick, onUnknownCode, placeholder = 'Quét mã 
   return (
     <div className="relative">
       <form onSubmit={(e) => void submit(e)}>
-        {scanIcon && <ScanBarcode size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />}
+        <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
         <input
           ref={input}
           autoFocus={autoFocus}
-          className={clsx('h-12 w-full rounded-md border border-paper-500 bg-white pr-3 text-base code focus:border-navy-700', scanIcon ? 'pl-10' : 'pl-3')}
+          className="h-12 w-full rounded-md border border-paper-500 bg-white pr-3 pl-10 text-base code focus:border-navy-700"
           placeholder={placeholder}
           aria-label={placeholder}
           value={q}

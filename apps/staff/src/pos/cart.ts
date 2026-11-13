@@ -48,6 +48,8 @@ interface CartState {
   customer: CartCustomer | null;
   couponCode: string;
   redeemPoints: number;
+  /** Manual discount on the whole order (FR-POS-02, BR-05). */
+  orderDiscount: ManualDiscount | null;
   approvals: CartApproval[];
   preorder: CartPreorder | null;
   /** Last added line, for the 600 ms highlight (Design §7.4). */
@@ -59,8 +61,9 @@ interface CartState {
   setCustomer: (c: CartCustomer | null) => void;
   setCoupon: (code: string) => void;
   setRedeem: (points: number) => void;
+  setOrderDiscount: (d: ManualDiscount | null) => void;
   addApproval: (a: CartApproval) => void;
-  load: (s: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints'>) => void;
+  load: (s: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints'> & { orderDiscount?: ManualDiscount | null }) => void;
   /** Start a new cart from a pre-order (FR-POS-09). */
   loadPreorder: (p: CartPreorder, customer: CartCustomer) => void;
   clear: () => void;
@@ -74,6 +77,7 @@ export const useCart = create<CartState>((set) => ({
   customer: null,
   couponCode: '',
   redeemPoints: 0,
+  orderDiscount: null,
   approvals: [],
   preorder: null,
   flashLineId: null,
@@ -91,10 +95,11 @@ export const useCart = create<CartState>((set) => ({
   setCustomer: (customer) => set({ customer, redeemPoints: 0 }),
   setCoupon: (couponCode) => set({ couponCode }),
   setRedeem: (redeemPoints) => set({ redeemPoints }),
+  setOrderDiscount: (orderDiscount) => set({ orderDiscount, approvals: [] }),
   addApproval: (a) => set((s) => ({ approvals: [...s.approvals.filter((x) => x.action !== a.action), a] })),
-  load: (c) => set({ ...c, approvals: [], preorder: null, flashLineId: null }),
-  loadPreorder: (p, customer) => set({ lines: p.lines.map((l, i) => ({ lineId: `pre-${i + 1}`, variantId: l.variantId, qty: l.qty })), customer, couponCode: '', redeemPoints: 0, approvals: [], preorder: p, flashLineId: null }),
-  clear: () => set({ lines: [], customer: null, couponCode: '', redeemPoints: 0, approvals: [], preorder: null, flashLineId: null }),
+  load: (c) => set({ orderDiscount: null, ...c, approvals: [], preorder: null, flashLineId: null }),
+  loadPreorder: (p, customer) => set({ lines: p.lines.map((l, i) => ({ lineId: `pre-${i + 1}`, variantId: l.variantId, qty: l.qty })), customer, couponCode: '', redeemPoints: 0, orderDiscount: null, approvals: [], preorder: p, flashLineId: null }),
+  clear: () => set({ lines: [], customer: null, couponCode: '', redeemPoints: 0, orderDiscount: null, approvals: [], preorder: null, flashLineId: null }),
 }));
 
 // ---------------------------------------------------------------------------------------------
@@ -153,7 +158,7 @@ export interface PricedCart {
   items: Map<string, CachedItem>;
 }
 
-export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints' | 'preorder'>, grants: { discountUnlimited: boolean; priceOverride: boolean }): Promise<PricedCart | null> {
+export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 'couponCode' | 'redeemPoints' | 'preorder' | 'orderDiscount'>, grants: { discountUnlimited: boolean; priceOverride: boolean }): Promise<PricedCart | null> {
   const settings = await kvGet<PosSettings>('settings');
   if (!settings || !cart.lines.length) return null;
   const items = new Map((await db.items.bulkGet(cart.lines.map((l) => l.variantId))).filter((i): i is CachedItem => !!i).map((i) => [i.variantId, i]));
@@ -187,6 +192,7 @@ export async function priceLocally(cart: Pick<CartState, 'lines' | 'customer' | 
       : null,
     promotions,
     couponCode: cart.couponCode || null,
+    orderManualDiscount: cart.orderDiscount,
     redeemPoints: cart.redeemPoints,
     settings: {
       cashierDiscountMaxBp: settings.cashierDiscountMaxBp,

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ArrowLeft, CheckCircle2, ClipboardList, Download, Plus, Send, Upload, XCircle } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ClipboardList, Download, Plus, Search, Send, Upload, XCircle } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, FilterMenu, SearchBox, TimeFilter, errText, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
@@ -354,15 +354,18 @@ export function LibraryCountDetailPage() {
                 void doScan();
               }}
             >
+              <div className="relative min-w-0 flex-1">
+              <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
               <input
                 ref={scanRef}
-                className="h-11 min-w-0 flex-1 rounded-md border border-paper-500 bg-white px-3 focus:border-navy-700"
+                className="h-11 w-full rounded-md border border-paper-500 bg-white pr-3 pl-10 focus:border-navy-700"
                 placeholder="Quét mã bản sách"
                 aria-label="Quét mã bản sách"
                 autoFocus
                 value={scan}
                 onChange={(e) => setScan(e.target.value)}
               />
+              </div>
               <Button type="submit" variant="secondary" disabled={!scan.trim()}>
                 Ghi nhận
               </Button>

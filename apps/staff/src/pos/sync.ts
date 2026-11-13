@@ -52,7 +52,7 @@ export const usePosStatus = create<Status>((set) => ({
 const status = () => usePosStatus.getState();
 
 function toCached(v: Omit<CachedItem, 'search'>): CachedItem {
-  return { ...v, search: foldText([v.title, ...v.authors, v.sku, ...v.barcodes].join(' ')) };
+  return { ...v, search: foldText([v.titleVi ?? '', v.title, ...v.authors, v.sku, ...v.barcodes].join(' ')) };
 }
 
 interface Bootstrap {
@@ -83,6 +83,9 @@ async function applyItems(upserts: Omit<CachedItem, 'search'>[], deletes: string
 }
 
 /** First-time or full refresh (TDD §7.3). */
+/** Raised when the cached item shape changes; an older cache is refreshed from bootstrap once online (TDD §7.3). */
+const CATALOG_VERSION = 2;
+
 export async function bootstrap(): Promise<void> {
   const b = await deviceFetch<Bootstrap>('GET', '/pos/v1/bootstrap');
   await db.transaction('rw', [db.items, db.barcodes, db.customers, db.approvers, db.kv], async () => {
@@ -94,6 +97,7 @@ export async function bootstrap(): Promise<void> {
     await db.customers.bulkPut(b.customers);
     await db.approvers.bulkPut(b.approvers);
     await kvSet('cursor', b.cursor);
+    await kvSet('catalogVersion', CATALOG_VERSION);
     await kvSet('promotions', b.promotions);
     await kvSet('tiers', b.tiers);
     await kvSet('settings', b.settings);
@@ -206,7 +210,7 @@ export async function startSync(): Promise<void> {
   setInterval(() => navigator.onLine && void pullDelta().catch(() => undefined), 60_000);
   if (navigator.onLine && (await deviceInfo())) {
     try {
-      if (!status().ready) await bootstrap();
+      if (!status().ready || (await kvGet<number>('catalogVersion')) !== CATALOG_VERSION) await bootstrap();
       else await pullDelta();
     } catch {
       /* stays usable from the cache */

@@ -134,6 +134,20 @@ describe('priceCart', () => {
     expect(run({ lines: [book({ manualDiscount: { kind: 'percent', bp: 1000 } })] }).approvalsRequired).toEqual([]);
   });
 
+  it('spreads a manual order discount over the lines and checks it against the limit (FR-ORD-02, BR-05)', () => {
+    // 116.000 ₫ cart: 98.000 book + 18.000 pens; 11.600 ₫ is exactly the 10 % limit.
+    const r = run({ orderManualDiscount: { kind: 'amount', vnd: vnd(11600) } });
+    expect(r.lines.map((l) => l.manualDiscountVnd)).toEqual([9800, 1800]);
+    expect(r.totalVnd).toBe(104400);
+    expect(r.approvalsRequired).toEqual([]);
+    const pct = run({ orderManualDiscount: { kind: 'percent', bp: 1500 } });
+    expect(pct.discountVnd).toBe(17400);
+    expect(pct.approvalsRequired).toEqual([{ code: 'discount_over_limit', lineId: 'order', discountBp: 1500, limitBp: 1000 }]);
+    expect(run({ orderManualDiscount: { kind: 'percent', bp: 1500 }, grants: { discountUnlimited: true, priceOverride: false } }).approvalsRequired).toEqual([]);
+    // Never more than the order carries.
+    expect(run({ orderManualDiscount: { kind: 'amount', vnd: vnd(999999) }, grants: { discountUnlimited: true, priceOverride: false } }).totalVnd).toBe(0);
+  });
+
   it('price override needs permission or approval', () => {
     const r = run({ lines: [book({ priceOverrideVnd: vnd(80000) })] });
     expect(r.totalVnd).toBe(80000);

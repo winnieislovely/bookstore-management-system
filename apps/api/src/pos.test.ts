@@ -164,6 +164,21 @@ describe('completing a sale (FR-POS-06, UC-01)', () => {
     expect(s!.approved_by).toBeTruthy();
   });
 
+  it('takes a manual discount on the whole order within the limit, above it with a supervisor (FR-POS-02, BR-05)', async () => {
+    // One 98.000 ₫ book: 10 % of the order is within the cashier limit.
+    const within = await h.call('POST', '/api/v1/pos/sales', {
+      cookie: cashier,
+      body: { ...cart([{ variantId: book, qty: 1 }], { orderManualDiscount: { kind: 'percent', bp: 1000 } }), shiftId, payments: [{ method: 'cash', amountVnd: 88200 }] },
+    });
+    expect(within.status, JSON.stringify(within.body)).toBe(201);
+    expect(within.body).toMatchObject({ totalVnd: 88200, discountVnd: 9800 });
+    const over = await h.call('POST', '/api/v1/pos/sales', {
+      cookie: cashier,
+      body: { ...cart([{ variantId: book, qty: 1 }], { orderManualDiscount: { kind: 'amount', vnd: 20000 } }), shiftId, payments: [{ method: 'cash', amountVnd: 78000 }] },
+    });
+    expect(over.body.error).toMatchObject({ code: 'approval_required', details: { action: 'discount_over_limit', lineId: 'order' } });
+  });
+
   it('redeems points as a discount (BR-07)', async () => {
     // Earn enough first: 5 books = 490.000 ₫ → 49 points, balance 60.
     const earn = await h.call('POST', '/api/v1/pos/sales', { cookie: cashier, body: { ...cart([{ variantId: book, qty: 5 }], { customerId }), shiftId, payments: [{ method: 'cash', amountVnd: 490000 }] } });
