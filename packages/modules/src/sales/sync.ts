@@ -163,6 +163,9 @@ interface CachedVariant {
   publisherId: string | null;
   brandId: string | null;
   isBundle: boolean;
+  /** Item kind, and its first photo (null when none), for the POS search results (TDD §7.3). */
+  kind: string;
+  imageFileId: string | null;
 }
 
 async function sellableVariants(tx: Tx, itemIds?: string[]): Promise<CachedVariant[]> {
@@ -180,10 +183,12 @@ async function sellableVariants(tx: Tx, itemIds?: string[]): Promise<CachedVaria
     publisher_id: string | null;
     brand_id: string | null;
     kind: string;
+    image_file_id: string | null;
   }>(sql`
     select v.id, v.item_id, v.sku, i.i18n -> 'en' ->> 'title' as title, nullif(i.i18n -> 'vi' ->> 'title', '') as title_vi, i.authors, v.price_vnd, v.vat_bp, i.publisher_id, i.brand_id, i.kind,
            (select array_agg(b.code) from catalog.barcode b where b.variant_id = v.id) as barcodes,
-           (select array_agg(ic.category_id) from catalog.item_category ic where ic.item_id = i.id) as category_ids
+           (select array_agg(ic.category_id) from catalog.item_category ic where ic.item_id = i.id) as category_ids,
+           (select im.file_id from catalog.item_image im where im.item_id = i.id order by im.sort limit 1) as image_file_id
     from catalog.item_variant v join catalog.item i on i.id = v.item_id
     where v.status = 'active' and i.status = 'active' and v.published_pos
       ${itemIds ? sql`and i.id in (${sql.join(itemIds.map((id) => sql`${id}::uuid`), sql`, `)})` : sql``}
@@ -202,6 +207,8 @@ async function sellableVariants(tx: Tx, itemIds?: string[]): Promise<CachedVaria
     publisherId: r.publisher_id,
     brandId: r.brand_id,
     isBundle: r.kind === 'bundle',
+    kind: r.kind,
+    imageFileId: r.image_file_id,
   }));
 }
 

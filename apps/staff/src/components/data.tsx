@@ -442,6 +442,7 @@ export function ConfirmDialog({
   title,
   body,
   confirm,
+  cancel,
   destructive,
   onConfirm,
   onClose,
@@ -451,6 +452,8 @@ export function ConfirmDialog({
   title: string;
   body?: string;
   confirm: string;
+  /** Label of the dismiss button; defaults to “Hủy”. */
+  cancel?: string;
   destructive?: boolean;
   onConfirm: () => Promise<unknown>;
   onClose: () => void;
@@ -468,7 +471,7 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
-            {t('common.cancel')}
+            {cancel ?? t('common.cancel')}
           </Button>
           <Button
             variant={destructive ? 'destructive' : 'primary'}

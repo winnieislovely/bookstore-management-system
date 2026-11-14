@@ -84,7 +84,8 @@ async function applyItems(upserts: Omit<CachedItem, 'search'>[], deletes: string
 
 /** First-time or full refresh (TDD §7.3). */
 /** Raised when the cached item shape changes; an older cache is refreshed from bootstrap once online (TDD §7.3). */
-const CATALOG_VERSION = 2;
+// 3: items carry kind and imageFileId (TDD §7.3).
+const CATALOG_VERSION = 3;
 
 export async function bootstrap(): Promise<void> {
   const b = await deviceFetch<Bootstrap>('GET', '/pos/v1/bootstrap');

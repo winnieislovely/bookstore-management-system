@@ -1,7 +1,7 @@
 import { DENOMINATIONS_VND, normalizePaymentRef, paymentRefFromBytes, type PriceCartResult } from '@bookstore/domain';
 import { clsx } from 'clsx';
-import { Banknote, Check, CheckCircle2, CreditCard, Mail, Plus, Printer, QrCode, ShieldCheck, Trash2, User } from 'lucide-react';
-import { useState } from 'react';
+import { Banknote, CheckCircle2, CreditCard, Printer, QrCode, Search, ShieldCheck, Plus, User, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Button, Field, InlineAlert } from '../components/ui';
 import { ApiError, post } from '../lib/api';
 import { formatNumber, formatPhone, formatVnd } from '../lib/format';
@@ -93,7 +93,6 @@ export function PaymentSheet({
   const amount = priced.totalVnd - depositVnd;
   const [method, setMethod] = useState<Method>('cash');
   const [tendered, setTendered] = useState<string>('');
-  const [cardRef, setCardRef] = useState('');
   const [transferRef] = useState(newRef);
   const [transferOk, setTransferOk] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,7 +110,8 @@ export function PaymentSheet({
     const amt = amount;
     if (amt <= 0) return null;
     if (method === 'cash') return tenderedVnd && tenderedVnd < amt ? null : { method, amountVnd: amt, tenderedVnd: tenderedVnd || amt };
-    if (method === 'card') return cardRef.trim() ? { method, amountVnd: amt, ref: cardRef.trim() } : null;
+    // Card: no approval code (FR-POS-06).
+    if (method === 'card') return { method, amountVnd: amt };
     return transferOk ? { method, amountVnd: amt, ref: normalizePaymentRef(transferRef) } : null;
   };
 
@@ -189,36 +189,20 @@ export function PaymentSheet({
             </label>
           </div>
         )}
-        {method === 'card' && <Field label="Mã chuẩn chi trên máy POS thẻ" required className="code" value={cardRef} onChange={(e) => setCardRef(e.target.value)} />}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
-        <div className="flex gap-2">
-          <Button variant="secondary" size="lg" onClick={onClose} disabled={busy}>
-            Hủy
-          </Button>
-          <Button variant="primary" size="lg" full icon={Check} loading={busy} disabled={!current()} onClick={pay}>
-            {method === 'transfer' ? 'Đã nhận tiền' : 'Hoàn tất'}
-          </Button>
-        </div>
+        {/* One full-width “Xác nhận”, no icon; the dialog closes with its ✕ (Design §13.4). */}
+        <Button variant="primary" size="lg" full loading={busy} disabled={!current()} onClick={pay}>
+          Xác nhận
+        </Button>
       </div>
     </Dialog>
   );
 }
 
-export function SaleDone({ outcome, online, onNew }: { outcome: SaleOutcome; online: boolean; onNew: () => void }) {
-  const [email, setEmail] = useState(false);
-  const [buyer, setBuyer] = useState({ name: '', taxCode: '', address: '', email: '' });
-  const [msg, setMsg] = useState<string | null>(null);
-  const send = async () => {
-    try {
-      await post(`/api/v1/pos/sales/${outcome.saleId}/einvoice-request`, { name: buyer.name, ...(buyer.taxCode && { taxCode: buyer.taxCode }), ...(buyer.address && { address: buyer.address }), ...(buyer.email && { email: buyer.email }) });
-      setMsg('Đã gửi yêu cầu xuất hóa đơn. MISA meInvoice sẽ gửi hóa đơn tới email của khách.');
-      setEmail(false);
-    } catch (e) {
-      setMsg(errText(e));
-    }
-  };
+export function SaleDone({ outcome, onNew }: { outcome: SaleOutcome; onNew: () => void }) {
   return (
-    <Dialog title="Hoàn tất" size="sm">
+    // No title bar; the e-invoice email is requested from the sale record (Design §13.4, FR-POS-16).
+    <Dialog title="Hoàn tất" size="sm" hideHeader>
       <div className="flex flex-col items-center gap-3 text-center">
         <span className="flex size-16 items-center justify-center rounded-full bg-success-50 text-success-700">
           <CheckCircle2 size={36} aria-hidden />
@@ -234,34 +218,16 @@ export function SaleDone({ outcome, online, onNew }: { outcome: SaleOutcome; onl
           </>
         )}
         {outcome.offline && <InlineAlert tone="warning">Đã lưu ngoại tuyến. Đơn sẽ được đồng bộ và xuất hóa đơn điện tử khi có mạng.</InlineAlert>}
-        {msg && <InlineAlert tone="info">{msg}</InlineAlert>}
-        {email ? (
-          <div className="flex w-full flex-col gap-3 text-left">
-            <Field label="Tên người mua" required value={buyer.name} onChange={(e) => setBuyer({ ...buyer, name: e.target.value })} />
-            <Field label="Mã số thuế" value={buyer.taxCode} onChange={(e) => setBuyer({ ...buyer, taxCode: e.target.value })} />
-            <Field label="Địa chỉ" value={buyer.address} onChange={(e) => setBuyer({ ...buyer, address: e.target.value })} />
-            <Field label="Email nhận hóa đơn" type="email" required value={buyer.email} onChange={(e) => setBuyer({ ...buyer, email: e.target.value })} />
-            <Button variant="primary" full disabled={!buyer.name || !buyer.email} onClick={send}>
-              Gửi yêu cầu
+        <div className="flex w-full flex-col gap-2">
+          <Button variant="primary" size="lg" full onClick={onNew}>
+            Đơn mới
+          </Button>
+          {outcome.printSlip && outcome.saleId && (
+            <Button variant="secondary" full icon={Printer} onClick={() => void printSlip(outcome.saleId!)}>
+              In
             </Button>
-          </div>
-        ) : (
-          <div className="flex w-full flex-col gap-2">
-            <Button variant="primary" size="lg" full onClick={onNew}>
-              Đơn mới
-            </Button>
-            {outcome.saleId && online && (
-              <Button variant="secondary" full icon={Mail} onClick={() => setEmail(true)}>
-                Gửi hóa đơn điện tử qua email
-              </Button>
-            )}
-            {outcome.printSlip && outcome.saleId && (
-              <Button variant="secondary" full icon={Printer} onClick={() => void printSlip(outcome.saleId!)}>
-                In
-              </Button>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </Dialog>
   );
@@ -290,12 +256,10 @@ export function CloseShiftDialog({ expectedVnd, source, onClose, onSubmit }: { e
       onClose={onClose}
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>
-            Hủy
-          </Button>
-          {/* Never disabled for a variance — only for a missing reason (BR-06). */}
+          {/* One full-width “Đóng ca”; the ✕ closes the dialog (Design §13.6). Never disabled for a variance — only for a missing reason (BR-06). */}
           <Button
             variant="primary"
+            full
             loading={busy}
             disabled={variance !== 0 && !reason.trim()}
             onClick={async () => {
@@ -315,16 +279,14 @@ export function CloseShiftDialog({ expectedVnd, source, onClose, onSubmit }: { e
         </>
       }
     >
-      <p className="mb-2 text-[13px] font-medium text-ink-700">Tiền mặt đếm được</p>
-      <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-2 text-sm">
-        <span className="text-ink-500">Mệnh giá</span>
-        <span className="text-ink-500">Số tờ</span>
-        <span className="text-right text-ink-500">Thành tiền</span>
-        <span aria-hidden className="w-10" />
+      <p className="mb-2 text-[13px] font-medium text-ink-700">Tiền mặt trong ca</p>
+      {/* No column headings: “Mệnh giá” and “Số tờ” are grey placeholders inside the fields (Design §13.6). */}
+      <div className="flex flex-col gap-2 text-sm">
         {rows.map((r) => (
-          <div key={r.id} className="contents">
+          // Mệnh giá at the left; Số tờ and ✕ at the right; no row amount (Design §13.6).
+          <div key={r.id} className="flex items-center gap-2">
             <select
-              className="h-11 min-w-0 rounded-md border border-paper-500 bg-white px-2 num"
+              className={clsx('h-11 min-w-0 rounded-md border border-paper-500 bg-white px-2 num', 'w-36', r.note ? 'text-ink-900' : 'text-[13px] text-ink-500')}
               aria-label="Mệnh giá"
               value={r.note ?? ''}
               onChange={(e) => {
@@ -333,7 +295,10 @@ export function CloseShiftDialog({ expectedVnd, source, onClose, onSubmit }: { e
                 requestAnimationFrame(() => document.getElementById(`qty-${r.id}`)?.focus());
               }}
             >
-              <option value="">Chọn</option>
+              {/* Placeholder only: not offered in the list (Design §13.6). */}
+              <option value="" disabled hidden>
+                Mệnh giá
+              </option>
               {DENOMINATIONS_VND.filter((d) => d === r.note || !used.has(d)).map((d) => (
                 <option key={d} value={d}>
                   {formatNumber(d)}
@@ -343,32 +308,31 @@ export function CloseShiftDialog({ expectedVnd, source, onClose, onSubmit }: { e
             <input
               id={`qty-${r.id}`}
               inputMode="numeric"
-              className="h-11 min-w-0 rounded-md border border-paper-500 px-2 text-center num"
+              className="ml-auto h-11 w-24 min-w-0 rounded-md border border-paper-500 px-2 text-center num placeholder:text-[13px] placeholder:text-ink-500"
               aria-label={r.note ? `Số tờ ${formatNumber(r.note)}` : 'Số tờ'}
-              placeholder="0"
+              placeholder="Số tờ"
               value={r.qty ?? ''}
               onChange={(e) => update(r.id, { qty: Number(e.target.value.replace(/\D/g, '')) || null })}
             />
-            <span className="truncate text-right num">{r.note && r.qty ? formatNumber(r.note * r.qty) : '—'}</span>
-            <Button variant="ghost" icon={Trash2} aria-label="Xóa dòng" title="Xóa dòng" onClick={() => setRows(rows.filter((x) => x.id !== r.id))} />
+            <Button variant="ghost" icon={X} aria-label="Xóa dòng" title="Xóa dòng" onClick={() => setRows(rows.filter((x) => x.id !== r.id))} />
           </div>
         ))}
       </div>
       {used.size < DENOMINATIONS_VND.length && rows.length < DENOMINATIONS_VND.length && (
-        <Button
-          variant="tonal"
-          size="sm"
-          icon={Plus}
-          className="mt-3"
+        // Plain text button, no pill (Design §13.6).
+        <button
+          type="button"
+          className="mt-3 inline-flex min-h-9 items-center gap-1 rounded-sm px-1 text-sm font-medium text-navy-700 hover:underline"
           onClick={() => {
             setRows([...rows, { id: nextId, note: null, qty: null }]);
             setNextId(nextId + 1);
           }}
         >
-          Thêm mệnh giá
-        </Button>
+          <Plus size={18} strokeWidth={2.25} aria-hidden />
+          Thêm
+        </button>
       )}
-      <dl className="mt-4 grid grid-cols-2 gap-y-1 rounded-lg border border-paper-300 bg-paper-200 p-4 num">
+      <dl className="mt-4 grid grid-cols-2 gap-y-1 rounded-lg border border-paper-300 bg-white p-4 num">
         <dt className="text-ink-500">Dự kiến{source === 'device' ? ' (theo máy)' : ''}</dt>
         <dd className="text-right">{formatVnd(expectedVnd)}</dd>
         <dt className="text-ink-500">Đếm được</dt>
@@ -403,20 +367,27 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
   const byPhone = /^[\d\s+().-]+$/.test(query.trim());
   const phone = byPhone ? query : '';
   const canSearch = byPhone ? digits.length >= 9 : query.trim().length >= 2;
-  const lookup = async () => {
-    if (!canSearch) return;
-    setError(null);
-    try {
-      if (byPhone) {
-        const c = await findCustomerByPhone(query, online);
-        setResults(c ? [c] : []);
-      } else {
-        setResults(await searchCustomersByName(query, online));
-      }
-    } catch (e) {
-      setError(errText(e));
+  // Search as you type (Design §13.1): the matches drop down under the field.
+  useEffect(() => {
+    if (!canSearch) {
+      setResults(undefined);
+      return;
     }
-  };
+    let live = true;
+    const id = setTimeout(async () => {
+      setError(null);
+      try {
+        const found = byPhone ? await findCustomerByPhone(query, online).then((c) => (c ? [c] : [])) : await searchCustomersByName(query, online, 5);
+        if (live) setResults(found);
+      } catch (e) {
+        if (live) setError(errText(e));
+      }
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(id);
+    };
+  }, [query, canSearch, byPhone, online]);
   const create = async () => {
     try {
       const r = await post<{ id: string }>('/api/v1/customers', { name, phone });
@@ -426,39 +397,37 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
     }
   };
   return (
-    <Dialog title="Khách hàng" size="sm" onClose={onClose}>
+    <Dialog title="Thông tin khách hàng" size="sm" plain onClose={onClose}>
       <div className="flex flex-col gap-4">
-        <Field
-          label="Số điện thoại hoặc tên"
-          autoFocus
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setResults(undefined);
-          }}
-          onKeyDown={(e) => e.key === 'Enter' && void lookup()}
-        />
-        <Button variant="primary" full disabled={!canSearch} onClick={lookup}>
-          Tìm
-        </Button>
-        {!!results?.length && (
-          <ul className="flex max-h-72 flex-col divide-y divide-paper-300 overflow-y-auto rounded-lg border border-paper-300">
-            {results.map((c) => (
-              <li key={c.id}>
-                <button type="button" className="flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left hover:bg-navy-50" onClick={() => onPick(c)}>
-                  <User size={20} className="shrink-0 text-ink-500" aria-hidden />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-semibold">{c.name}</span>
-                    <span className="text-[13px] text-ink-500 num">
-                      {c.phoneE164 ? `${formatPhone(c.phoneE164)} · ` : ''}
-                      {formatNumber(c.pointsBalance)} điểm
+        <div>
+          <div className="relative">
+            <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
+            <input
+              autoFocus
+              aria-label="Số điện thoại hoặc tên khách hàng"
+              placeholder="Nhập SĐT/tên"
+              className={clsx('h-11 w-full border border-paper-500 bg-white pr-3 pl-10 text-base sm:text-sm', results?.length ? 'rounded-t-md' : 'rounded-md')}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && results?.length === 1 && onPick(results[0]!)}
+            />
+          </div>
+          {!!results?.length && (
+            <ul role="listbox" aria-label="Khách hàng phù hợp" className="flex max-h-72 flex-col divide-y divide-paper-300 overflow-y-auto rounded-b-md border border-t-0 border-paper-500 bg-white shadow-md">
+              {results.map((c) => (
+                <li key={c.id} role="option" aria-selected={false}>
+                  <button type="button" className="flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left hover:bg-navy-50" onClick={() => onPick(c)}>
+                    <User size={20} className="shrink-0 text-ink-500" aria-hidden />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-semibold">{c.name}</span>
+                      {c.phoneE164 && <span className="text-[13px] text-ink-500 num">{formatPhone(c.phoneE164)}</span>}
                     </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         {results?.length === 0 && !byPhone && <InlineAlert tone="warning">Không tìm thấy khách hàng tên “{query.trim()}”{online ? '' : ' trong dữ liệu trên máy'}.</InlineAlert>}
         {results?.length === 0 &&
           byPhone &&

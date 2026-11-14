@@ -141,10 +141,11 @@ describe('completing a sale (FR-POS-06, UC-01)', () => {
     expect(n!.n).toBe(2);
   });
 
-  it('validates payments: sum, card approval code, transfer reference', async () => {
+  it('validates payments: sum and transfer reference; a card needs no approval code', async () => {
     const base = { ...cart([{ variantId: pen, qty: 1 }]), shiftId };
     expect((await h.call('POST', '/api/v1/pos/sales', { cookie: cashier, body: { ...base, payments: [{ method: 'cash', amountVnd: 5000 }] } })).body.error.code).toBe('payment_mismatch');
-    expect((await h.call('POST', '/api/v1/pos/sales', { cookie: cashier, body: { ...base, payments: [{ method: 'card', amountVnd: 6000, ref: '' }] } })).status).toBe(400);
+    // No approval code: the card passes validation and only the sum is checked (FR-POS-06).
+    expect((await h.call('POST', '/api/v1/pos/sales', { cookie: cashier, body: { ...base, payments: [{ method: 'card', amountVnd: 5000 }] } })).body.error.code).toBe('payment_mismatch');
     expect((await h.call('POST', '/api/v1/pos/sales', { cookie: cashier, body: { ...base, payments: [{ method: 'transfer', amountVnd: 6000, ref: 'O0I1' }] } })).status).toBe(400);
     const split = await h.call('POST', '/api/v1/pos/sales', {
       cookie: cashier,

@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, Check, ChevronRight, Coins, Gift, Info, LogOut, Menu, Minus, Plus, RefreshCw, ScanBarcode, Search, ShoppingBasket, ShoppingCart, User, Wallet, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, ChevronRight, Coins, Gift, Info, LogOut, Menu, Minus, Package, Plus, RefreshCw, ScanBarcode, Search, ShoppingBasket, ShoppingCart, User, Wallet, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Button, Field, InlineAlert, Skeleton } from '../components/ui';
+import { ConfirmDialog } from '../components/data';
 import { get } from '../lib/api';
 import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { can, useMe, type Me } from '../lib/session';
@@ -208,6 +209,22 @@ function ConnectionPill() {
 }
 
 // Small stepper (Design §13.1): bare icons 32 × 44 px touch area, the quantity in a 32 × 28 px box.
+/** Search result photo 40 × 60, or a placeholder when there is none or it cannot load (offline). */
+function ResultThumb({ item }: { item: CachedItem }) {
+  const [failed, setFailed] = useState(false);
+  const book = (item.kind ?? 'book') === 'book';
+  const box = 'h-[60px] w-10 shrink-0 rounded-sm border border-paper-300';
+  if (!item.imageFileId || failed) {
+    const Icon = book ? BookOpen : Package;
+    return (
+      <span className={clsx(box, 'flex items-center justify-center bg-paper-200')}>
+        <Icon size={16} className="text-ink-300" aria-hidden />
+      </span>
+    );
+  }
+  return <img src={`/api/v1/files/${item.imageFileId}`} alt="" loading="lazy" onError={() => setFailed(true)} className={clsx(box, 'bg-white', book ? 'object-cover' : 'object-contain')} />;
+}
+
 const stepBtn = 'inline-flex h-11 w-8 items-center justify-center rounded-md text-ink-700 hover:text-navy-700 disabled:opacity-40';
 
 interface Result extends CachedItem {
@@ -222,7 +239,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const [notFound, setNotFound] = useState<string | null>(null);
   const [camera, setCamera] = useState(false);
   const [priced, setPriced] = useState<PricedCart | null>(null);
-  const [dialog, setDialog] = useState<null | { kind: 'customer' } | { kind: 'approval'; action: CartApproval['action']; reason: string } | { kind: 'pay' } | { kind: 'done'; outcome: SaleOutcome } | { kind: 'close'; expected: number; source: 'server' | 'device' } | { kind: 'cash' } | { kind: 'held' } | { kind: 'points' } | { kind: 'menu' } | { kind: 'preorder' }>(null);
+  const [dialog, setDialog] = useState<null | { kind: 'customer' } | { kind: 'cancelSale' } | { kind: 'approval'; action: CartApproval['action']; reason: string } | { kind: 'pay' } | { kind: 'done'; outcome: SaleOutcome } | { kind: 'close'; expected: number; source: 'server' | 'device' } | { kind: 'cash' } | { kind: 'held' } | { kind: 'points' } | { kind: 'menu' } | { kind: 'preorder' }>(null);
   const [message, setMessage] = useState<{ tone: 'danger' | 'info' | 'success'; text: string } | null>(null);
   const [registerCode, setRegisterCode] = useState('');
   const [heldCount, setHeldCount] = useState(0);
@@ -425,6 +442,21 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     );
   });
   const searching = results.length > 0 || q.trim().length >= 2;
+  // Live stock of the results on screen, online only; not cached on the device (Design §13.1, TDD §7.3).
+  const resultIds = results.map((r) => r.variantId);
+  const stock = useQuery({
+    queryKey: ['pos-stock', resultIds],
+    enabled: status.online && resultIds.length > 0,
+    staleTime: 15_000,
+    queryFn: async () => {
+      const r = await get<{ items: { variantId: string; available: number }[] }>(`/api/v1/inventory/levels?${resultIds.map((id) => `variant=${id}`).join('&')}`);
+      const m = new Map<string, number>();
+      for (const x of r.items) m.set(x.variantId, (m.get(x.variantId) ?? 0) + x.available);
+      // A product with no stock row has none.
+      for (const id of resultIds) if (!m.has(id)) m.set(id, 0);
+      return m;
+    },
+  });
 
   /** Customer row under the search field, outside the cart (Design §13.1): name and phone only, no points. */
   const customerRow = (
@@ -465,7 +497,20 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const cartPanel = (
     <div className="flex h-full flex-col">
       {/* Card title, like the other cards (Design §13.1). */}
-      <h2 className="px-4 pt-3 pb-2 text-sm font-semibold text-ink-900">Thông tin sản phẩm</h2>
+      <div className="flex items-center justify-between gap-2 px-4 pt-2 pb-1">
+        <h2 className="text-sm font-semibold text-ink-900">Thông tin sản phẩm</h2>
+        {/* Drop the sale before it is confirmed (Design §13.1). */}
+        <button
+          type="button"
+          className="-mr-2 inline-flex size-9 items-center justify-center rounded-full text-ink-700 hover:bg-navy-50 disabled:opacity-40"
+          aria-label="Hủy đơn"
+          title="Hủy đơn"
+          onClick={() => setDialog({ kind: 'cancelSale' })}
+          disabled={readOnly || (!cart.lines.length && !cart.customer)}
+        >
+          <X size={18} aria-hidden />
+        </button>
+      </div>
       <ul className="flex-1 divide-y divide-paper-300 overflow-y-auto" aria-live="polite">
         {cart.lines.length === 0 && (
           <li className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-ink-500">
@@ -532,11 +577,11 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             </>
           )}
         </dl>
-        <div className="mt-3 grid grid-cols-[1fr_3fr] gap-2">
+        <div className="mt-3 grid grid-cols-2 gap-2">
           <Button variant="secondary" size="lg" className="px-2!" onClick={holdCart} disabled={!cart.lines.length || readOnly || !!cart.preorder}>
             Giữ giỏ
           </Button>
-          <Button variant="primary" size="lg" full icon={Check} disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
+          <Button variant="primary" size="lg" full disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
             Xác nhận
           </Button>
         </div>
@@ -599,6 +644,8 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
       )}
       <div className="flex min-h-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col gap-3 p-4">
+          {/* Search with its results as a dropdown under the field (Design §13.1). */}
+          <div className="relative">
           <form onSubmit={submitSearch} className="flex items-center gap-2">
             <div className="relative min-w-0 flex-1">
             <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
@@ -613,22 +660,21 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
                 setQ(e.target.value);
                 setNotFound(null);
               }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setQ('');
+                  setResults([]);
+                }
+              }}
               disabled={readOnly}
             />
             </div>
-            <button type="button" className="inline-flex size-12 shrink-0 items-center justify-center rounded-full bg-navy-700 text-white hover:bg-navy-800" aria-label="Quét bằng camera" onClick={() => setCamera(true)}>
-              <ScanBarcode size={22} aria-hidden />
+            <button type="button" className="inline-flex size-12 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50" aria-label="Quét bằng camera" onClick={() => setCamera(true)}>
+              <ScanBarcode size={26} aria-hidden />
             </button>
           </form>
-          {customerRow}
-          {notFound && <InlineAlert tone="danger">Không tìm thấy mã {notFound}. Thử tìm theo tên sản phẩm.</InlineAlert>}
-          {message && (
-            <div onClick={() => setMessage(null)}>
-              <InlineAlert tone={message.tone}>{message.text}</InlineAlert>
-            </div>
-          )}
-          {searching ? (
-            <ul className="min-h-0 flex-1 divide-y divide-paper-300 overflow-y-auto rounded-lg border border-paper-300 bg-white shadow-sm">
+          {searching && (
+            <ul aria-label="Sản phẩm phù hợp" className="absolute top-full right-0 left-0 z-30 mt-1 max-h-[min(420px,60dvh)] divide-y divide-paper-300 overflow-y-auto rounded-lg border border-paper-300 bg-white shadow-lg">
               {results.map((r) => (
                 <li key={r.variantId}>
                   <button
@@ -641,28 +687,35 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
                       refocus();
                     }}
                   >
-                    <span className="flex h-[60px] w-10 shrink-0 items-center justify-center rounded-sm border border-paper-300 bg-paper-200">
-                      <BookOpen size={16} className="text-ink-300" aria-hidden />
-                    </span>
+                    {/* Only the photo and the name (Design §13.1). */}
+                    <ResultThumb item={r} />
                     <span className="min-w-0 flex-1">
                       <span className="line-clamp-2 font-medium">{itemTitle(r)}</span>
-                      <span className="block text-[13px] text-ink-500">
-                        {r.authors.join(', ')} {r.authors.length ? '· ' : ''}
-                        <span className="code">{r.sku}</span>
-                      </span>
+                      {stock.data?.has(r.variantId) &&
+                        (stock.data.get(r.variantId)! > 0 ? (
+                          <span className="block text-[13px] text-ink-500 num">Tồn: {formatNumber(stock.data.get(r.variantId)!)}</span>
+                        ) : (
+                          <span className="block text-[13px] text-danger-700">Hết hàng</span>
+                        ))}
                     </span>
-                    <span className="font-semibold num">{formatVnd(r.priceVnd)}</span>
                   </button>
                 </li>
               ))}
               {!results.length && <li className="p-6 text-center text-ink-500">Không có sản phẩm phù hợp.</li>}
             </ul>
-          ) : (
-            // Tablet portrait / phone: the whole cart on the selling screen, no bottom sheet (Design §13.1).
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-paper-300 bg-white shadow-sm lg:hidden" aria-label="Giỏ hàng">
-              {cartPanel}
+          )}
+          </div>
+          {customerRow}
+          {notFound && <InlineAlert tone="danger">Không tìm thấy mã {notFound}. Thử tìm theo tên sản phẩm.</InlineAlert>}
+          {message && (
+            <div onClick={() => setMessage(null)}>
+              <InlineAlert tone={message.tone}>{message.text}</InlineAlert>
             </div>
           )}
+          {/* Tablet portrait / phone: the whole cart on the selling screen, no bottom sheet (Design §13.1). */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-paper-300 bg-white shadow-sm lg:hidden" aria-label="Giỏ hàng">
+            {cartPanel}
+          </div>
         </section>
         <aside className="hidden w-[420px] shrink-0 border-l border-paper-300 bg-white lg:block">{cartPanel}</aside>
       </div>
@@ -687,6 +740,17 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           }}
         />
       )}
+      {dialog?.kind === 'cancelSale' && (
+        <ConfirmDialog
+          title="Hủy đơn này?"
+          body="Các sản phẩm, khách hàng và giảm giá trong giỏ sẽ bị xóa. Đơn chưa được lưu nên không cần hoàn tiền."
+          confirm="Hủy đơn"
+          cancel="Giữ đơn"
+          destructive
+          onClose={() => setDialog(null)}
+          onConfirm={async () => newSale()}
+        />
+      )}
       {dialog?.kind === 'approval' && (
         <ApprovalDialog
           action={dialog.action}
@@ -709,7 +773,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           onClose={() => setDialog(null)}
         />
       )}
-      {dialog?.kind === 'done' && <SaleDone outcome={dialog.outcome} online={status.online} onNew={newSale} />}
+      {dialog?.kind === 'done' && <SaleDone outcome={dialog.outcome} onNew={newSale} />}
       {dialog?.kind === 'points' && cart.customer && (
         <SimpleInput
           title="Đổi điểm"

@@ -121,12 +121,12 @@ export function BookLookup({ onPick, endpoint = '/api/v1/catalog/book-lookup' }:
         </div>
         <button
           type="button"
-          className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-navy-50 text-navy-700 hover:bg-navy-100"
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50"
           aria-label="Quét ISBN"
           title="Quét ISBN"
           onClick={() => setScanning(true)}
         >
-          <ScanBarcode size={20} aria-hidden />
+          <ScanBarcode size={24} aria-hidden />
         </button>
       </div>
 

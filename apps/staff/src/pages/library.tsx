@@ -670,8 +670,8 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
                   onChange={(e) => setScan(e.target.value)}
                 />
               </div>
-              <button type="button" className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-navy-50 text-navy-700 hover:bg-navy-100" aria-label="Quét mã bằng camera" onClick={() => setCamera(true)}>
-                <ScanBarcode size={20} aria-hidden />
+              <button type="button" className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50" aria-label="Quét mã bằng camera" onClick={() => setCamera(true)}>
+                <ScanBarcode size={24} aria-hidden />
               </button>
             </form>
             {suggestions.length + holdSuggestions.length > 0 && (
@@ -934,8 +934,8 @@ function ReturnDialog({ initialBarcode, onClose }: { initialBarcode?: string; on
                 placeholder="Nhập mã cá biệt/tên sách"
               />
               {/* Camera scan fills the copy code (Design §13.8). */}
-              <button type="button" className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-navy-50 text-navy-700 hover:bg-navy-100" aria-label="Quét mã bằng camera" onClick={() => setCamera(true)}>
-                <ScanBarcode size={20} aria-hidden />
+              <button type="button" className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50" aria-label="Quét mã bằng camera" onClick={() => setCamera(true)}>
+                <ScanBarcode size={24} aria-hidden />
               </button>
             </div>
             {term.length >= 2 && !picked && matches.data && (

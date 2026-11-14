@@ -8,7 +8,7 @@ import { t } from '../lib/i18n';
 /** Touch-first POS widgets (Design §10.3, §10.9, §13). */
 
 /** `plain`: no divider lines between title, body and buttons (confirmation dialogs, Design §13.8). */
-export function Dialog({ title, onClose, children, size = 'md', footer, plain }: { title: string; onClose?: (() => void) | undefined; children: ReactNode; size?: 'sm' | 'md' | 'lg'; footer?: ReactNode; plain?: boolean }) {
+export function Dialog({ title, onClose, children, size = 'md', footer, plain, hideHeader }: { title: string; onClose?: (() => void) | undefined; children: ReactNode; size?: 'sm' | 'md' | 'lg'; footer?: ReactNode; plain?: boolean; /** No title bar; the title stays the dialog's accessible name. */ hideHeader?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   // Latest onClose without re-running the effect: callers pass a new arrow on every render, and
   // re-running it pulled focus back to the first button while staff were typing.
@@ -33,6 +33,7 @@ export function Dialog({ title, onClose, children, size = 'md', footer, plain }:
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 bg-[rgba(26,38,56,0.45)]" onClick={onClose} />
       <div ref={ref} className={clsx('relative flex max-h-[90dvh] w-full flex-col rounded-t-xl bg-white shadow-lg sm:rounded-lg', w)}>
+        {!hideHeader && (
         <header className={clsx('flex items-center justify-between gap-2 px-6 py-4', !plain && 'border-b border-paper-300', plain && 'pb-0')}>
           <h2 className="text-base font-semibold">{title}</h2>
           {onClose && (
@@ -41,7 +42,8 @@ export function Dialog({ title, onClose, children, size = 'md', footer, plain }:
             </button>
           )}
         </header>
-        <div className="overflow-y-auto px-6 py-4">{children}</div>
+        )}
+        <div className={clsx('overflow-y-auto px-6', hideHeader ? 'pt-6 pb-4' : 'py-4')}>{children}</div>
         {footer && <footer className={clsx('flex justify-end gap-2 px-6 py-4 max-sm:[&>*]:flex-1', !plain && 'border-t border-paper-300', plain && 'pt-2')}>{footer}</footer>}
       </div>
     </div>

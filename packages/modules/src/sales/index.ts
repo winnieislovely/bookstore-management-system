@@ -416,7 +416,8 @@ export const PaymentInputSchema = z.discriminatedUnion('method', [
       .transform(normalizePaymentRef)
       .refine((r) => r.length === PAYMENT_REF_LENGTH && [...r].every((ch) => PAYMENT_REF_ALPHABET.includes(ch)), 'Mã tham chiếu chuyển khoản không hợp lệ.'),
   }),
-  z.object({ method: z.literal('card'), amountVnd: z.number().int().positive(), ref: z.string().trim().min(1, 'Cần nhập mã chuẩn chi của máy POS thẻ.').max(40) }),
+  /** Card on the standalone terminal: no approval code is asked for (FR-POS-06); `ref` stays optional. */
+  z.object({ method: z.literal('card'), amountVnd: z.number().int().positive(), ref: z.string().trim().max(40).optional() }),
 ]);
 
 export const BuyerSchema = z.object({
@@ -637,7 +638,7 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
         method: p.method,
         amountVnd: p.amountVnd,
         tenderedVnd: p.method === 'cash' ? (p.tenderedVnd ?? p.amountVnd) : null,
-        ref: p.method === 'transfer' || p.method === 'card' ? p.ref : null,
+        ref: p.method === 'transfer' || p.method === 'card' ? (p.ref || null) : null,
         // Staff confirm transfer receipt on the payment screen ("Đã nhận tiền", FR-POS-06).
         confirmedBy: p.method === 'transfer' ? actor.userId : null,
         confirmedAt: p.method === 'transfer' ? now : null,

@@ -21,6 +21,9 @@ export interface CachedItem {
   publisherId: string | null;
   brandId: string | null;
   isBundle: boolean;
+  /** Item kind and first photo (null when none), for the search results (TDD §7.3). */
+  kind?: string;
+  imageFileId?: string | null;
   /** Folded search text: both titles, authors, SKU, barcodes (diacritic-insensitive). */
   search: string;
 }
