@@ -183,6 +183,12 @@ describe('completing a sale (FR-POS-06, UC-01)', () => {
     expect(amount.status).toBe(400);
   });
 
+  it('reads the stock of several products at once for the search results (FR-POS-01)', async () => {
+    const r = await h.call('GET', `/api/v1/inventory/levels?variant=${book}&variant=${pen}`, { cookie: cashier });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(new Set(r.body.items.map((x: { variantId: string }) => x.variantId))).toEqual(new Set([book, pen]));
+  });
+
   it('never takes a changed selling price (FR-POS-02)', async () => {
     const r = await h.call('POST', '/api/v1/pos/sales', {
       cookie: manager,

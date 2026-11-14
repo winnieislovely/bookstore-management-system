@@ -22,7 +22,20 @@ export interface ProductHit {
 
 export const hitTitle = (h: Pick<ProductHit, 'title' | 'titleVi'>) => h.titleVi || h.title;
 
-export function ProductSearch({ onPick, onUnknownCode, placeholder = 'Quét mã vạch hoặc nhập SKU / tên sản phẩm', autoFocus }: { onPick: (h: ProductHit) => void; onUnknownCode?: (code: string) => void; placeholder?: string; autoFocus?: boolean }) {
+export function ProductSearch({
+  onPick,
+  onUnknownCode,
+  placeholder = 'Quét mã vạch hoặc nhập SKU / tên sản phẩm',
+  autoFocus,
+  hideSku,
+}: {
+  onPick: (h: ProductHit) => void;
+  onUnknownCode?: (code: string) => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+  /** Selling forms (Tạo đơn giao): name with the stock under it, price at the right; no SKU (Design §12.9). */
+  hideSku?: boolean;
+}) {
   const [q, setQ] = useState('');
   const [miss, setMiss] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -85,6 +98,16 @@ export function ProductSearch({ onPick, onUnknownCode, placeholder = 'Quét mã 
           {found.data.items.map((h) => (
             <li key={h.variantId}>
               <button type="button" className="flex w-full items-center gap-3 px-4 py-2 text-left text-sm hover:bg-navy-50" onClick={() => pick(h)}>
+                {hideSku ? (
+                  <>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{hitTitle(h)}</span>
+                      {h.available > 0 ? <span className="text-[13px] text-ink-500 num">Tồn {formatNumber(h.available)}</span> : <span className="text-[13px] text-danger-700">Hết hàng</span>}
+                    </span>
+                    <span className="text-right whitespace-nowrap num">{formatVnd(h.priceVnd)}</span>
+                  </>
+                ) : (
+                <>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{hitTitle(h)}</span>
                   <span className="code text-ink-500">{h.sku}</span>
@@ -93,6 +116,8 @@ export function ProductSearch({ onPick, onUnknownCode, placeholder = 'Quét mã 
                   {formatVnd(h.priceVnd)}
                   <span className="block text-[13px] text-ink-500">Tồn {formatNumber(h.available)}</span>
                 </span>
+                </>
+                )}
               </button>
             </li>
           ))}

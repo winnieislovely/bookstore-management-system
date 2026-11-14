@@ -406,7 +406,7 @@ export function OrderNewPage() {
             <div className="h-5" aria-hidden />
             {/* Each line: name, price and stock, then quantity, Tag (discount) and delete (Design §12.9). */}
             <p className="mb-1 text-[13px] font-medium text-ink-700">Sản phẩm</p>
-            <ProductSearch onPick={add} placeholder="Nhập SKU / tên sản phẩm" />
+            <ProductSearch onPick={add} hideSku placeholder="Nhập SKU / tên sản phẩm" />
             {lines.length > 0 && (
               <ul className="mt-4 divide-y divide-paper-300">
                 {lines.map((l, i) => {
@@ -510,17 +510,12 @@ export function OrderNewPage() {
                       setF({ ...f, shippingVnd: v });
                     }}
                   />
-                  <p className="text-[13px] text-ink-500" aria-live="polite">
-                    {feeManual
-                      ? 'Phí nhập tay.'
-                      : !feeKey
-                        ? 'Tự tính theo GHN khi đã chọn phường/xã và sản phẩm.'
-                        : fee.isFetching
-                          ? 'Đang tính phí GHN…'
-                          : fee.isError
-                            ? (fee.error as Error).message
-                            : 'Phí GHN, tự cập nhật khi đổi địa chỉ hoặc sản phẩm.'}
-                  </p>
+                  {/* Only states worth reading: no standing hint under the field (Design §12.9). */}
+                  {(feeManual || (feeKey && (fee.isFetching || fee.isError))) && (
+                    <p className="text-[13px] text-ink-500" aria-live="polite">
+                      {feeManual ? 'Phí nhập tay.' : fee.isFetching ? 'Đang tính phí GHN…' : (fee.error as Error).message}
+                    </p>
+                  )}
                   {feeManual && feeKey && (
                     <Button variant="tonal" size="sm" icon={Calculator} onClick={() => setFeeManual(false)}>
                       Tính lại theo GHN
@@ -532,10 +527,10 @@ export function OrderNewPage() {
                 <div className="flex flex-col gap-1">
                   <span className="text-[13px] font-medium text-ink-700">Giảm giá</span>
                   <DiscountInput size="md" value={discount} onChange={setDiscount} disabled={!lines.length} />
-                  <p className="text-[13px] text-ink-500">{manualVnd > 0 ? `= ${formatVnd(manualVnd)}` : 'Vượt hạn mức sẽ cần quản lý duyệt.'}</p>
+                  {manualVnd > 0 && <p className="text-[13px] text-ink-500">= {formatVnd(manualVnd)}</p>}
                 </div>
               )}
-              <TextArea label="Ghi chú nội bộ" value={f.note} onChange={set('note')} />
+              <TextArea label="Ghi chú" value={f.note} onChange={set('note')} />
             </div>
           </Card>
           <Card title="Tổng cộng">

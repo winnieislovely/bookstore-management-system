@@ -85,7 +85,8 @@ export function defineRoute<
       requirePermission(ctx, def.access);
     }
     const body = def.body ? def.body.parse(await c.req.json().catch(() => undefined)) : undefined;
-    const query = def.query ? def.query.parse(c.req.query()) : undefined;
+    // A repeated key (?variant=a&variant=b) arrives as an array; a single one as a string.
+    const query = def.query ? def.query.parse(Object.fromEntries(Object.entries(c.req.queries()).map(([k, v]) => [k, v.length > 1 ? v : v[0]]))) : undefined;
     const params = def.params ? def.params.parse(c.req.param()) : undefined;
     const result = await handler({ ctx, body, query, params, c } as Handled<z.infer<B>, z.infer<Q>, z.infer<P>>);
     if (result instanceof Response) return result;
