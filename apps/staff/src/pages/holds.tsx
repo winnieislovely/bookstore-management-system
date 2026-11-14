@@ -1,8 +1,8 @@
 import { CHANNEL_KINDS } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, HandCoins, Plus, RadioTower } from 'lucide-react';
+import { HandCoins, Plus, RadioTower } from 'lucide-react';
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { ConfirmDialog, DataTable, SelectField, Tabs, toast, useParam, type Column } from '../components/data';
 import { ORDER_SOURCE } from '../components/order-ui';
 import { Button, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
@@ -53,11 +53,6 @@ export function CodPage() {
   return (
     <>
       <PageHeader
-        breadcrumb={
-          <Link to="/orders" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Giao hàng
-          </Link>
-        }
         title="Đối soát COD"
       />
       <div className="mb-4">

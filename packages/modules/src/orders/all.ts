@@ -5,11 +5,12 @@ import { can, errors, tsParam, type Ctx } from '../platform/index.js';
 
 /**
  * The Orders screen (“Đơn hàng”, FR-ORD-01, FR-ORD-05, TDD §6.2): every order of the store in one
- * list – counter sales, pre-orders and online orders. Each kind keeps its own table and record;
+ * list – counter sales and online orders; pre-orders have their own screen (FR-POS-09) and show here
+ * once collected, as the counter sale. Each kind keeps its own table and record;
  * this is a read-only union. Rows the user may not see are left out per kind.
  */
 
-export const ORDER_TYPES = ['counter', 'online', 'preorder'] as const;
+export const ORDER_TYPES = ['counter', 'online'] as const;
 export type OrderType = (typeof ORDER_TYPES)[number];
 
 const csv = z
@@ -20,7 +21,7 @@ const csv = z
 export const AllOrdersQuery = z.object({
   q: z.string().trim().max(100).optional(),
   type: csv.pipe(z.array(z.enum(ORDER_TYPES)).min(1).optional()),
-  /** Status values of any kind (sale: completed/voided; online and pre-order statuses as stored). */
+  /** Status values of any kind (sale: completed/voided; online statuses as stored). */
   status: csv.pipe(z.array(z.string().max(40)).min(1).optional()),
   source: csv.pipe(z.array(z.string().max(40)).min(1).optional()),
   from: z.iso.datetime().optional(),
@@ -54,8 +55,7 @@ export async function listAllOrders(ctx: Ctx, input: z.input<typeof AllOrdersQue
   const q = AllOrdersQuery.parse(input);
   const seeSales = can(actor, 'sale.view_all') || can(actor, 'sale.create');
   const seeOnline = can(actor, 'online.manage') || can(actor, 'online.confirm');
-  const seePreorders = can(actor, 'sale.create') || can(actor, 'sale.view_all');
-  if (!seeSales && !seeOnline && !seePreorders) throw errors.forbidden('online.confirm');
+  if (!seeSales && !seeOnline) throw errors.forbidden('online.confirm');
 
   const parts: SQL[] = [];
   if (seeSales) {
@@ -76,15 +76,6 @@ export async function listAllOrders(ctx: Ctx, input: z.input<typeof AllOrdersQue
              array[o.payment_method] as payment, o.paid_at, o.status, o.review_reasons,
              o.status in ('new', 'pending_review', 'return_requested') as needs_action, o.read_at is null as unread, o.created_at as at
       from orders.web_order o left join orders.channel ch on ch.id = o.channel_id`);
-  }
-  if (seePreorders) {
-    parts.push(sql`
-      select 'preorder'::text as type, p.id, p.doc_no, p.source, null::text as channel_name,
-             c.name as customer_name, c.phone_e164 as phone,
-             coalesce((select sum(l.qty * l.unit_price_vnd) from orders.preorder_line l where l.preorder_id = p.id), 0) as total_vnd,
-             case when p.deposit_method is null then '{}'::text[] else array[p.deposit_method] end as payment, null::timestamptz as paid_at,
-             p.status, '{}'::text[] as review_reasons, false as needs_action, false as unread, p.created_at as at
-      from orders.preorder p join crm.customer c on c.id = p.customer_id`);
   }
   const union = sql.join(parts, sql` union all `);
 

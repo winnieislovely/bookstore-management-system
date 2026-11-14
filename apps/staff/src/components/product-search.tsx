@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Search } from 'lucide-react';
+import { Plus, Search } from 'lucide-react';
 import { useRef, useState, type FormEvent } from 'react';
 import { ApiError, get } from '../lib/api';
 import { formatNumber, formatVnd } from '../lib/format';
@@ -28,6 +28,7 @@ export function ProductSearch({
   placeholder = 'Quét mã vạch hoặc nhập SKU / tên sản phẩm',
   autoFocus,
   hideSku,
+  onFreeText,
 }: {
   onPick: (h: ProductHit) => void;
   onUnknownCode?: (code: string) => void;
@@ -35,6 +36,8 @@ export function ProductSearch({
   autoFocus?: boolean;
   /** Selling forms (Tạo đơn giao): name with the stock under it, price at the right; no SKU (Design §12.9). */
   hideSku?: boolean;
+  /** Pre-orders: with no match, offer the typed text as a book not in the catalogue (Design §12.8). */
+  onFreeText?: (text: string) => void;
 }) {
   const [q, setQ] = useState('');
   const [miss, setMiss] = useState<string | null>(null);
@@ -44,6 +47,13 @@ export function ProductSearch({
 
   const pick = (h: ProductHit) => {
     onPick(h);
+    setQ('');
+    setMiss(null);
+    input.current?.focus();
+  };
+
+  const addText = (text: string) => {
+    onFreeText?.(text);
     setQ('');
     setMiss(null);
     input.current?.focus();
@@ -62,6 +72,7 @@ export function ProductSearch({
       if (!(err instanceof ApiError && err.code === 'code_not_found')) throw err;
     }
     if (found.data?.items.length === 1) return pick(found.data.items[0]!);
+    if (onFreeText && found.data?.items.length === 0) return addText(code);
     if (onUnknownCode && /^[\w-]{4,}$/.test(code)) {
       onUnknownCode(code);
       setQ('');
@@ -94,7 +105,16 @@ export function ProductSearch({
       )}
       {found.data && term.length >= 2 && q.trim() && (
         <ul className="absolute z-20 mt-1 max-h-72 w-full divide-y divide-paper-300 overflow-y-auto rounded-md border border-paper-300 bg-white shadow-md">
-          {found.data.items.length === 0 && <li className="px-4 py-3 text-sm text-ink-500">Không có sản phẩm phù hợp.</li>}
+          {found.data.items.length === 0 &&
+            (onFreeText ? (
+              <li>
+                <button type="button" className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium text-navy-700 hover:bg-navy-50" onClick={() => addText(q.trim())}>
+                  <Plus size={16} aria-hidden /> Thêm “{q.trim()}” – sách chưa có, cần đặt
+                </button>
+              </li>
+            ) : (
+              <li className="px-4 py-3 text-sm text-ink-500">Không có sản phẩm phù hợp.</li>
+            ))}
           {found.data.items.map((h) => (
             <li key={h.variantId}>
               <button type="button" className="flex w-full items-center gap-3 px-4 py-2 text-left text-sm hover:bg-navy-50" onClick={() => pick(h)}>

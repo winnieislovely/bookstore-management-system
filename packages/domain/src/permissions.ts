@@ -35,6 +35,7 @@ export const PERMISSIONS = {
   'inventory.count_approve': 'Duyệt kiểm kho và điều chỉnh lớn',
   'purchasing.manage': 'Nhập hàng, nhà cung cấp, đơn đặt NCC',
   'purchasing.payables': 'Quyết toán ký gửi',
+  'preorder.manage': 'Báo giá và xử lý đặt trước', // derived: FR-ORD-14/16 quote, order, deposit decisions
   // Orders (R2)
   'online.manage': 'Xử lý đơn online / mạng xã hội',
   'online.confirm_payment': 'Xác nhận chuyển khoản',

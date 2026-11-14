@@ -1,11 +1,13 @@
 import {
   BadgePercent,
   BookOpen,
+  CalendarClock,
   Boxes,
   Building2,
   ArrowLeftRight,
   ClipboardList,
   Library,
+  HandCoins,
   Handshake,
   Landmark,
   House,
@@ -50,7 +52,9 @@ export const NAV: NavGroup[] = [
     label: 'nav.group.store',
     items: [
       { path: '/pos', label: 'nav.selling', icon: ShoppingCart, anyOf: ['sale.create'] },
+      { path: '/preorders', label: 'nav.preorders', icon: CalendarClock, anyOf: ['sale.create'], badge: 'preordersAction' },
       { path: '/orders', label: 'nav.orders', icon: Truck, anyOf: ['online.manage'], badge: 'shipmentsWaiting' },
+      { path: '/orders/cod', label: 'nav.cod', icon: HandCoins, anyOf: ['online.manage'], badge: 'codDifferences' },
       { path: '/sales', label: 'nav.sales', icon: Receipt, anyOf: ['sale.create', 'sale.view_all', 'online.manage', 'online.confirm'], badge: ['ordersNeedingAction', 'einvoicesFailed'] },
       { path: '/customers', label: 'nav.customers', icon: Users, anyOf: ['customer.view'] },
       { path: '/promotions', label: 'nav.promotions', icon: BadgePercent, anyOf: ['promotion.manage'] },

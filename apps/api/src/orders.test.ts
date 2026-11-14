@@ -452,6 +452,9 @@ describe('reports, customers and COD (FR-SOC-02, FR-CRM-03, FR-ORD-11, BR-29)', 
     expect((await h.call('POST', `/api/v1/cod/remittances/${a.id}/reconcile`, { cookie: online, body: { receivedVnd: a.expectedVnd, statementRef: 'GHN-BK-01' } })).body.status).toBe('matched');
     const diff = await h.call('POST', `/api/v1/cod/remittances/${b.id}/reconcile`, { cookie: online, body: { receivedVnd: b.expectedVnd - 5000, statementRef: 'GHN-BK-01' } });
     expect(diff.body).toMatchObject({ status: 'difference', differenceVnd: -5000 });
+    // The Đối soát COD menu item counts the remittances with a difference.
+    const differences = (await h.call('GET', '/api/v1/cod/remittances?status=difference', { cookie: online })).body.items.length;
+    expect((await h.call('GET', '/api/v1/me/badges', { cookie: online })).body.codDifferences).toBe(differences);
     expect((await h.call('POST', `/api/v1/cod/remittances/${a.id}/reconcile`, { cookie: online, body: { receivedVnd: 1, statementRef: 'x' } })).body.error.code).toBe('already_reconciled');
   });
 

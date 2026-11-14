@@ -1,20 +1,21 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeftRight, BookOpen, CalendarClock, ChevronRight, Coins, Gift, Info, LogOut, Menu, Minus, Package, Plus, RefreshCw, ScanBarcode, Search, ShoppingBasket, ShoppingCart, User, Wallet, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, BookOpen, CalendarClock, ChevronRight, Coins, Gift, Info, LogOut, Menu, Minus, Package, Plus, RefreshCw, ScanBarcode, Search, ShoppingBasket, ShoppingCart, User, Wallet, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Button, Field, InlineAlert, Skeleton } from '../components/ui';
+import { NavDrawer } from '../components/shell';
 import { ConfirmDialog } from '../components/data';
 import { get } from '../lib/api';
-import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
+import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { can, useMe, type Me } from '../lib/session';
-import { cashMovement, closeShift, completeSale, expectedCash, openShift, refreshShift, type LocalShift, type Payment, type SaleOutcome } from './actions';
+import { closeShift, completeSale, expectedCash, openShift, refreshShift, type LocalShift, type Payment, type SaleOutcome } from './actions';
 import { findByCode, isPreorderLine, priceLocally, searchItems, useCart, type CartApproval, type PricedCart } from './cart';
 import { db, itemTitle, kvGet, kvSet, type CachedItem } from './db';
 import { deviceInfo, registerDevice, type DeviceInfo } from './device';
 import { ApprovalDialog, CloseShiftDialog, CustomerDialog, PaymentSheet, SaleDone } from './dialogs';
 import { DiscountInput } from '../components/discount-input';
-import { PreorderDialog, toCart, type PreorderRow } from './preorders';
+import { isReady, PREORDER_STATUS, toCart, type PreorderRow } from './preorders';
 import { bootstrap, flush, leaseState, startSync, usePosStatus } from './sync';
 import { CameraScanner, Dialog, MoneyInput } from './widgets';
 
@@ -239,7 +240,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const [notFound, setNotFound] = useState<string | null>(null);
   const [camera, setCamera] = useState(false);
   const [priced, setPriced] = useState<PricedCart | null>(null);
-  const [dialog, setDialog] = useState<null | { kind: 'customer' } | { kind: 'cancelSale' } | { kind: 'approval'; action: CartApproval['action']; reason: string } | { kind: 'pay' } | { kind: 'done'; outcome: SaleOutcome } | { kind: 'close'; expected: number; source: 'server' | 'device' } | { kind: 'cash' } | { kind: 'held' } | { kind: 'points' } | { kind: 'menu' } | { kind: 'preorder' }>(null);
+  const [dialog, setDialog] = useState<null | { kind: 'customer' } | { kind: 'cancelSale' } | { kind: 'approval'; action: CartApproval['action']; reason: string } | { kind: 'pay' } | { kind: 'done'; outcome: SaleOutcome } | { kind: 'close'; expected: number; source: 'server' | 'device' } | { kind: 'held' } | { kind: 'points' } | { kind: 'menu' }>(null);
   const [message, setMessage] = useState<{ tone: 'danger' | 'info' | 'success'; text: string } | null>(null);
   const [registerCode, setRegisterCode] = useState('');
   const [heldCount, setHeldCount] = useState(0);
@@ -249,7 +250,6 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const readOnly = !status.leader;
   const lease = leaseState();
   // Pre-orders past their holding period, on the header button (FR-ORD-16).
-  const badges = useQuery({ queryKey: ['badges'], enabled: status.online, queryFn: () => get<{ holdsOverdue?: number }>('/api/v1/me/badges'), refetchInterval: 60_000 });
 
   useEffect(() => {
     void kvGet<string>('registerCode').then((c) => setRegisterCode(c ?? device.deviceCode));
@@ -352,7 +352,28 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     setDialog(null);
   };
 
-  // “Nhận hàng tại quầy” on Đơn hàng opens /pos?preorder=DT-… : the pre-order goes into the cart (FR-POS-09).
+  /** Recall a ready slip into the cart (FR-POS-09); a cart in progress goes to the held carts first. */
+  const collectPreorder = async (p: PreorderRow) => {
+    const c = useCart.getState();
+    if (c.lines.length && !c.preorder) {
+      await db.heldCarts.put({ id: crypto.randomUUID(), label: c.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: c.lines, customer: c.customer, redeemPoints: c.redeemPoints, orderDiscount: c.orderDiscount }, heldAt: new Date().toISOString() });
+      setHeldCount(await db.heldCarts.count());
+      setMessage({ tone: 'info', text: 'Đã chuyển giỏ hàng đang bán vào Giỏ chờ.' });
+    }
+    const { preorder, customer } = toCart(p);
+    c.loadPreorder(preorder, customer);
+    saleKey.current = crypto.randomUUID();
+  };
+
+  // A customer's open slips, under their name (FR-POS-09, Design §13.1).
+  const custId = cart.customer?.id;
+  const custSlips = useQuery({
+    queryKey: ['preorders', 'customer', custId],
+    enabled: status.online && !!custId && !cart.preorder,
+    queryFn: () => get<{ items: PreorderRow[] }>('/api/v1/preorders', { customer: custId!, open: 'true' }).then((r) => r.items),
+  });
+
+  // “Nhận hàng tại quầy” on Đặt trước opens /pos?preorder=DT-… : the slip goes into the cart (FR-POS-09).
   const [params, setParams] = useSearchParams();
   const preorderNo = params.get('preorder');
   useEffect(() => {
@@ -362,20 +383,11 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
       try {
         const r = await get<{ items: PreorderRow[] }>('/api/v1/preorders', { q: preorderNo });
         const p = r.items.find((x) => x.docNo === preorderNo);
-        if (!p || (p.status !== 'arrived' && p.status !== 'contacted')) {
+        if (!p || !isReady(p)) {
           setMessage({ tone: 'danger', text: `Phiếu ${preorderNo} chưa có hàng hoặc đã xử lý xong.` });
           return;
         }
-        // A cart in progress goes to the held carts first.
-        const c = useCart.getState();
-        if (c.lines.length && !c.preorder) {
-          await db.heldCarts.put({ id: crypto.randomUUID(), label: c.customer?.name ?? `Giỏ ${formatDateTime(new Date())}`, payload: { lines: c.lines, customer: c.customer, redeemPoints: c.redeemPoints, orderDiscount: c.orderDiscount }, heldAt: new Date().toISOString() });
-          setHeldCount(await db.heldCarts.count());
-          setMessage({ tone: 'info', text: 'Đã chuyển giỏ hàng đang bán vào Giỏ chờ.' });
-        }
-        const { preorder, customer } = toCart(p);
-        c.loadPreorder(preorder, customer);
-        saleKey.current = crypto.randomUUID();
+        await collectPreorder(p);
       } catch (e) {
         setMessage({ tone: 'danger', text: errText(e) });
       }
@@ -412,7 +424,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
       );
     }
     return (
-      <li key={l.lineId} className={clsx('px-4 py-3 transition-colors duration-[600ms]', cart.flashLineId === l.lineId && 'bg-sand-50')}>
+      <li key={l.lineId} className="bg-white px-4 py-3">
         <div className="flex gap-2">
           <p className="line-clamp-2 flex-1 font-semibold">{item ? itemTitle(item) : '…'}</p>
         </div>
@@ -444,6 +456,14 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const searching = results.length > 0 || q.trim().length >= 2;
   // Live stock of the results on screen, online only; not cached on the device (Design §13.1, TDD §7.3).
   const resultIds = results.map((r) => r.variantId);
+  // Who copies are held for, online only (FR-POS-09, Design §13.1).
+  const holds = useQuery({
+    queryKey: ['pos-holds', resultIds],
+    enabled: status.online && resultIds.length > 0,
+    staleTime: 15_000,
+    queryFn: () =>
+      get<{ items: { variantId: string; qty: number; docNo: string; customerName: string; expiresAt: string | null }[] }>(`/api/v1/preorders/holds?${resultIds.map((id) => `variant=${id}`).join('&')}`).then((r) => r.items),
+  });
   const stock = useQuery({
     queryKey: ['pos-stock', resultIds],
     enabled: status.online && resultIds.length > 0,
@@ -482,7 +502,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         </>
       ) : (
         <Button variant="primary" size="sm" icon={User} className="relative min-h-0! before:absolute before:inset-x-0 before:-inset-y-1.5 before:content-['']" onClick={() => setDialog({ kind: 'customer' })} disabled={readOnly}>
-          Thêm khách
+          Gắn khách
         </Button>
       )}
     </div>
@@ -491,6 +511,21 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           <Gift size={14} aria-hidden /> Đủ điểm nhận ưu đãi
         </span>
       )}
+      {cart.customer &&
+        !cart.preorder &&
+        custSlips.data?.slice(0, 2).map((p) => (
+          <p key={p.id} className="mt-1 ml-6 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-info-700">
+            <CalendarClock size={14} aria-hidden />
+            <span>
+              Có phiếu đặt trước <span className="code">{p.docNo}</span> · {p.lines.length} sách · {p.status === 'contacted' && p.expiresAt ? `Đang giữ đến ${formatDate(p.expiresAt)}` : (PREORDER_STATUS[p.status]?.label ?? p.status)}
+            </span>
+            {isReady(p) && (
+              <Button variant="tonal" size="sm" onClick={() => void collectPreorder(p)} disabled={readOnly}>
+                Đưa vào giỏ
+              </Button>
+            )}
+          </p>
+        ))}
     </div>
   );
 
@@ -593,7 +628,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   return (
     <div className="flex h-dvh flex-col bg-white">
       <header className="on-navy flex h-14 shrink-0 items-center gap-3 bg-navy-700 px-4 text-white">
-        <button type="button" className="inline-flex size-10 items-center justify-center rounded-full hover:bg-navy-800" aria-label="Menu ca làm" onClick={() => setDialog({ kind: 'menu' })}>
+        <button type="button" className="inline-flex size-10 items-center justify-center rounded-full hover:bg-navy-800" aria-label="Menu chính" onClick={() => setDialog({ kind: 'menu' })}>
           <Menu size={20} aria-hidden />
         </button>
         <span className="min-w-0 flex-1 truncate font-semibold code" title={`${me.displayName} · Quầy ${registerCode}`}>
@@ -603,23 +638,25 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         <button
           type="button"
           className="relative inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-800 pointer-coarse:size-11"
-          aria-label={badges.data?.holdsOverdue ? `Đặt trước – ${badges.data.holdsOverdue} phiếu quá hạn giữ hàng` : 'Đặt trước'}
-          title="Đặt trước"
-          onClick={() => setDialog({ kind: 'preorder' })}
-          disabled={readOnly}
-        >
-          <CalendarClock size={22} aria-hidden />
-          {!!badges.data?.holdsOverdue && <span className="absolute -top-0.5 -right-0.5 min-w-5 rounded-full bg-danger-700 px-1 text-center text-xs leading-5 font-semibold num" aria-hidden>{badges.data.holdsOverdue}</span>}
-        </button>
-        <button
-          type="button"
-          className="relative inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-800 pointer-coarse:size-11"
           aria-label={`Giỏ chờ – ${heldCount} giỏ`}
           title="Giỏ chờ"
           onClick={() => setDialog({ kind: 'held' })}
         >
           <ShoppingBasket size={22} aria-hidden />
           {heldCount > 0 && <span className="absolute -top-0.5 -right-0.5 min-w-5 rounded-full bg-white px-1 text-center text-xs leading-5 font-semibold text-navy-700 num" aria-hidden>{heldCount}</span>}
+        </button>
+        <button
+          type="button"
+          className="relative inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-800 pointer-coarse:size-11"
+          aria-label="Đóng ca"
+          title="Đóng ca"
+          disabled={readOnly}
+          onClick={async () => {
+            const r = await expectedCash(shift);
+            setDialog({ kind: 'close', expected: r.expectedVnd, source: r.source });
+          }}
+        >
+          <Wallet size={22} aria-hidden />
         </button>
       </header>
       {!status.online && (
@@ -697,6 +734,18 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
                         ) : (
                           <span className="block text-[13px] text-danger-700">Hết hàng</span>
                         ))}
+                      {(() => {
+                        const hs = holds.data?.filter((h) => h.variantId === r.variantId) ?? [];
+                        if (!hs.length) return null;
+                        const h = hs[0]!;
+                        return (
+                          <span className="block text-[13px] text-ink-500">
+                            Đang giữ {h.qty} cho {h.customerName}
+                            {h.expiresAt && ` · đến ${formatDate(h.expiresAt)}`}
+                            {hs.length > 1 && ` · +${hs.length - 1} phiếu`}
+                          </span>
+                        );
+                      })()}
                     </span>
                   </button>
                 </li>
@@ -765,14 +814,6 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         />
       )}
       {dialog?.kind === 'pay' && priced && <PaymentSheet priced={priced.result} depositVnd={cart.preorder?.depositVnd ?? 0} online={status.online} onClose={() => setDialog(null)} onPay={pay} />}
-      {dialog?.kind === 'preorder' && (
-        <PreorderDialog
-          shiftId={shift.serverId ?? null}
-          online={status.online}
-          customer={cart.preorder ? null : cart.customer}
-          onClose={() => setDialog(null)}
-        />
-      )}
       {dialog?.kind === 'done' && <SaleDone outcome={dialog.outcome} onNew={newSale} />}
       {dialog?.kind === 'points' && cart.customer && (
         <SimpleInput
@@ -801,39 +842,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
           }}
         />
       )}
-      {dialog?.kind === 'menu' && (
-        <Dialog title="Ca làm" size="sm" onClose={() => setDialog(null)}>
-          <div className="flex flex-col gap-2">
-            <Button variant="secondary" full icon={ArrowLeftRight} onClick={() => setDialog({ kind: 'cash' })}>
-              Thu / chi tiền mặt
-            </Button>
-            <Button
-              variant="secondary"
-              full
-              icon={Wallet}
-              onClick={async () => {
-                const r = await expectedCash(shift);
-                setDialog({ kind: 'close', expected: r.expectedVnd, source: r.source });
-              }}
-            >
-              Đóng ca
-            </Button>
-            <Link to="/" className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-paper-500 text-sm font-medium hover:bg-navy-50">
-              <LogOut size={20} aria-hidden /> Thoát
-            </Link>
-          </div>
-        </Dialog>
-      )}
-      {dialog?.kind === 'cash' && (
-        <CashDialog
-          onClose={() => setDialog(null)}
-          onSave={async (direction, amount, reason) => {
-            await cashMovement(shift, direction, amount, reason, me.id);
-            setDialog(null);
-            setMessage({ tone: 'success', text: direction === 'in' ? 'Đã ghi thu tiền mặt.' : 'Đã ghi chi tiền mặt.' });
-          }}
-        />
-      )}
+      {dialog?.kind === 'menu' && <NavDrawer onClose={() => setDialog(null)} />}
       {dialog?.kind === 'close' && (
         <CloseShiftDialog
           expectedVnd={dialog.expected}
@@ -872,42 +881,6 @@ function SimpleInput({ title, label, initial, numeric, onSave, onClose }: { titl
   );
 }
 
-function CashDialog({ onSave, onClose }: { onSave: (d: 'in' | 'out', amount: number, reason: string) => Promise<void>; onClose: () => void }) {
-  const [direction, setDirection] = useState<'in' | 'out'>('out');
-  const [amount, setAmount] = useState<number | null>(null);
-  const [reason, setReason] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <Dialog
-      title="Thu / chi tiền mặt"
-      size="sm"
-      onClose={onClose}
-      footer={
-        <Button
-          variant="primary"
-          disabled={!amount || !reason.trim()}
-          onClick={() => onSave(direction, amount!, reason.trim()).catch((e) => setError(errText(e)))}
-        >
-          Lưu
-        </Button>
-      }
-    >
-      <div className="flex flex-col gap-4">
-        <div className="inline-flex rounded-full bg-paper-200 p-1" role="radiogroup">
-          {(['out', 'in'] as const).map((d) => (
-            <button key={d} type="button" role="radio" aria-checked={direction === d} className={clsx('h-10 flex-1 rounded-full px-4 text-sm', direction === d && 'bg-white shadow-sm')} onClick={() => setDirection(d)}>
-              {d === 'out' ? 'Chi ra' : 'Thu vào'}
-            </button>
-          ))}
-        </div>
-        <MoneyInput label="Số tiền" value={amount} onChange={setAmount} autoFocus />
-        <Field label="Lý do" required value={reason} onChange={(e) => setReason(e.target.value)} />
-        {error && <InlineAlert tone="danger">{error}</InlineAlert>}
-      </div>
-    </Dialog>
-  );
-}
-
 function HeldCarts({ onRecall, onClose }: { onRecall: (id: string) => void; onClose: () => void }) {
   const [list, setList] = useState<{ id: string; label: string; heldAt: string }[]>([]);
   useEffect(() => {
@@ -918,6 +891,9 @@ function HeldCarts({ onRecall, onClose }: { onRecall: (id: string) => void; onCl
       {list.length === 0 ? (
         <p className="text-ink-500">Chưa có giỏ nào đang giữ.</p>
       ) : (
+        <>
+          {/* A held cart is a pause in the shift: it keeps no stock (FR-POS-03); said only when there are carts. */}
+          <p className="mb-3 text-[13px] text-ink-500">Giỏ chờ không giữ hàng trong kho. Muốn giữ sách cho khách, tạo phiếu Đặt trước.</p>
         <ul className="divide-y divide-paper-300">
           {list.map((h) => (
             <li key={h.id} className="flex items-center gap-3 py-3">
@@ -931,6 +907,7 @@ function HeldCarts({ onRecall, onClose }: { onRecall: (id: string) => void; onCl
             </li>
           ))}
         </ul>
+        </>
       )}
     </Dialog>
   );

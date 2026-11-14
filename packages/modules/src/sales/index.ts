@@ -339,8 +339,11 @@ async function loadVariants(tx: Tx, ids: string[]): Promise<Map<string, VariantI
   );
 }
 
-/** `agreed`: unit prices fixed earlier, a collected pre-order's agreed price (FR-POS-09). */
-async function priceForCart(tx: Tx, ctx: Ctx, cart: z.infer<typeof CartSchema>, agreed?: ReadonlyMap<string, number>) {
+/**
+ * `agreed`: unit prices fixed earlier, a collected pre-order's agreed price (FR-POS-09); `noPromotions`
+ * prices without today's promotions (the agreed-price side of a collection).
+ */
+async function priceForCart(tx: Tx, ctx: Ctx, cart: z.infer<typeof CartSchema>, agreed?: ReadonlyMap<string, number>, noPromotions = false) {
   const actor = requirePermission(ctx, 'sale.create');
   const variants = await loadVariants(tx, [...new Set(cart.lines.map((l) => l.variantId))]);
   for (const [variantId, priceVnd] of agreed ?? []) {
@@ -371,7 +374,7 @@ async function priceForCart(tx: Tx, ctx: Ctx, cart: z.infer<typeof CartSchema>, 
   if (!can(actor, 'sale.discount') && (lines.some((l) => l.manualDiscount) || cart.orderManualDiscount)) throw errors.forbidden('sale.discount');
   const cfg = await settings.snapshot(ctx, tx);
   const customer = cart.customerId ? await customers.pricingProfile(tx, cart.customerId) : null;
-  const promos = await promotions.activeSnapshot(tx, ctx.clock.now(), 'counter', cart.customerId ?? null);
+  const promos = noPromotions ? [] : await promotions.activeSnapshot(tx, ctx.clock.now(), 'counter', cart.customerId ?? null);
   const result = priceCart({
     lines,
     channel: 'counter',
@@ -407,14 +410,18 @@ export async function price(ctx: Ctx, input: CartInput) {
 
 export const PaymentInputSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('cash'), amountVnd: z.number().int().positive(), tenderedVnd: money.optional() }),
-  /** Bank transfer to the store's printed QR; `ref` is the payment reference the customer typed. */
+  /**
+   * Bank transfer to the store's printed QR. At the counter the cashier's confirmation is the check that
+   * the money arrived, so `ref` is optional (FR-POS-06); one that is sent must be a valid payment reference.
+   */
   z.object({
     method: z.literal('transfer'),
     amountVnd: z.number().int().positive(),
     ref: z
       .string()
       .transform(normalizePaymentRef)
-      .refine((r) => r.length === PAYMENT_REF_LENGTH && [...r].every((ch) => PAYMENT_REF_ALPHABET.includes(ch)), 'Mã tham chiếu chuyển khoản không hợp lệ.'),
+      .refine((r) => r.length === PAYMENT_REF_LENGTH && [...r].every((ch) => PAYMENT_REF_ALPHABET.includes(ch)), 'Mã tham chiếu chuyển khoản không hợp lệ.')
+      .optional(),
   }),
   /** Card on the standalone terminal: no approval code is asked for (FR-POS-06); `ref` stays optional. */
   z.object({ method: z.literal('card'), amountVnd: z.number().int().positive(), ref: z.string().trim().max(40).optional() }),
@@ -540,8 +547,11 @@ async function preorderToCollect(tx: Tx, data: z.infer<typeof CompleteSaleSchema
   const [p] = await tx.select().from(schema.preorder).where(eq(schema.preorder.id, data.preorderId!)).for('update');
   if (!p) throw errors.notFound('Phiếu đặt trước');
   if (p.status !== 'arrived' && p.status !== 'contacted') throw errors.conflict('preorder_not_ready', `Phiếu đặt trước ${p.docNo} chưa có hàng hoặc đã xử lý xong.`);
+  const lines0 = await tx.select().from(schema.preorderLine).where(eq(schema.preorderLine.preorderId, p.id));
+  // Statuses are set by hand (FR-ORD-14): unheld books are sold from stock like any sale; every book must be linked and priced.
+  if (lines0.some((l) => !l.variantId || l.unitPriceVnd == null)) throw errors.conflict('preorder_not_ready', `Phiếu đặt trước ${p.docNo} còn sách chưa chọn sản phẩm.`);
   if (data.customerId !== p.customerId) throw new AppError(422, 'preorder_customer', `Phiếu ${p.docNo} là của khách khác.`);
-  const lines = await tx.select().from(schema.preorderLine).where(eq(schema.preorderLine.preorderId, p.id));
+  const lines = lines0 as ((typeof lines0)[number] & { variantId: string; unitPriceVnd: number })[];
   for (const pl of lines) {
     const cart = data.lines.filter((l) => l.variantId === pl.variantId);
     if (cart.length !== 1 || cart[0]!.qty !== pl.qty || cart[0]!.priceOverrideVnd != null) {
@@ -558,7 +568,12 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
     const shift = await openShiftRow(tx, data.shiftId);
     const cfg = await settings.snapshot(ctx, tx);
     const pre = data.preorderId ? await preorderToCollect(tx, data) : null;
-    const { result: priced, variants } = await priceForCart(tx, ctx, data, pre?.agreed);
+    // A collection costs the cheaper of: agreed prices without promotions, or today's prices with today's promotions (FR-POS-09).
+    let { result: priced, variants } = await priceForCart(tx, ctx, data, pre?.agreed, !!pre);
+    if (pre) {
+      const today = await priceForCart(tx, ctx, data);
+      if (today.result.totalVnd < priced.totalVnd) ({ result: priced, variants } = today);
+    }
     if (priced.issues.length) {
       throw new AppError(422, 'pricing_issue', 'Không áp dụng được mã giảm giá hoặc điểm. Hãy kiểm tra lại rồi thử lại.', priced.issues);
     }

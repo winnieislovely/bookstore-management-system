@@ -1,4 +1,4 @@
-import { DENOMINATIONS_VND, normalizePaymentRef, paymentRefFromBytes, type PriceCartResult } from '@bookstore/domain';
+import { DENOMINATIONS_VND, type PriceCartResult } from '@bookstore/domain';
 import { clsx } from 'clsx';
 import { Banknote, CheckCircle2, CreditCard, Printer, QrCode, Search, ShieldCheck, Plus, User, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -71,10 +71,6 @@ const TILES: { method: Method; label: string; icon: typeof Banknote }[] = [
   { method: 'card', label: 'Thẻ', icon: CreditCard },
 ];
 
-function newRef(): string {
-  return paymentRefFromBytes(crypto.getRandomValues(new Uint8Array(8)));
-}
-
 export function PaymentSheet({
   priced,
   depositVnd = 0,
@@ -93,8 +89,6 @@ export function PaymentSheet({
   const amount = priced.totalVnd - depositVnd;
   const [method, setMethod] = useState<Method>('cash');
   const [tendered, setTendered] = useState<string>('');
-  const [transferRef] = useState(newRef);
-  const [transferOk, setTransferOk] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const tiles = TILES;
@@ -112,7 +106,8 @@ export function PaymentSheet({
     if (method === 'cash') return tenderedVnd && tenderedVnd < amt ? null : { method, amountVnd: amt, tenderedVnd: tenderedVnd || amt };
     // Card: no approval code (FR-POS-06).
     if (method === 'card') return { method, amountVnd: amt };
-    return transferOk ? { method, amountVnd: amt, ref: normalizePaymentRef(transferRef) } : null;
+    // Transfer: pressing Xác nhận means the money was seen in the account (FR-POS-06).
+    return { method, amountVnd: amt };
   };
 
   const finish = async (list: Payment[]) => {
@@ -137,7 +132,9 @@ export function PaymentSheet({
   return (
     <Dialog title="Thanh toán" size="lg" onClose={busy ? undefined : onClose}>
       <div className="flex flex-col gap-4">
-        {/* Method tiles first, always on one row (Design §13.4). */}
+        {/* Method tiles first, text only, always on one row (Design §13.4). */}
+        <div className="flex flex-col gap-2">
+        <p className="text-[13px] font-medium text-ink-700">Phương thức thanh toán</p>
         <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }} role="radiogroup" aria-label="Phương thức thanh toán">
           {tiles.map((tl) => (
             <button
@@ -146,12 +143,12 @@ export function PaymentSheet({
               role="radio"
               aria-checked={method === tl.method}
               onClick={() => pick(tl.method)}
-              className={clsx('flex min-h-18 flex-col items-center justify-center gap-1 rounded-xl border-2 px-1 py-2 text-center text-xs leading-tight font-medium sm:text-[13px]', method === tl.method ? 'border-navy-700 bg-navy-50' : 'border-paper-300 bg-white')}
+              className={clsx('flex h-11 items-center justify-center rounded-xl border-2 px-1 text-center text-sm leading-tight font-medium', method === tl.method ? 'border-navy-700 bg-navy-50 text-navy-700' : 'border-paper-300 bg-white')}
             >
-              <tl.icon size={24} aria-hidden />
               {tl.label}
             </button>
           ))}
+        </div>
         </div>
         <div>
           <div className="flex items-baseline justify-between gap-3">
@@ -177,18 +174,7 @@ export function PaymentSheet({
             <Keypad onKey={(k) => setTendered((v) => (k === 'del' ? v.slice(0, -1) : (v + k).replace(/^0+/, '').slice(0, 10)))} />
           </div>
         )}
-        {method === 'transfer' && (
-          <div className="flex flex-col items-center gap-2 rounded-lg border border-paper-300 bg-paper-200 p-4 text-center">
-            <p className="text-sm text-ink-700">Khách quét mã QR in sẵn tại quầy và ghi mã tham chiếu vào nội dung chuyển khoản</p>
-            <p className="text-[13px] text-ink-500">Mã tham chiếu</p>
-            <p className="text-2xl leading-8 font-semibold tracking-[0.04em] num">{transferRef.replace(/(.{4})/g, '$1 ').trim()}</p>
-            {!online && <InlineAlert tone="warning">Ngoại tuyến: khoản chuyển khoản sẽ ở trạng thái “Chưa xác minh” cho đến khi quản lý xác nhận.</InlineAlert>}
-            <label className="mt-2 flex items-center gap-2 text-sm">
-              <input type="checkbox" className="size-5" checked={transferOk} onChange={(e) => setTransferOk(e.target.checked)} />
-              Đã thấy tiền vào tài khoản (đúng số tiền và mã tham chiếu)
-            </label>
-          </div>
-        )}
+        {method === 'transfer' && !online && <InlineAlert tone="warning">Ngoại tuyến: khoản chuyển khoản sẽ ở trạng thái “Chưa xác minh” cho đến khi quản lý xác nhận.</InlineAlert>}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
         {/* One full-width “Xác nhận”, no icon; the dialog closes with its ✕ (Design §13.4). */}
         <Button variant="primary" size="lg" full loading={busy} disabled={!current()} onClick={pay}>

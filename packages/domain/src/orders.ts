@@ -80,11 +80,16 @@ export function pickupCodeFromBytes(bytes: Uint8Array): string {
   return String(n % 1_000_000).padStart(6, '0');
 }
 
-/** SRS B.5 – pre-order. Ordered is set by hand; Arrived comes from stock allocation. */
-export const PREORDER: Transitions<'reserved' | 'ordered' | 'arrived' | 'contacted' | 'collected' | 'cancelled'> = {
-  reserved: ['ordered', 'arrived', 'cancelled'],
-  ordered: ['arrived', 'cancelled'],
-  arrived: ['contacted', 'collected', 'cancelled'],
+/**
+ * SRS B.5 – pre-order (FR-ORD-14, 15 Nov 2026). A slip of books to order starts at Quote (Chờ xác nhận)
+ * and staff set Ordered and Arrived (Chờ nhận) by hand; a slip whose books are all on the shelf is a
+ * hold and starts at Contacted. Collected is the POS sale. Confirmed: older slips only.
+ */
+export const PREORDER: Transitions<'quote' | 'confirmed' | 'ordered' | 'arrived' | 'contacted' | 'collected' | 'cancelled'> = {
+  quote: ['ordered', 'arrived', 'cancelled'],
+  confirmed: ['quote', 'ordered', 'arrived', 'cancelled'],
+  ordered: ['quote', 'arrived', 'cancelled'],
+  arrived: ['quote', 'ordered', 'collected', 'cancelled'],
   contacted: ['collected', 'cancelled'],
   collected: [],
   cancelled: [],

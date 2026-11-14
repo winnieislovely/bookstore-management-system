@@ -278,10 +278,17 @@ export const preorder = orders.table(
       .notNull()
       .references(() => customer.id),
     ...depositColumns(),
-    status: text().notNull().default('reserved'),
+    status: text().notNull().default('quote'),
+    /** A manager priced the slip (FR-ORD-14). */
+    quotedAt: ts(),
+    quotedBy: uuid().references(() => appUser.id),
+    /** The customer accepted the quote and paid the deposit. */
+    confirmedAt: ts(),
     allocatedAt: ts(),
     contactedAt: ts(),
     expiresAt: ts(),
+    /** Holding-period extensions so far (FR-ORD-16). */
+    extensions: integer().notNull().default(0),
     /** The counter sale that collected it (FR-POS-09). */
     saleId: uuid().references(() => sale.id),
     note: text(),
@@ -300,7 +307,10 @@ export const preorder = orders.table(
   ],
 );
 
-/** One product of a pre-order at its agreed price; `reserved_at` once its copies are held (FR-ORD-14). */
+/**
+ * One book of a pre-order (FR-ORD-14): a catalogue variant, or free text (title or ISBN) until a manager
+ * links it; its price once quoted; `reserved_at` once its copies are held.
+ */
 export const preorderLine = orders.table(
   'preorder_line',
   {
@@ -309,15 +319,15 @@ export const preorderLine = orders.table(
       .notNull()
       .references(() => preorder.id),
     lineNo: integer().notNull(),
-    variantId: uuid()
-      .notNull()
-      .references(() => itemVariant.id),
+    variantId: uuid().references(() => itemVariant.id),
+    requestedTitle: text(),
     qty: integer().notNull(),
-    unitPriceVnd: vndCol().notNull(),
+    unitPriceVnd: vndCol(),
     reservedAt: ts(),
   },
   (t) => [
-    uniqueIndex('preorder_line_variant_uq').on(t.preorderId, t.variantId),
+    uniqueIndex('preorder_line_variant_uq').on(t.preorderId, t.variantId).where(sql`${t.variantId} is not null`),
+    check('preorder_line_book_ck', sql`${t.variantId} is not null or ${t.requestedTitle} is not null`),
     index('preorder_line_waiting_idx').on(t.variantId).where(sql`${t.reservedAt} is null`),
     check('preorder_line_qty_ck', sql`${t.qty} > 0`),
   ],

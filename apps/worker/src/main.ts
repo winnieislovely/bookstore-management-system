@@ -43,10 +43,8 @@ const JOBS: { name: string; cron: string; run: () => Promise<unknown> }[] = [
     name: 'outbox.dispatch',
     cron: '* * * * *',
     run: () =>
-      jobs.dispatchOutbox(ctx(), {
-        // preorder.allocate (TDD §9.1): incoming stock goes to waiting pre-orders, oldest first.
-        'stock_in.posted': [async (c, e) => void (await orders.allocatePreorders(c, (e.payload.variantIds as string[] | undefined) ?? []))],
-      }),
+      // Pre-orders no longer take incoming stock (FR-ORD-14, 15 Nov 2026): no handlers yet.
+      jobs.dispatchOutbox(ctx(), {}),
   },
   { name: 'loyalty.points_expire', cron: '30 1 * * *', run: () => jobs.expirePoints(ctx()) },
   { name: 'loyalty.tier_recalc', cron: '0 2 * * *', run: () => jobs.recalcTiers(ctx()) },
@@ -65,7 +63,8 @@ const JOBS: { name: string; cron: string; run: () => Promise<unknown> }[] = [
   { name: 'order.autocancel', cron: '*/5 * * * *', run: () => orders.autocancelUnpaid(ctx()) },
   { name: 'ghn.poll', cron: '*/3 * * * *', run: () => orders.pollShipments(ctx(), carrier) },
   { name: 'geo.refresh', cron: '0 3 * * *', run: () => orders.refreshGeo(ctx(), carrier) },
-  { name: 'preorder.expire', cron: '0 8 * * *', run: () => orders.notifyExpiredHolds(ctx()) },
+  // Hourly: holds without a deposit expire by themselves; slips with one alert managers (FR-ORD-16).
+  { name: 'preorder.expire', cron: '5 * * * *', run: () => orders.expireHolds(ctx()) },
   // Library (TDD §9.1): staff are reminded in-app, no email (FR-LIB-14); uncollected holds expire (FR-LIB-13).
   { name: 'library.reminders', cron: '0 8 * * *', run: () => library.remindLoans(ctx()) },
   { name: 'library.reservation_expire', cron: '20 * * * *', run: () => library.expireHolds(ctx()) },

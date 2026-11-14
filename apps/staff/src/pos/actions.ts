@@ -128,7 +128,7 @@ export async function cashMovement(s: LocalShift, direction: 'in' | 'out', amoun
 
 export type Payment =
   | { method: 'cash'; amountVnd: number; tenderedVnd: number }
-  | { method: 'transfer'; amountVnd: number; ref: string }
+  | { method: 'transfer'; amountVnd: number; ref?: string }
   | { method: 'card'; amountVnd: number; ref?: string };
 
 export interface SaleInput {

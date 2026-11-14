@@ -597,11 +597,17 @@ export async function badges(ctx: Ctx) {
   if (can(ctx.actor, 'online.manage')) {
     const [r] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.web_order where delivery = 'ship' and status in ('confirmed', 'packing')`);
     out.shipmentsWaiting = r!.n;
+    // COD remittances with a difference, on “Đối soát COD” (FR-ORD-11, Design Appendix A).
+    const [d] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.cod_remittance where status = 'difference'`);
+    out.codDifferences = d!.n;
   }
   // Pre-orders past the holding period, on the POS “Đặt trước” button (FR-ORD-16).
   if (can(ctx.actor, 'sale.create')) {
     const [h] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.preorder where status = 'contacted' and expires_at < ${tsParam(ctx.clock.now())}`);
     out.holdsOverdue = h!.n;
+    // Slips to act on, on the Đặt trước menu item: order slips Chờ nhận plus overdue holds (FR-ORD-14).
+    const [r] = await ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from orders.preorder where status = 'arrived'`);
+    out.preordersAction = r!.n + h!.n;
   }
   // Library loans past their due date, on Mượn / trả (FR-LIB-14).
   if (can(ctx.actor, 'library.lend')) {

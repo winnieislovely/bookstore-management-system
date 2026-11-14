@@ -21,6 +21,7 @@ import { CustomerDetailPage, CustomersPage } from './pages/customers';
 import { LibraryCatalogPage, LibraryDeskPage, LibraryReportPage, LibrarySlipPage, LibraryTitlePage } from './pages/library';
 import { LibraryCountDetailPage, LibraryCountsPage } from './pages/libraryCounts';
 import { CodPage } from './pages/holds';
+import { PreordersPage } from './pages/preorders';
 import { OrderDetailPage, OrderNewPage, OrdersPage } from './pages/orders';
 import { ProductDetailPage } from './pages/productDetail';
 import { ProductNewPage } from './pages/productNew';
@@ -100,6 +101,8 @@ const BUILT: Record<string, ReactNode> = {
   '/reports/sales': <SalesReportsPage />,
   '/reports/inventory': <InventoryReportsPage />,
   '/reports/tax': <TaxReportsPage />,
+  '/orders/cod': <CodPage />,
+  '/preorders': <PreordersPage />,
   '/library': <LibraryDeskPage />,
   '/library/catalog': <LibraryCatalogPage />,
   '/library/counts': <LibraryCountsPage />,
@@ -113,7 +116,6 @@ const BUILT: Record<string, ReactNode> = {
 /** Detail pages, guarded by the permission of their list (Design §12.3). */
 const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   { path: 'sales/:id', anyOf: ['sale.create'], element: <SaleDetailPage /> },
-  { path: 'orders/cod', anyOf: ['online.manage'], element: <CodPage /> },
   { path: 'orders/new', anyOf: ['online.manage'], element: <OrderNewPage /> },
   { path: 'orders/:id', anyOf: ['online.manage'], element: <OrderDetailPage /> },
   { path: 'shifts/:id', anyOf: ['shift.view_all'], element: <ShiftDetailPage /> },

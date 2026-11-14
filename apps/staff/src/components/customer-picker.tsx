@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
+import clsx from 'clsx';
 import { Plus, Search, User, X } from 'lucide-react';
 import { useState } from 'react';
 import { get } from '../lib/api';
-import { formatNumber, formatPhone } from '../lib/format';
+import { formatPhone } from '../lib/format';
 import { useDebounced } from './data';
 import { Button, Field } from './ui';
 
@@ -22,7 +23,8 @@ const digitsOf = (s: string) => s.replace(/\D/g, '');
 /** Same number whatever the prefix: compares the last 9 digits (0912… and +84912…). */
 const samePhone = (e164: string | null, typed: string) => !!e164 && digitsOf(typed).length >= 9 && digitsOf(e164).endsWith(digitsOf(typed).slice(-9));
 
-const facts = (c: PickedCustomer) => [c.phoneE164 && formatPhone(c.phoneE164), c.tierName, `${formatNumber(c.pointsBalance)} điểm`].filter(Boolean).join(' · ');
+/** Name and phone only – no tier, no points (Design §12.8). */
+const facts = (c: PickedCustomer) => (c.phoneE164 ? formatPhone(c.phoneE164) : '');
 
 /**
  * Customer of an order or pre-order (Design §12.9, §13.1): search an existing customer by phone or
@@ -35,7 +37,7 @@ export function CustomerPicker({ value, onChange, newNameLabel = 'Tên khách' }
   const found = useQuery({
     queryKey: ['customer-picker', term],
     enabled: term.length >= 2 && !value,
-    queryFn: () => get<{ items: PickedCustomer[] }>('/api/v1/customers', { q: term, limit: 6 }),
+    queryFn: () => get<{ items: PickedCustomer[] }>('/api/v1/customers', { q: term, limit: 3 }),
   });
   // For a new customer, look the typed phone up so an existing profile is not duplicated.
   const newPhone = useDebounced(value?.kind === 'new' ? digitsOf(value.phone) : '', 400);
@@ -93,21 +95,21 @@ export function CustomerPicker({ value, onChange, newNameLabel = 'Tên khách' }
   const items = found.data?.items ?? [];
   const isPhone = digitsOf(q).length >= 6 && /^[\d\s+.-]+$/.test(q.trim());
   const startNew = () => pick({ kind: 'new', phone: isPhone ? q.trim() : '', name: isPhone ? '' : q.trim() });
+  const open = term.length >= 2 && !!found.data;
   return (
-    <div className="flex flex-col gap-2">
-      <div className="relative">
-        <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
-        <input
-          className="h-11 w-full rounded-md border border-paper-500 bg-white pr-3 pl-10 text-sm focus:border-navy-700"
-          placeholder="Tìm theo SĐT hoặc tên khách"
-          aria-label="Tìm khách theo số điện thoại hoặc tên"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-      </div>
-      {term.length >= 2 && found.data ? (
-        <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
-          {items.map((c) => (
+    // Matches drop down attached to the field; with none, “Khách mới” takes the typed phone (Design §12.8).
+    <div className="relative">
+      <Search size={20} className="pointer-events-none absolute top-[22px] left-3 -translate-y-1/2 text-ink-500" aria-hidden />
+      <input
+        className={clsx('h-11 w-full border border-paper-500 bg-white pr-3 pl-10 text-sm focus:border-navy-700', open ? 'rounded-t-md' : 'rounded-md')}
+        placeholder="Tìm theo SĐT hoặc tên khách"
+        aria-label="Tìm khách theo số điện thoại hoặc tên"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
+      {open && (
+        <ul className="absolute inset-x-0 top-full z-20 divide-y divide-paper-300 overflow-hidden rounded-b-md border border-t-0 border-paper-500 bg-white shadow-md">
+          {items.slice(0, 3).map((c) => (
             <li key={c.id}>
               <button type="button" className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-navy-50" onClick={() => pick({ kind: 'existing', customer: c })}>
                 <span className="min-w-0 flex-1 truncate font-medium">{c.name}</span>
@@ -115,16 +117,14 @@ export function CustomerPicker({ value, onChange, newNameLabel = 'Tên khách' }
               </button>
             </li>
           ))}
-          <li>
-            <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-navy-700 hover:bg-navy-50" onClick={startNew}>
-              <Plus size={16} aria-hidden /> {isPhone ? `Khách mới với SĐT ${q.trim()}` : 'Khách mới'}
-            </button>
-          </li>
+          {items.length === 0 && (
+            <li>
+              <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-navy-700 hover:bg-navy-50" onClick={startNew}>
+                <Plus size={16} aria-hidden /> {isPhone ? `Khách mới với SĐT ${q.trim()}` : 'Khách mới'}
+              </button>
+            </li>
+          )}
         </ul>
-      ) : (
-        <Button variant="tonal" size="sm" icon={Plus} className="self-start" onClick={startNew}>
-          Khách mới
-        </Button>
       )}
     </div>
   );

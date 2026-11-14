@@ -53,6 +53,8 @@ export const SETTINGS = {
   'event.refund_cutoff_h': { schema: int(0, 720), default: 48 },
   'preorder.deposit_pct': { schema: int(0, 100), default: 30 },
   'preorder.hold_days': { schema: int(1, 90), default: 7 },
+  // BR-10: a hold of copies on the shelf without a deposit.
+  'preorder.hold_days_no_deposit': { schema: int(1, 90), default: 3 },
   // Library (BR-13, FR-LIB-06): a renewal adds another loan period and another loan fee.
   'library.loan_fee_vnd': { schema: int(0), default: 50000 },
   'library.loan_days': { schema: int(1, 365), default: 30 },

@@ -1,7 +1,7 @@
 import { ORDER_SOURCES, type ManualDiscount } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { ArrowLeft, Calculator, CheckCircle, HandCoins, MoreHorizontal, Package, PackageCheck, Plus, Trash2, Truck, Undo2, X, XCircle } from 'lucide-react';
+import { ArrowLeft, Calculator, CheckCircle, Minus, MoreHorizontal, Package, PackageCheck, Plus, Truck, Undo2, X, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useDebounced, useListParam, useParam, type Column } from '../components/data';
@@ -96,9 +96,6 @@ export function OrdersPage() {
         title="Giao hàng"
         actions={
           <>
-            <Button variant="secondary" icon={HandCoins} onClick={() => navigate('/orders/cod')}>
-              Đối soát COD
-            </Button>
             <Button variant="primary" icon={Plus} onClick={() => navigate('/orders/new')}>
               Tạo đơn giao
             </Button>
@@ -137,6 +134,9 @@ interface Line {
   hit: ProductHit;
   qty: number;
 }
+// Small stepper like the POS cart line (Design §12.9, §13.1).
+const stepBtn = 'inline-flex h-11 w-8 items-center justify-center rounded-md text-ink-700 hover:text-navy-700 disabled:opacity-40';
+
 interface Quote {
   subtotalVnd: number;
   discountVnd: number;
@@ -404,7 +404,7 @@ export function OrderNewPage() {
               ) : null}
             </div>
             <div className="h-5" aria-hidden />
-            {/* Each line: name, price and stock, then quantity, Tag (discount) and delete (Design §12.9). */}
+            {/* Each line like the POS cart line: name, then price with the − qty + stepper at the right; − at 1 removes it (Design §12.9). */}
             <p className="mb-1 text-[13px] font-medium text-ink-700">Sản phẩm</p>
             <ProductSearch onPick={add} hideSku placeholder="Nhập SKU / tên sản phẩm" />
             {lines.length > 0 && (
@@ -412,23 +412,24 @@ export function OrderNewPage() {
                 {lines.map((l, i) => {
                   const update = (patch: Partial<Line>) => setLines(lines.map((x, j) => (j === i ? { ...x, ...patch } : x)));
                   return (
-                    <li key={l.hit.variantId} className="flex flex-col gap-3 py-3 text-sm">
-                      <div className="flex items-start gap-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium">{hitTitle(l.hit)}</p>
-                          <p className="text-ink-700 num">{formatVnd(l.hit.priceVnd)}</p>
-                          {/* Stock is not shown; only an out-of-stock product is flagged (Design §12.9). */}
-                          {l.hit.available <= 0 && <span className="mt-1 inline-block rounded-full bg-danger-50 px-2 text-xs leading-5 font-medium text-danger-700">Hết hàng</span>}
-                        </div>
-                        <input
-                          aria-label={`Số lượng ${hitTitle(l.hit)}`}
-                          inputMode="numeric"
-                          className="h-10 w-16 rounded-md border border-paper-500 text-center num"
-                          value={l.qty}
-                          onChange={(e) => update({ qty: Math.max(1, Number(e.target.value.replace(/\D/g, '')) || 1) })}
-                        />
-                        <Button variant="ghost" icon={Trash2} aria-label={`Xóa ${hitTitle(l.hit)}`} onClick={() => setLines(lines.filter((_, j) => j !== i))} />
+                    <li key={l.hit.variantId} className="bg-white py-3">
+                      <p className="line-clamp-2 font-semibold">{hitTitle(l.hit)}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="flex-1 text-sm whitespace-nowrap text-ink-700 num">{formatVnd(l.hit.priceVnd)}</p>
+                        <span className="-my-2 -mr-1 inline-flex items-center">
+                          <button type="button" className={stepBtn} aria-label={`Giảm số lượng ${hitTitle(l.hit)}`} onClick={() => (l.qty === 1 ? setLines(lines.filter((_, j) => j !== i)) : update({ qty: l.qty - 1 }))}>
+                            <Minus size={16} aria-hidden />
+                          </button>
+                          <span className="inline-flex h-7 min-w-8 items-center justify-center rounded-sm border border-paper-500 bg-white px-1 text-sm font-semibold num" aria-label="Số lượng">
+                            {l.qty}
+                          </span>
+                          <button type="button" className={stepBtn} aria-label={`Tăng số lượng ${hitTitle(l.hit)}`} onClick={() => update({ qty: l.qty + 1 })}>
+                            <Plus size={16} aria-hidden />
+                          </button>
+                        </span>
                       </div>
+                      {/* Stock is not shown; only an out-of-stock product is flagged (Design §12.9). */}
+                      {l.hit.available <= 0 && <span className="mt-1 inline-block rounded-full bg-danger-50 px-2 text-xs leading-5 font-medium text-danger-700">Hết hàng</span>}
                     </li>
                   );
                 })}
@@ -571,8 +572,8 @@ export function OrderNewPage() {
         <Button variant="secondary" onClick={() => navigate('/orders')}>
           Hủy
         </Button>
-        <Button variant="primary" icon={Plus} loading={busy} onClick={save}>
-          Tạo đơn giao
+        <Button variant="primary" loading={busy} onClick={save}>
+          Xác nhận
         </Button>
       </div>
     </div>

@@ -394,7 +394,7 @@ export function Facts({ items }: { items: [string, ReactNode][] }) {
 
 interface Toast {
   id: number;
-  tone: 'success' | 'danger' | 'info';
+  tone: 'success' | 'danger' | 'info' | 'warning';
   text: string;
 }
 const useToasts = create<{ items: Toast[]; push: (t: Omit<Toast, 'id'>) => void; drop: (id: number) => void }>((set) => ({
@@ -410,6 +410,7 @@ const useToasts = create<{ items: Toast[]; push: (t: Omit<Toast, 'id'>) => void;
 export const toast = {
   success: (text: string) => useToasts.getState().push({ tone: 'success', text }),
   error: (text: string) => useToasts.getState().push({ tone: 'danger', text }),
+  warning: (text: string) => useToasts.getState().push({ tone: 'warning', text }),
 };
 
 export function Toaster() {

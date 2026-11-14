@@ -92,14 +92,17 @@ export function orderRoutes(app: OpenAPIHono<AppEnv>, carrier: CarrierAdapter, w
     },
   );
 
-  // --- Pre-orders at the POS (FR-POS-09, FR-ORD-14..16); collecting is POST /api/v1/pos/sales with preorderId ---
+  // --- Pre-orders (FR-ORD-14, FR-ORD-16, FR-POS-09); collecting is POST /api/v1/pos/sales with preorderId ---
   defineRoute(app, { method: 'get', path: '/api/v1/preorders', access: 'sale.create', summary: 'Pre-orders', query: orders.HoldsQuery }, async ({ ctx, query }) => ({ items: await orders.listPreorders(ctx, query) }));
-  defineRoute(app, { method: 'post', path: '/api/v1/preorders', access: 'sale.create', summary: 'Take a pre-order with a deposit', status: 201, body: orders.CreatePreorderSchema }, async ({ ctx, body }) => orders.createPreorder(ctx, body));
-  defineRoute(app, { method: 'post', path: '/api/v1/preorders/:id/contacted', access: 'sale.create', summary: 'Customer called: holding period starts', params: IdParams }, async ({ ctx, params }) =>
-    orders.markPreorderContacted(ctx, params.id),
+  defineRoute(app, { method: 'get', path: '/api/v1/preorders/by-title', access: 'sale.create', summary: 'Books still to arrive, by title' }, async ({ ctx }) => ({ items: await orders.preordersByTitle(ctx) }));
+  defineRoute(app, { method: 'get', path: '/api/v1/preorders/holds', access: 'sale.create', summary: 'Who copies are held for (POS search)', query: orders.HoldLookupQuery }, async ({ ctx, query }) => ({ items: await orders.holdsOf(ctx, query) }));
+  defineRoute(app, { method: 'post', path: '/api/v1/preorders', access: 'sale.create', summary: 'Take a pre-order with its deposit: holds copies on the shelf, books to order start Chờ xác nhận', status: 201, body: orders.CreatePreorderSchema }, async ({ ctx, body }) =>
+    orders.createPreorder(ctx, body),
   );
-  defineRoute(app, { method: 'post', path: '/api/v1/preorders/:id/ordered', access: 'sale.create', summary: 'Mark ordered from the supplier', params: IdParams }, async ({ ctx, params }) => orders.markOrdered(ctx, params.id));
-  defineRoute(app, { method: 'post', path: '/api/v1/preorders/:id/cancel', access: 'sale.create', summary: 'Cancel; refund or keep the deposit', params: IdParams, body: orders.CancelHoldSchema }, async ({ ctx, params, body }) =>
+  defineRoute(app, { method: 'post', path: '/api/v1/preorders/:id/status', access: 'sale.create', summary: 'Set an order slip status by hand; links free-text books to products', params: IdParams, body: orders.PreorderStatusSchema }, async ({ ctx, params, body }) =>
+    orders.updatePreorderStatus(ctx, params.id, body),
+  );
+  defineRoute(app, { method: 'post', path: '/api/v1/preorders/:id/cancel', access: 'sale.create', summary: 'Cancel; a deposit is refunded or kept (manager)', params: IdParams, body: orders.CancelHoldSchema }, async ({ ctx, params, body }) =>
     orders.cancelPreorder(ctx, params.id, body),
   );
 

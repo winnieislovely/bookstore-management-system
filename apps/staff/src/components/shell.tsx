@@ -29,6 +29,9 @@ function useOnline() {
 }
 
 function Sidebar({ groups, badges, rail, onNavigate }: { groups: NavGroup[]; badges: Record<string, number>; rail: boolean; onNavigate?: () => void }) {
+  const { pathname } = useLocation();
+  // Giao hàng stays unlit on Đối soát COD, which has its own item (Design Appendix A).
+  const lit = (path: string, isActive: boolean) => isActive && !(path === '/orders' && pathname.startsWith('/orders/cod'));
   return (
     <nav className="on-navy flex h-full flex-col bg-navy-700 text-white/80" aria-label="Menu chính">
       <div className={clsx('flex h-16 shrink-0 items-center', rail ? 'justify-center' : 'px-6')}>{rail ? <CompactMark /> : <Wordmark />}</div>
@@ -51,13 +54,13 @@ function Sidebar({ groups, badges, rail, onNavigate }: { groups: NavGroup[]; bad
                         clsx(
                           'relative flex h-10 items-center gap-3 font-medium pointer-coarse:h-11',
                           rail ? 'justify-center' : 'px-6',
-                          isActive ? 'bg-navy-900 text-white' : 'hover:bg-navy-800 hover:text-white',
+                          lit(item.path, isActive) ? 'bg-navy-900 text-white' : 'hover:bg-navy-800 hover:text-white',
                         )
                       }
                     >
                       {({ isActive }) => (
                         <>
-                          {isActive && <span className="absolute inset-y-0 left-0 w-[3px] bg-sand-300" aria-hidden />}
+                          {lit(item.path, isActive) && <span className="absolute inset-y-0 left-0 w-[3px] bg-sand-300" aria-hidden />}
                           <item.icon size={20} aria-hidden />
                           {!rail && <span className="flex-1 truncate">{t(item.label)}</span>}
                           {count > 0 && (rail ? <span className="absolute top-1 right-3 size-2 rounded-full bg-sand-300" aria-label={String(count)} /> : <CountBadge count={count} tone="sidebar" />)}
@@ -222,6 +225,24 @@ function UserMenu({ me }: { me: Me }) {
         {initials}
       </span>
       <span className="hidden text-sm font-medium md:inline">{me.displayName}</span>
+    </div>
+  );
+}
+
+/** The main menu as a drawer, for full-screen pages such as the POS (Design §6.x POS mode). */
+export function NavDrawer({ onClose }: { onClose: () => void }) {
+  const { data: me } = useMe();
+  const groups = visibleNav((p: string) => can(me, p));
+  const { data: badges } = useQuery({ queryKey: ['badges'], queryFn: () => get<Record<string, number>>('/api/v1/me/badges'), refetchInterval: 30_000, enabled: !!me });
+  return (
+    <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label="Menu chính">
+      <div className="absolute inset-0 bg-ink-900/40" onClick={onClose} />
+      <div className="absolute inset-y-0 left-0 w-[288px] shadow-lg">
+        <Sidebar groups={groups} badges={badges ?? {}} rail={false} onNavigate={onClose} />
+        <button type="button" className="absolute top-3 right-3 inline-flex size-10 items-center justify-center rounded-full text-white" aria-label={t('common.close')} onClick={onClose}>
+          <X size={20} aria-hidden />
+        </button>
+      </div>
     </div>
   );
 }

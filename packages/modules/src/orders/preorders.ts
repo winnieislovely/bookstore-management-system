@@ -18,17 +18,23 @@ import * as customers from '../customers/index.js';
 import * as inventory from '../inventory/index.js';
 import * as notifications from '../notifications/index.js';
 import * as settings from '../settings/index.js';
-import { AppError, errors, nextDocNo, requirePermission, type Ctx, type Tx } from '../platform/index.js';
+import { AppError, can, errors, nextDocNo, requirePermission, type Ctx, type Tx } from '../platform/index.js';
 
 /**
- * Pre-orders at the POS (FR-POS-09, FR-ORD-14..16, TDD §4.5). The deposit is taken at the counter and held for the customer; collecting is a
- * counter sale with `preorderId` (sales module), at the agreed price with the deposit counted as paid.
+ * Pre-orders (FR-ORD-14, FR-ORD-16, FR-POS-09, BR-10, TDD §4.5; revised 15 Nov 2026). One slip for books
+ * kept for a customer, never edited once taken. A slip whose books are all on the shelf is a hold: its
+ * copies are held at once and it starts at Contacted (Chờ nhận) with an optional deposit. A slip of books
+ * to order takes its deposit when it is taken and starts at Quote (Chờ xác nhận); staff then set its
+ * status by hand (Đang đặt hàng, Chờ nhận) and it is collected at the POS as a counter sale
+ * (`preorderId` in the sales module).
  */
 
 type PreorderRow = typeof schema.preorder.$inferSelect;
+const OPEN = ['quote', 'confirmed', 'ordered', 'arrived', 'contacted'] as const;
+const DAY = 86_400_000;
 
 // =============================================================================================
-// Deposits at the counter
+// Deposits
 
 export const DepositSchema = z
   .object({
@@ -36,16 +42,15 @@ export const DepositSchema = z
     amountVnd: z.number().int().positive(),
     /** The staff member's open shift: cash goes into its drawer. */
     shiftId: z.uuid().optional(),
-    /** Transfer payment reference the customer typed, or the card approval code. */
+    /** Optional: a transfer needs no reference – staff confirming it means the money arrived; a card needs none (FR-POS-06). */
     ref: z.string().trim().max(40).optional(),
   })
   .superRefine((d, c) => {
     if (d.method === 'cash' && !d.shiftId) c.addIssue({ code: 'custom', path: ['shiftId'], message: 'Cần một ca đang mở để nhận tiền mặt.' });
-    if (d.method === 'transfer') {
-      const ref = normalizePaymentRef(d.ref ?? '');
+    if (d.method === 'transfer' && d.ref) {
+      const ref = normalizePaymentRef(d.ref);
       if (ref.length !== PAYMENT_REF_LENGTH || ![...ref].every((ch) => PAYMENT_REF_ALPHABET.includes(ch))) c.addIssue({ code: 'custom', path: ['ref'], message: 'Mã tham chiếu chuyển khoản không hợp lệ.' });
     }
-    if (d.method === 'card' && !d.ref) c.addIssue({ code: 'custom', path: ['ref'], message: 'Cần nhập mã chuẩn chi của máy POS thẻ.' });
   });
 
 async function openShift(tx: Tx, shiftId: string) {
@@ -62,18 +67,27 @@ async function takeDeposit(tx: Tx, ctx: Ctx, docNo: string, d: z.infer<typeof De
   return {
     depositVnd: d.amountVnd,
     depositMethod: d.method,
-    depositRef: d.method === 'transfer' ? normalizePaymentRef(d.ref!) : (d.ref ?? null),
+    depositRef: d.method === 'transfer' && d.ref ? normalizePaymentRef(d.ref) : (d.ref ?? null),
     depositShiftId: d.method === 'cash' ? d.shiftId! : null,
   };
 }
 
-/** BR-10: a deposit of at least `preorder.deposit_pct` of the value, or full payment. */
-async function checkDeposit(tx: Tx, ctx: Ctx, valueVnd: number, depositVnd: number) {
+/** BR-10: at least `preorder.deposit_pct` of the value (`min`) up to full payment; a hold may take none (`min` = 0). */
+async function minDeposit(tx: Tx, ctx: Ctx, valueVnd: number) {
   const pct = (await settings.snapshot(ctx, tx))['preorder.deposit_pct'];
-  const min = divRoundHalfUp(valueVnd * pct, 100);
-  if (depositVnd < min || depositVnd > valueVnd) {
-    throw new AppError(422, 'deposit_out_of_range', `Tiền cọc từ ${min} ₫ (${pct}%) đến ${valueVnd} ₫ (trả đủ).`, { minVnd: min, maxVnd: valueVnd });
+  return { min: divRoundHalfUp(valueVnd * pct, 100), pct };
+}
+
+function checkDepositRange(depositVnd: number, min: number, max: number, pct: number) {
+  if (depositVnd < min || depositVnd > max) {
+    throw new AppError(422, 'deposit_out_of_range', min > 0 ? `Tiền cọc từ ${min} ₫ (${pct}%) đến ${max} ₫ (trả đủ).` : `Tiền cọc tối đa ${max} ₫.`, { minVnd: min, maxVnd: max });
   }
+}
+
+/** Holding days: longer with a deposit (BR-10). */
+async function holdDays(tx: Tx, ctx: Ctx, depositVnd: number) {
+  const cfg = await settings.snapshot(ctx, tx);
+  return depositVnd > 0 ? cfg['preorder.hold_days'] : cfg['preorder.hold_days_no_deposit'];
 }
 
 const CustomerRef = z.union([z.object({ customerId: z.uuid() }), z.object({ name: z.string().trim().min(1).max(160), phone: z.string().trim().min(6) })]);
@@ -92,18 +106,82 @@ async function customerOf(tx: Tx, ctx: Ctx, c: z.infer<typeof CustomerRef>, sour
 }
 
 // =============================================================================================
-// Pre-orders (FR-ORD-14)
+// Lines
+
+/** A book on a slip: a catalogue variant, or free text (title or ISBN) for a book not in the catalogue yet. */
+export const LineInput = z.union([
+  z.object({ variantId: z.uuid(), qty: z.number().int().positive().max(100) }),
+  z.object({ title: z.string().trim().min(1, 'Cần nhập tên sách hoặc ISBN.').max(300), qty: z.number().int().positive().max(100) }),
+]);
+const Lines = z
+  .array(LineInput)
+  .min(1, 'Phiếu chưa có sách.')
+  .max(30)
+  .refine((ls) => {
+    const ids = ls.flatMap((l) => ('variantId' in l ? [l.variantId] : []));
+    return new Set(ids).size === ids.length;
+  }, 'Mỗi sản phẩm chỉ một dòng.');
+
+async function activePrices(tx: Tx, variantIds: string[]) {
+  if (!variantIds.length) return new Map<string, number>();
+  const rows = await tx
+    .select({ id: schema.itemVariant.id, priceVnd: schema.itemVariant.priceVnd, status: schema.itemVariant.status })
+    .from(schema.itemVariant)
+    .where(inArray(schema.itemVariant.id, variantIds));
+  const price = new Map(rows.filter((v) => v.status === 'active').map((v) => [v.id, v.priceVnd]));
+  if (variantIds.some((id) => !price.has(id))) throw errors.notFound('Sản phẩm');
+  return price;
+}
+
+async function linesOf(tx: Tx, preorderId: string) {
+  return tx.select().from(schema.preorderLine).where(eq(schema.preorderLine.preorderId, preorderId)).orderBy(asc(schema.preorderLine.lineNo));
+}
+
+/** Hold copies on the shelf for the unheld catalogue lines of a slip; returns whether every line is held. */
+async function holdShelfCopies(tx: Tx, ctx: Ctx, preorderId: string): Promise<boolean> {
+  const lines = await linesOf(tx, preorderId);
+  for (const l of lines) {
+    if (l.reservedAt || !l.variantId) continue;
+    if (await inventory.reserve(tx, ctx, 'preorder', preorderId, l.variantId, l.qty)) {
+      await tx.update(schema.preorderLine).set({ reservedAt: ctx.clock.now() }).where(eq(schema.preorderLine.id, l.id));
+    }
+  }
+  const after = await linesOf(tx, preorderId);
+  return after.every((l) => l.reservedAt);
+}
+
+/** Whether `qty` copies are free on the shelf now (bundles: every component). */
+async function onShelf(tx: Tx, variantId: string, qty: number): Promise<boolean> {
+  const sl = schema.stockLevel;
+  for (const u of await inventory.stockUnits(tx, variantId, qty)) {
+    const [r] = await tx.select({ free: sql<number>`coalesce(sum(${sl.onHand} - ${sl.reserved}), 0)::int` }).from(sl).where(eq(sl.variantId, u.variantId));
+    if ((r?.free ?? 0) < u.qty) return false;
+  }
+  return true;
+}
+
+/** A slip is a hold of books on the shelf or an order of books to order, never both (FR-ORD-14). */
+const mixedSlip = () => new AppError(422, 'mixed_slip', 'Một phiếu chỉ gồm sách có sẵn (giữ sách) hoặc sách cần đặt. Bỏ bớt sách rồi tạo từng phiếu riêng.');
+
+const valueOf = (lines: { qty: number; unitPriceVnd: number | null }[]) => lines.reduce((a, l) => a + l.qty * (l.unitPriceVnd ?? 0), 0);
+
+/** A hold: every book is on the shelf; the customer is there, so the holding period starts now. */
+async function startHolding(tx: Tx, ctx: Ctx, row: Pick<PreorderRow, 'id' | 'depositVnd'>, from = ctx.clock.now()) {
+  const expiresAt = new Date(from.getTime() + (await holdDays(tx, ctx, row.depositVnd)) * DAY);
+  await tx.update(schema.preorder).set({ status: 'contacted', contactedAt: from, expiresAt, overdueNotifiedAt: null }).where(eq(schema.preorder.id, row.id));
+  return expiresAt;
+}
+
+// =============================================================================================
+// Create (FR-ORD-14)
 
 export const CreatePreorderSchema = z.object({
-  /** Pre-orders taken at the POS have no channel (`other`). */
+  /** Slips taken at the POS have no channel (`other`). */
   source: z.enum(ORDER_SOURCES).default('other'),
   customer: CustomerRef,
-  lines: z
-    .array(z.object({ variantId: z.uuid(), qty: z.number().int().positive().max(100) }))
-    .min(1, 'Phiếu chưa có sản phẩm.')
-    .max(30)
-    .refine((ls) => new Set(ls.map((l) => l.variantId)).size === ls.length, 'Mỗi sản phẩm chỉ một dòng.'),
-  deposit: DepositSchema,
+  lines: Lines,
+  /** Optional for a hold; required for an order, at least `preorder.deposit_pct` of its catalogue books (BR-10). */
+  deposit: DepositSchema.optional(),
   note: z.string().trim().max(500).nullable().optional(),
 });
 
@@ -111,72 +189,58 @@ export async function createPreorder(ctx: Ctx, input: z.input<typeof CreatePreor
   const actor = requirePermission(ctx, 'sale.create');
   const data = CreatePreorderSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
-    const variants = await tx
-      .select({ id: schema.itemVariant.id, priceVnd: schema.itemVariant.priceVnd, status: schema.itemVariant.status })
-      .from(schema.itemVariant)
-      .where(inArray(schema.itemVariant.id, data.lines.map((l) => l.variantId)));
-    const price = new Map(variants.filter((v) => v.status === 'active').map((v) => [v.id, v.priceVnd]));
-    if (data.lines.some((l) => !price.has(l.variantId))) throw errors.notFound('Sản phẩm');
-    await checkDeposit(tx, ctx, data.lines.reduce((a, l) => a + price.get(l.variantId)! * l.qty, 0), data.deposit.amountVnd);
+    const price = await activePrices(tx, data.lines.flatMap((l) => ('variantId' in l ? [l.variantId] : [])));
+    // A hold (every book on the shelf) or an order (none on the shelf), never both (FR-ORD-14).
+    const shelf = await Promise.all(data.lines.map((l) => ('variantId' in l ? onShelf(tx, l.variantId, l.qty) : Promise.resolve(false))));
+    const hold = shelf.every(Boolean);
+    if (!hold && shelf.some(Boolean)) throw mixedSlip();
     const customerId = await customerOf(tx, ctx, data.customer, data.source);
     const now = ctx.clock.now();
     const docNo = await nextDocNo(tx, 'PRE', now);
     const [row] = await tx
       .insert(schema.preorder)
-      .values({ docNo, source: data.source, customerId, ...(await takeDeposit(tx, ctx, docNo, data.deposit)), note: data.note ?? null, createdBy: actor.userId, createdAt: now })
+      .values({ docNo, source: data.source, customerId, status: 'quote', note: data.note ?? null, createdBy: actor.userId, createdAt: now })
       .returning({ id: schema.preorder.id });
-    await tx.insert(schema.preorderLine).values(data.lines.map((l, i) => ({ preorderId: row!.id, lineNo: i + 1, variantId: l.variantId, qty: l.qty, unitPriceVnd: price.get(l.variantId)! })));
-    await audit.record(tx, ctx, { action: 'preorder.create', entity: 'preorder', entityId: row!.id, after: { docNo, lines: data.lines, depositVnd: data.deposit.amountVnd } });
-    // Copies already in stock are held at once (oldest pre-order first).
-    await allocateTx(tx, ctx, data.lines.map((l) => l.variantId));
-    const [after] = await tx.select({ status: schema.preorder.status }).from(schema.preorder).where(eq(schema.preorder.id, row!.id));
-    return { id: row!.id, docNo, status: after!.status };
+    const id = row!.id;
+    await tx.insert(schema.preorderLine).values(
+      data.lines.map((l, i) =>
+        'variantId' in l
+          ? { preorderId: id, lineNo: i + 1, variantId: l.variantId, qty: l.qty, unitPriceVnd: price.get(l.variantId)! }
+          : { preorderId: id, lineNo: i + 1, variantId: null, requestedTitle: l.title, qty: l.qty, unitPriceVnd: null },
+      ),
+    );
+    // A hold's copies are held at once; an order holds nothing until it is confirmed (FR-ORD-14).
+    let status: string = 'quote';
+    let expiresAt: Date | null = null;
+    if (hold) {
+      if (!(await holdShelfCopies(tx, ctx, id))) throw mixedSlip();
+      // A hold: the deposit is optional, at most the value (BR-10).
+      if (data.deposit) {
+        const value = data.lines.reduce((a, l) => a + ('variantId' in l ? price.get(l.variantId)! * l.qty : 0), 0);
+        checkDepositRange(data.deposit.amountVnd, 0, value, 0);
+        await tx.update(schema.preorder).set(await takeDeposit(tx, ctx, docNo, data.deposit)).where(eq(schema.preorder.id, id));
+      }
+      expiresAt = await startHolding(tx, ctx, { id, depositVnd: data.deposit?.amountVnd ?? 0 }, now);
+      status = 'contacted';
+    } else {
+      // An order: the deposit is taken with the slip – at least the minimum of its catalogue books, at most
+      // their value when every book is priced; free-text books add nothing to the minimum (BR-10).
+      const value = data.lines.reduce((a, l) => a + ('variantId' in l ? price.get(l.variantId)! * l.qty : 0), 0);
+      const { min, pct } = await minDeposit(tx, ctx, value);
+      const max = data.lines.every((l) => 'variantId' in l) ? value : Number.MAX_SAFE_INTEGER;
+      if (!data.deposit && min > 0) throw new AppError(422, 'deposit_out_of_range', `Cần thu cọc từ ${min} ₫ (${pct}%).`, { minVnd: min, maxVnd: max });
+      if (data.deposit) {
+        checkDepositRange(data.deposit.amountVnd, min, max, pct);
+        await tx.update(schema.preorder).set(await takeDeposit(tx, ctx, docNo, data.deposit)).where(eq(schema.preorder.id, id));
+      }
+    }
+    await audit.record(tx, ctx, { action: 'preorder.create', entity: 'preorder', entityId: id, after: { docNo, lines: data.lines, depositVnd: data.deposit?.amountVnd ?? 0, status } });
+    return { id, docNo, status, expiresAt };
   });
 }
 
-/**
- * `preorder.allocate` (on `stock_in.posted`): incoming stock goes to the waiting lines oldest
- * pre-order first; per variant the queue stops at the first line that does not fit, so a later
- * pre-order never jumps ahead. A pre-order whose lines are all held becomes Arrived. Returns how
- * many pre-orders became Arrived.
- */
-async function allocateTx(tx: Tx, ctx: Ctx, variantIds: string[]): Promise<number> {
-  if (!variantIds.length) return 0;
-  const waiting = await tx.execute<{ line_id: string; preorder_id: string; variant_id: string; qty: number }>(sql`
-    select l.id as line_id, l.preorder_id, l.variant_id, l.qty
-    from orders.preorder_line l join orders.preorder p on p.id = l.preorder_id
-    where p.status in ('reserved', 'ordered') and l.reserved_at is null
-      and l.variant_id in (${sql.join([...new Set(variantIds)].map((v) => sql`${v}::uuid`), sql`, `)})
-    order by l.variant_id, p.created_at, p.id for update of l skip locked`);
-  const blocked = new Set<string>();
-  const touched = new Set<string>();
-  for (const l of waiting) {
-    if (blocked.has(l.variant_id)) continue;
-    if (!(await inventory.reserve(tx, ctx, 'preorder', l.preorder_id, l.variant_id, l.qty))) {
-      blocked.add(l.variant_id);
-      continue;
-    }
-    await tx.update(schema.preorderLine).set({ reservedAt: ctx.clock.now() }).where(eq(schema.preorderLine.id, l.line_id));
-    touched.add(l.preorder_id);
-  }
-  let n = 0;
-  for (const id of touched) {
-    const [left] = await tx.execute<{ n: number }>(sql`select count(*)::int as n from orders.preorder_line where preorder_id = ${id}::uuid and reserved_at is null`);
-    if (left!.n > 0) continue;
-    // Arrived: staff call the customer from the pre-order (FR-ORD-14).
-    await tx.update(schema.preorder).set({ status: 'arrived', allocatedAt: ctx.clock.now() }).where(eq(schema.preorder.id, id));
-    n++;
-  }
-  return n;
-}
-
-async function linesOf(tx: Tx, preorderId: string) {
-  return tx.select().from(schema.preorderLine).where(eq(schema.preorderLine.preorderId, preorderId)).orderBy(asc(schema.preorderLine.lineNo));
-}
-
-export async function allocatePreorders(ctx: Ctx, variantIds: string[]): Promise<number> {
-  return ctx.db.transaction((tx) => allocateTx(tx, ctx, variantIds));
-}
+// =============================================================================================
+// Status by hand (FR-ORD-14)
 
 async function lockPreorder(tx: Tx, id: string): Promise<PreorderRow> {
   const [row] = await tx.select().from(schema.preorder).where(eq(schema.preorder.id, id)).for('update');
@@ -190,91 +254,157 @@ function assertTransition(row: { status: string; docNo: string }, to: string) {
   }
 }
 
-export async function markOrdered(ctx: Ctx, id: string) {
+export const PreorderStatusSchema = z.object({
+  /** Chờ xác nhận, Đang đặt hàng or Chờ nhận; Đã nhận is the POS sale, Đã hủy is cancel. */
+  status: z.enum(['quote', 'ordered', 'arrived']),
+  /** Free-text books linked to catalogue products; required for every one of them to reach `arrived`. */
+  links: z.array(z.object({ lineId: z.uuid(), variantId: z.uuid() })).max(30).default([]),
+});
+
+/**
+ * Staff set an order's status by hand (FR-ORD-14): nothing is read from stock or suppliers. Linking a
+ * free-text book prices it at the product's selling price; Chờ nhận needs every book linked.
+ */
+export async function updatePreorderStatus(ctx: Ctx, id: string, input: z.input<typeof PreorderStatusSchema>) {
   requirePermission(ctx, 'sale.create');
+  const data = PreorderStatusSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
     const row = await lockPreorder(tx, id);
-    assertTransition(row, 'ordered');
-    await tx.update(schema.preorder).set({ status: 'ordered' }).where(eq(schema.preorder.id, id));
-    return { id, status: 'ordered' };
+    if (row.status !== data.status) assertTransition(row, data.status);
+    const lines = await linesOf(tx, id);
+    const byId = new Map(lines.map((l) => [l.id, l]));
+    for (const k of data.links) {
+      const l = byId.get(k.lineId);
+      if (!l || l.variantId) throw new AppError(422, 'link_line', 'Chỉ liên kết sách gõ tự do của phiếu này.');
+    }
+    const price = await activePrices(tx, data.links.map((k) => k.variantId));
+    const taken = new Set(lines.flatMap((l) => (l.variantId ? [l.variantId] : [])));
+    for (const k of data.links) {
+      if (taken.has(k.variantId)) throw new AppError(422, 'link_line', 'Mỗi sản phẩm chỉ một dòng.');
+      taken.add(k.variantId);
+      await tx.update(schema.preorderLine).set({ variantId: k.variantId, unitPriceVnd: price.get(k.variantId)! }).where(eq(schema.preorderLine.id, k.lineId));
+    }
+    const linked = new Set(data.links.map((k) => k.lineId));
+    if (data.status === 'arrived' && lines.some((l) => !l.variantId && !linked.has(l.id))) {
+      throw new AppError(422, 'link_required', 'Chọn sản phẩm cho mọi sách gõ tự do trước khi chuyển sang Chờ nhận. Sách chưa có thì thêm ở trang Sản phẩm.');
+    }
+    await tx.update(schema.preorder).set({ status: data.status, ...(data.status === 'arrived' && { allocatedAt: ctx.clock.now() }) }).where(eq(schema.preorder.id, id));
+    await audit.record(tx, ctx, { action: 'preorder.status', entity: 'preorder', entityId: id, before: { status: row.status }, after: { status: data.status, links: data.links } });
+    return { id, status: data.status };
   });
 }
 
-/** “Đã liên hệ”: staff called the customer; the holding period starts (FR-ORD-16, BR-10). */
-export async function markPreorderContacted(ctx: Ctx, id: string) {
-  requirePermission(ctx, 'sale.create');
-  return ctx.db.transaction((tx) => contactedTx(tx, ctx, id));
-}
-
-async function contactedTx(tx: Tx, ctx: Ctx, id: string) {
-  const row = await lockPreorder(tx, id);
-  assertTransition(row, 'contacted');
-  const now = ctx.clock.now();
-  const days = (await settings.snapshot(ctx, tx))['preorder.hold_days'];
-  const expiresAt = new Date(now.getTime() + days * 86_400_000);
-  await tx.update(schema.preorder).set({ status: 'contacted', contactedAt: now, expiresAt }).where(eq(schema.preorder.id, id));
-  return { id, status: 'contacted', expiresAt };
-}
+// =============================================================================================
+// Cancel and expiry (FR-ORD-16)
 
 export const CancelHoldSchema = z
   .object({
     reason: z.string().trim().min(1, 'Cần nhập lý do hủy.').max(500),
-    /** Deposit policy (FR-ORD-16): give it back or keep it. */
-    deposit: z.enum(['refund', 'forfeit']),
+    /** Deposit policy (FR-ORD-16): give it back or keep it. Ignored without a deposit. */
+    deposit: z.enum(['refund', 'forfeit']).default('refund'),
     shiftId: z.uuid().optional(),
     refundRef: z.string().trim().max(120).optional(),
-  })
-  .refine((d) => d.deposit === 'forfeit' || d.shiftId || d.refundRef, { message: 'Hoàn cọc tiền mặt cần một ca đang mở; chuyển khoản hoặc thẻ cần mã giao dịch hoàn tiền.', path: ['refundRef'] });
+  });
 
+async function cancelTx(tx: Tx, ctx: Ctx, row: PreorderRow, data: z.infer<typeof CancelHoldSchema>) {
+  if (row.depositVnd > 0 && data.deposit === 'refund') {
+    if (row.depositMethod === 'cash') {
+      if (!data.shiftId) throw new AppError(400, 'shift_required', 'Hoàn cọc tiền mặt cần một ca đang mở.');
+      await openShift(tx, data.shiftId);
+      await tx.insert(schema.cashMovement).values({ shiftId: data.shiftId, direction: 'out', amountVnd: row.depositVnd, reason: `Hoàn cọc ${row.docNo}`, createdBy: ctx.actor!.userId, at: ctx.clock.now() });
+    } else if (!data.refundRef) {
+      throw new AppError(400, 'refund_ref_required', 'Cần nhập mã giao dịch hoàn tiền chuyển khoản hoặc thẻ.');
+    }
+  }
+  await inventory.endReservations(tx, ctx, 'preorder', row.id, 'released');
+  await tx
+    .update(schema.preorder)
+    .set({ status: 'cancelled', cancelReason: data.reason, depositOutcome: row.depositVnd > 0 ? (data.deposit === 'refund' ? 'refunded' : 'forfeited') : null, refundRef: data.refundRef ?? null })
+    .where(eq(schema.preorder.id, row.id));
+  await audit.record(tx, ctx, { action: 'preorder.cancel', entity: 'preorder', entityId: row.id, after: { reason: data.reason, deposit: row.depositVnd > 0 ? data.deposit : null, depositVnd: row.depositVnd } });
+}
+
+/** Cancel with a reason; a slip with a deposit needs a manager, who refunds or keeps it (FR-ORD-16). */
 export async function cancelPreorder(ctx: Ctx, id: string, input: z.input<typeof CancelHoldSchema>) {
   requirePermission(ctx, 'sale.create');
   const data = CancelHoldSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
     const row = await lockPreorder(tx, id);
     assertTransition(row, 'cancelled');
-    if (data.deposit === 'refund' && row.depositVnd > 0) {
-      if (row.depositMethod === 'cash') {
-        if (!data.shiftId) throw new AppError(400, 'shift_required', 'Hoàn cọc tiền mặt cần một ca đang mở.');
-        await openShift(tx, data.shiftId);
-        await tx.insert(schema.cashMovement).values({ shiftId: data.shiftId, direction: 'out', amountVnd: row.depositVnd, reason: `Hoàn cọc ${row.docNo}`, createdBy: ctx.actor!.userId, at: ctx.clock.now() });
-      } else if (!data.refundRef) {
-        throw new AppError(400, 'refund_ref_required', 'Cần nhập mã giao dịch hoàn tiền chuyển khoản hoặc thẻ.');
-      }
-    }
-    await inventory.endReservations(tx, ctx, 'preorder', id, 'released');
-    await tx
-      .update(schema.preorder)
-      .set({ status: 'cancelled', cancelReason: data.reason, depositOutcome: row.depositVnd > 0 ? (data.deposit === 'refund' ? 'refunded' : 'forfeited') : null, refundRef: data.refundRef ?? null })
-      .where(eq(schema.preorder.id, id));
-    await audit.record(tx, ctx, { action: 'preorder.cancel', entity: 'preorder', entityId: id, after: { reason: data.reason, deposit: data.deposit, depositVnd: row.depositVnd } });
-    // Released copies may go to the next pre-orders in the queue.
-    await allocateTx(tx, ctx, (await linesOf(tx, id)).map((l) => l.variantId));
-    return { id, status: 'cancelled', depositOutcome: data.deposit };
+    if (row.depositVnd > 0 && !can(ctx.actor, 'preorder.manage')) throw new AppError(403, 'manager_required', 'Hủy phiếu có tiền cọc cần quản lý quyết hoàn hay giữ cọc.');
+    await cancelTx(tx, ctx, row, data);
+    return { id, status: 'cancelled', depositOutcome: row.depositVnd > 0 ? data.deposit : null };
   });
 }
 
+/**
+ * `preorder.expire` (hourly, FR-ORD-16): a hold without a deposit past its date is cancelled and its
+ * copies go back to stock; a slip with a deposit alerts managers once. Returns both counts.
+ */
+export async function expireHolds(ctx: Ctx): Promise<{ cancelled: number; alerted: number }> {
+  const now = ctx.clock.now();
+  const p = schema.preorder;
+  const due = await ctx.db
+    .select({ id: p.id })
+    .from(p)
+    .where(and(eq(p.status, 'contacted'), lt(p.expiresAt, now), eq(p.depositVnd, 0)));
+  let cancelled = 0;
+  for (const { id } of due) {
+    await ctx.db.transaction(async (tx) => {
+      const row = await lockPreorder(tx, id);
+      if (row.status !== 'contacted' || row.depositVnd > 0 || !row.expiresAt || row.expiresAt >= now) return;
+      await cancelTx(tx, ctx, row, { reason: 'Hết hạn giữ', deposit: 'refund' });
+      cancelled++;
+    });
+  }
+  const alerted = await ctx.db.transaction(async (tx) => {
+    const rows = await tx
+      .update(p)
+      .set({ overdueNotifiedAt: now })
+      .where(and(eq(p.status, 'contacted'), lt(p.expiresAt, now), sql`${p.depositVnd} > 0`, sql`${p.overdueNotifiedAt} is null`))
+      .returning({ id: p.id, docNo: p.docNo });
+    for (const r of rows) await notifications.notifyHolders(tx, 'preorder.manage', 'order.needs_action', { kind: 'preorder', id: r.id, docNo: r.docNo, reason: 'hold_expired' });
+    return rows.length;
+  });
+  return { cancelled, alerted };
+}
+
 // =============================================================================================
-// List for the POS pre-order dialog
+// Lists: the Pre-orders screen, the by-title view, holds for the POS search
 
 export const HoldsQuery = z.object({
   status: z.string().optional(),
   q: z.string().trim().max(100).optional(),
+  customer: z.uuid().optional(),
+  /** Holding and past `expires_at` (Quá hạn). */
   overdue: z.enum(['true', 'false']).optional(),
+  /** Every status that is not finished (the default view of the screen). */
+  open: z.enum(['true', 'false']).optional(),
 });
 
 export async function listPreorders(ctx: Ctx, input: z.input<typeof HoldsQuery>) {
   requirePermission(ctx, 'sale.create');
   const q = HoldsQuery.parse(input);
   const p = schema.preorder;
+  const now = ctx.clock.now();
   const where: SQL[] = [];
-  const statuses = q.status?.split(',').filter(Boolean);
-  if (statuses?.length) where.push(inArray(p.status, statuses));
-  if (q.overdue === 'true') where.push(and(eq(p.status, 'contacted'), lt(p.expiresAt, ctx.clock.now()))!);
+  const statuses = q.status?.split(',').filter(Boolean) ?? [];
+  // “overdue” in the status list is the Quá hạn view of Holding.
+  const plain = statuses.filter((s) => s !== 'overdue');
+  const ors: SQL[] = [];
+  if (plain.length) ors.push(inArray(p.status, plain));
+  if (statuses.includes('overdue') || q.overdue === 'true') ors.push(and(eq(p.status, 'contacted'), lt(p.expiresAt, now))!);
+  if (ors.length) where.push(ors.length === 1 ? ors[0]! : sql`(${sql.join(ors, sql` or `)})`);
+  if (q.open === 'true') where.push(inArray(p.status, [...OPEN]));
+  if (q.customer) where.push(eq(p.customerId, q.customer));
   if (q.q) {
     const digits = q.q.replace(/\D/g, '');
     where.push(
       sql`(${p.docNo} ilike ${`%${q.q}%`} or ${schema.customer.searchText} like ${`%${foldText(q.q)}%`} ${digits.length >= 4 ? sql`or ${schema.customer.phoneE164} like ${`%${digits.slice(-9)}%`}` : sql``}
-           or exists (select 1 from orders.preorder_line l join catalog.item_variant v on v.id = l.variant_id where l.preorder_id = ${p.id} and v.sku = ${q.q}))`,
+           or exists (select 1 from orders.preorder_line l left join catalog.item_variant v on v.id = l.variant_id left join catalog.item i on i.id = v.item_id
+                      where l.preorder_id = ${p.id} and (v.sku = ${q.q} or v.isbn13 = ${q.q.replace(/[^0-9Xx]/g, '')} or l.requested_title ilike ${`%${q.q}%`}
+                        or exists (select 1 from catalog.barcode b where b.variant_id = v.id and b.code = ${q.q})
+                        or i.search_text like ${`%${foldText(q.q)}%`})))`,
     );
   }
   return ctx.db
@@ -283,17 +413,23 @@ export async function listPreorders(ctx: Ctx, input: z.input<typeof HoldsQuery>)
       docNo: p.docNo,
       status: p.status,
       createdAt: p.createdAt,
-      lines: sql<{ variantId: string; sku: string; title: string; qty: number; unitPriceVnd: number; held: boolean }[]>`(
+      lines: sql<{ lineId: string; variantId: string | null; sku: string | null; title: string; freeText: boolean; qty: number; unitPriceVnd: number | null; held: boolean }[]>`(
         select coalesce(json_agg(json_build_object(
-          'variantId', l.variant_id, 'sku', v.sku, 'qty', l.qty, 'unitPriceVnd', l.unit_price_vnd, 'held', l.reserved_at is not null,
-          'title', coalesce(nullif(i.i18n -> 'vi' ->> 'title', ''), i.i18n -> 'en' ->> 'title')) order by l.line_no), '[]'::json)
-        from orders.preorder_line l join catalog.item_variant v on v.id = l.variant_id join catalog.item i on i.id = v.item_id
+          'lineId', l.id, 'variantId', l.variant_id, 'sku', v.sku, 'qty', l.qty, 'unitPriceVnd', l.unit_price_vnd, 'held', l.reserved_at is not null,
+          'freeText', l.variant_id is null,
+          'title', coalesce(nullif(i.i18n -> 'vi' ->> 'title', ''), i.i18n -> 'en' ->> 'title', l.requested_title)) order by l.line_no), '[]'::json)
+        from orders.preorder_line l left join catalog.item_variant v on v.id = l.variant_id left join catalog.item i on i.id = v.item_id
         where l.preorder_id = ${p.id})`,
       totalVnd: sql<number>`(select coalesce(sum(l.qty * l.unit_price_vnd), 0)::int from orders.preorder_line l where l.preorder_id = ${p.id})`,
+      unpriced: sql<boolean>`exists (select 1 from orders.preorder_line l where l.preorder_id = ${p.id} and (l.unit_price_vnd is null or l.variant_id is null))`,
       depositVnd: p.depositVnd,
       depositMethod: p.depositMethod,
+      quotedAt: p.quotedAt,
+      confirmedAt: p.confirmedAt,
       contactedAt: p.contactedAt,
       expiresAt: p.expiresAt,
+      extensions: p.extensions,
+      note: p.note,
       saleId: p.saleId,
       customerId: p.customerId,
       customerName: schema.customer.name,
@@ -308,17 +444,41 @@ export async function listPreorders(ctx: Ctx, input: z.input<typeof HoldsQuery>)
     .limit(200);
 }
 
-/** `preorder.expire` (daily): alert once about holds past the holding period; staff decide (FR-ORD-16). */
-export async function notifyExpiredHolds(ctx: Ctx): Promise<number> {
-  const now = ctx.clock.now();
-  return ctx.db.transaction(async (tx) => {
-    const p = schema.preorder;
-    const rows = await tx
-      .update(p)
-      .set({ overdueNotifiedAt: now })
-      .where(and(eq(p.status, 'contacted'), lt(p.expiresAt, now), sql`${p.overdueNotifiedAt} is null`))
-      .returning({ id: p.id, docNo: p.docNo });
-    for (const r of rows) await notifications.notifyHolders(tx, 'sale.create', 'order.needs_action', { kind: 'preorder', id: r.id, docNo: r.docNo, reason: 'hold_expired' });
-    return rows.length;
-  });
+/** “Theo sách”: books still to arrive on open slips – for ordering from suppliers (FR-POS-09). */
+export async function preordersByTitle(ctx: Ctx) {
+  requirePermission(ctx, 'sale.create');
+  return ctx.db.execute<{ variantId: string | null; sku: string | null; title: string; qty: number; slips: number }>(sql`
+    select l.variant_id as "variantId", v.sku,
+           coalesce(nullif(i.i18n -> 'vi' ->> 'title', ''), i.i18n -> 'en' ->> 'title', l.requested_title) as title,
+           sum(l.qty)::int as qty, count(distinct l.preorder_id)::int as slips
+    from orders.preorder_line l join orders.preorder p on p.id = l.preorder_id
+    left join catalog.item_variant v on v.id = l.variant_id left join catalog.item i on i.id = v.item_id
+    where p.status in ('quote', 'confirmed', 'ordered') and l.reserved_at is null
+    group by l.variant_id, v.sku, 3
+    order by sum(l.qty) desc, 3`);
+}
+
+export const HoldLookupQuery = z.object({ variant: z.union([z.uuid(), z.array(z.uuid())]) });
+
+/** Who copies are held for, for the POS search (FR-POS-09). */
+export async function holdsOf(ctx: Ctx, input: z.input<typeof HoldLookupQuery>) {
+  requirePermission(ctx, 'sale.create');
+  const q = HoldLookupQuery.parse(input);
+  const ids = Array.isArray(q.variant) ? q.variant : [q.variant];
+  return ctx.db
+    .select({
+      variantId: schema.preorderLine.variantId,
+      qty: schema.preorderLine.qty,
+      preorderId: schema.preorder.id,
+      docNo: schema.preorder.docNo,
+      status: schema.preorder.status,
+      expiresAt: schema.preorder.expiresAt,
+      customerName: schema.customer.name,
+      customerPhone: schema.customer.phoneE164,
+    })
+    .from(schema.preorderLine)
+    .innerJoin(schema.preorder, eq(schema.preorder.id, schema.preorderLine.preorderId))
+    .innerJoin(schema.customer, eq(schema.customer.id, schema.preorder.customerId))
+    .where(and(inArray(schema.preorderLine.variantId, ids), sql`${schema.preorderLine.reservedAt} is not null`, inArray(schema.preorder.status, [...OPEN])))
+    .orderBy(asc(schema.preorder.expiresAt));
 }
