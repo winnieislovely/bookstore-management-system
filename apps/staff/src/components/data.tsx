@@ -467,7 +467,6 @@ export function ConfirmDialog({
     <Dialog
       title={title}
       size={size}
-      plain
       onClose={onClose}
       footer={
         <>

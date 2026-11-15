@@ -127,6 +127,11 @@ describe('pre-orders (FR-POS-09, FR-ORD-14, FR-ORD-16, BR-10)', () => {
     expect((await find(first.docNo)).lines[1]).toMatchObject({ variantId: rare, unitPriceVnd: 120000, freeText: false });
     expect((await find(first.docNo)).totalVnd).toBe(360000);
     expect((await h.call('POST', `/api/v1/preorders/${second.id}/status`, { cookie: cashier, body: { status: 'arrived' } })).body.status).toBe('arrived');
+    // Chờ nhận records Giao hàng with a note written by hand; back to Nhận tại quầy clears the note.
+    await h.call('POST', `/api/v1/preorders/${second.id}/status`, { cookie: cashier, body: { status: 'arrived', delivery: true, deliveryNote: 'Ship 12 Lý Thường Kiệt, khách trả phí' } });
+    expect(await find(second.docNo)).toMatchObject({ status: 'arrived', delivery: true, deliveryNote: 'Ship 12 Lý Thường Kiệt, khách trả phí' });
+    await h.call('POST', `/api/v1/preorders/${second.id}/status`, { cookie: cashier, body: { status: 'arrived', delivery: false, deliveryNote: 'x' } });
+    expect(await find(second.docNo)).toMatchObject({ delivery: false, deliveryNote: null });
     expect((await h.call('GET', '/api/v1/me/badges', { cookie: cashier })).body.preordersAction).toBe(2);
   });
 
@@ -164,6 +169,8 @@ describe('pre-orders (FR-POS-09, FR-ORD-14, FR-ORD-16, BR-10)', () => {
     expect(mixed.body.error.code).toBe('mixed_slip');
     quang = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Quang', phone: '0911000004' }, lines: [{ variantId: other, qty: 1 }] } })).body;
     expect((await find(quang.docNo)).status).toBe('contacted');
+    // A hold is Chờ nhận already: Giao hàng is recorded and it stays Contacted.
+    expect((await h.call('POST', `/api/v1/preorders/${quang.id}/status`, { cookie: cashier, body: { status: 'arrived', delivery: true, deliveryNote: 'Grab' } })).body).toMatchObject({ status: 'contacted', delivery: true });
     // Slips are never edited.
     expect((await h.call('PUT', `/api/v1/preorders/${quang.id}/lines`, { cookie: cashier, body: { lines: [{ variantId: other, qty: 2 }] } })).status).toBe(404);
     const order = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Quang', phone: '0911000004' }, lines: [{ variantId: rare, qty: 1 }], deposit: { method: 'transfer', amountVnd: 120000 } } })).body;

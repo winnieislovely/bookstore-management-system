@@ -1,5 +1,5 @@
 import { schema } from '@bookstore/db';
-import { canTransition, foldText, LIB_LANGUAGES, STOCK_COUNT } from '@bookstore/domain';
+import { canTransition, foldText, normalizeIsbn, STOCK_COUNT } from '@bookstore/domain';
 import { and, asc, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
@@ -8,8 +8,9 @@ import { AppError, can, errors, nextDocNo, requirePermission, type Ctx, type Tx 
 
 /**
  * Library counts (FR-LIB-04, TDD §4.8), modelled on stock counts: a session snapshots the copies
- * expected on the shelf in scope; copies are marked found by scanning, on screen (up to 50 lines)
- * or through the count sheet; submit, approve or cancel. Approval only closes the variance report.
+ * expected on the shelves in scope; copies are marked found by scanning (accession barcode or ISBN),
+ * on screen (up to 50 lines) or through the count sheet; submit, approve or cancel. Approval only
+ * closes the variance report.
  */
 
 /** Above this many copies, results come from scanning or the count sheet (as FR-INV-06). */
@@ -17,19 +18,17 @@ export const LIB_COUNT_MARK_LIMIT = 50;
 
 const ON_SHELF = ['available', 'reserved'];
 
+/** Scoped by shelves only; none = the whole library (FR-LIB-04, 15 Nov 2026). */
 export const CreateLibCountSchema = z.object({
   shelves: z.array(z.string().trim().min(1).max(60)).max(100).default([]),
-  languages: z.array(z.enum(LIB_LANGUAGES)).max(2).default([]),
-  categories: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
   blind: z.boolean().default(false),
 });
 
-/** Shelves and categories in use, for the create form. */
+/** Shelves in use, for the create form. */
 export async function scopeOptions(ctx: Ctx) {
   requirePermission(ctx, 'library.count');
   const shelves = await ctx.db.execute<{ shelf: string; n: number }>(sql`select shelf, count(*)::int as n from library.lib_copy where shelf is not null group by shelf order by shelf`);
-  const categories = await ctx.db.execute<{ category: string }>(sql`select distinct category from library.lib_title where category is not null order by category`);
-  return { shelves: shelves.map((s) => ({ shelf: s.shelf, copies: s.n })), categories: categories.map((c) => c.category) };
+  return { shelves: shelves.map((s) => ({ shelf: s.shelf, copies: s.n })) };
 }
 
 export async function createCount(ctx: Ctx, input: z.input<typeof CreateLibCountSchema>) {
@@ -37,13 +36,12 @@ export async function createCount(ctx: Ctx, input: z.input<typeof CreateLibCount
   const data = CreateLibCountSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
     const docNo = await nextDocNo(tx, 'LCNT', ctx.clock.now());
-    const scope = { shelves: data.shelves, languages: data.languages, categories: data.categories };
+    // The column keeps its old shape; language and category scopes are no longer used.
+    const scope = { shelves: data.shelves, languages: [], categories: [] };
     const [count] = await tx.insert(schema.libCount).values({ docNo, scope, blind: data.blind, createdBy: actor.userId, createdAt: ctx.clock.now() }).returning({ id: schema.libCount.id });
     const list = (values: string[]) => sql.join(values.map((v) => sql`${v}`), sql`, `);
     const where: SQL[] = [sql`c.status in ('available', 'reserved')`];
     if (data.shelves.length) where.push(sql`c.shelf in (${list(data.shelves)})`);
-    if (data.languages.length) where.push(sql`t.language in (${list(data.languages)})`);
-    if (data.categories.length) where.push(sql`t.category in (${list(data.categories)})`);
     // Snapshot the copies expected on the shelf.
     await tx.execute(sql`
       insert into library.lib_count_line (count_id, copy_id, expected_shelf, expected_status)
@@ -165,9 +163,13 @@ async function lockOpen(tx: Tx, id: string) {
   return count;
 }
 
+/** `barcode`: the accession barcode or the book's ISBN. */
 export const ScanSchema = z.object({ barcode: z.string().trim().min(1).max(40) });
 
-/** A scanned label: the copy is found; a copy outside the snapshot is added out of scope. */
+/**
+ * A scanned label: the copy is found; a copy outside the snapshot is added out of scope. An ISBN marks
+ * the not yet found in-scope copy of that title with the lowest barcode (FR-LIB-04).
+ */
 export async function scan(ctx: Ctx, id: string, input: z.input<typeof ScanSchema>) {
   const actor = requirePermission(ctx, 'library.count');
   const data = ScanSchema.parse(input);
@@ -178,9 +180,26 @@ export async function scan(ctx: Ctx, id: string, input: z.input<typeof ScanSchem
       .from(schema.libCopy)
       .innerJoin(schema.libTitle, eq(schema.libTitle.id, schema.libCopy.titleId))
       .where(sql`replace(upper(${schema.libCopy.barcode}), '-', '') = replace(upper(${data.barcode}), '-', '')`);
-    if (!copy) throw new AppError(404, 'copy_not_found', `Không tìm thấy bản sách có mã ${data.barcode}.`, { barcode: data.barcode });
     const now = ctx.clock.now();
     const l = schema.libCountLine;
+    if (!copy) {
+      const isbn = normalizeIsbn(data.barcode);
+      const [title] = isbn ? await tx.select({ title: schema.libTitle.title }).from(schema.libTitle).where(eq(schema.libTitle.isbn13, isbn)).limit(1) : [];
+      if (!isbn || !title) throw new AppError(404, 'copy_not_found', `Không tìm thấy bản sách có mã cá biệt hoặc ISBN ${data.barcode}.`, { barcode: data.barcode });
+      const lines = await tx.execute<{ copy_id: string; barcode: string; title: string; found: boolean | null }>(sql`
+        select l.copy_id, c.barcode, t.title, l.found from library.lib_count_line l
+        join library.lib_copy c on c.id = l.copy_id join library.lib_title t on t.id = c.title_id
+        where l.count_id = ${id}::uuid and l.in_scope and t.isbn13 = ${isbn}
+        order by c.barcode for update of l`);
+      const next = lines.find((x) => x.found !== true);
+      if (!next) {
+        throw lines.length
+          ? errors.conflict('isbn_all_counted', `Mọi bản của “${title.title}” trong phiếu đã được đếm. Nếu đây là bản khác, hãy quét mã cá biệt.`)
+          : new AppError(404, 'isbn_not_in_count', `“${title.title}” không có bản nào trong phiếu này. Hãy quét mã cá biệt của bản sách.`);
+      }
+      await tx.update(l).set({ found: true, checkedAt: now, checkedBy: actor.userId }).where(and(eq(l.countId, id), eq(l.copyId, next.copy_id)));
+      return { barcode: next.barcode, title: next.title, inScope: true };
+    }
     const [line] = await tx
       .update(l)
       .set({ found: true, checkedAt: now, checkedBy: actor.userId })

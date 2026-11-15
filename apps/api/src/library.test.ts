@@ -42,22 +42,25 @@ afterAll(async () => {
 
 describe('catalogue: call numbers and accession numbers (FR-LIB-01, FR-LIB-02, FR-LIB-17)', () => {
   it('saves a title with its call number and first copies in one step', async () => {
-    const r = await call('POST', '/api/v1/library/titles', librarian, {
+    const title = (shelf?: string) => ({
       title: 'Dế Mèn phiêu lưu ký',
       authors: ['Tô Hoài'],
       language: 'vi',
       category: 'Thiếu nhi',
       dewey: '895.92234',
       cutter: 'H63d',
-      copies: { count: 2, valueVnd: 80000, acquiredVia: 'purchase' },
+      copies: { count: 2, valueVnd: 80000, acquiredVia: 'purchase', ...(shelf !== undefined && { shelf }) },
     });
+    // New copies need a shelf (FR-LIB-02).
+    expect((await call('POST', '/api/v1/library/titles', librarian, title())).body.error.code).toBe('shelf_required');
+    // Stored in capitals with single spaces: “ a1 ” is shelf A1.
+    const r = await call('POST', '/api/v1/library/titles', librarian, title(' a1 '));
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body.callNo).toBe('895.92234 H63d');
     // Accession numbers: language prefix and a running six-digit number.
     expect(r.body.copies.map((c: { barcode: string }) => c.barcode)).toEqual(['VN-000001', 'VN-000002']);
     titleId = r.body.id;
-    // Shelf for the count tests below.
-    for (const c of r.body.copies) await call('PATCH', `/api/v1/library/copies/${c.id}`, librarian, { shelf: 'A1' });
+    expect((await call('GET', `/api/v1/library/titles/${titleId}`, librarian)).body.copies.map((c: { shelf: string }) => c.shelf)).toEqual(['A1', 'A1']);
     // Titles may share a call number; a bad Dewey number is refused.
     expect((await call('POST', '/api/v1/library/titles', librarian, { title: 'Dế Mèn (bản khác)', language: 'vi', dewey: '895.92234', cutter: 'H63d' })).status).toBe(201);
     expect((await call('POST', '/api/v1/library/titles', librarian, { title: 'Sai', language: 'vi', dewey: 'ABC' })).status).toBe(400);
@@ -66,8 +69,19 @@ describe('catalogue: call numbers and accession numbers (FR-LIB-01, FR-LIB-02, F
   });
 
   it('numbers later copies on, with the entry date, and prints spine labels', async () => {
+    expect((await call('POST', `/api/v1/library/titles/${other}/copies`, librarian, { count: 1, valueVnd: 30000, acquiredVia: 'donation' })).body.error.code).toBe('shelf_required');
     const r = await call('POST', `/api/v1/library/titles/${other}/copies`, librarian, { count: 1, valueVnd: 30000, acquiredVia: 'donation', shelf: 'B1', acquiredAt: '2026-10-20' });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
+    // Shelves in use, and the suggestion: the commonest shelf of the same Dewey tens, else hundreds, else none.
+    const shelves = (dewey: string) => call('GET', `/api/v1/library/shelves?dewey=${dewey}`, librarian).then((x) => x.body);
+    expect(await shelves('895.1')).toEqual({ items: [{ shelf: 'A1', copies: 2 }, { shelf: 'B1', copies: 1 }], suggested: 'A1' });
+    expect((await shelves('810')).suggested).toBe('A1');
+    expect((await shelves('300')).suggested).toBeNull();
+    // A copy from the shop is recorded with its source only; sale stock is not touched (FR-INV-13 withdrawn).
+    const fromShop = await call('POST', `/api/v1/library/titles/${other}/copies`, librarian, { count: 1, valueVnd: 90000, acquiredVia: 'transfer', shelf: 'B1' });
+    expect(fromShop.status, JSON.stringify(fromShop.body)).toBe(201);
+    expect((await call('GET', `/api/v1/library/titles/${other}`, librarian)).body.copies.map((c: { acquiredVia: string }) => c.acquiredVia)).toEqual(['donation', 'transfer']);
+    expect((await call('POST', `/api/v1/library/titles/${other}/transfer-from-stock`, librarian, { variantId: other, count: 1 })).status).toBe(404);
     expect(r.body.items.map((c: { barcode: string }) => c.barcode)).toEqual(['EN-000001']);
     const t = (await call('GET', `/api/v1/library/titles/${other}`, librarian)).body;
     expect(new Date(t.copies[0].acquiredAt).toISOString()).toBe('2026-10-19T17:00:00.000Z');
@@ -77,6 +91,8 @@ describe('catalogue: call numbers and accession numbers (FR-LIB-01, FR-LIB-02, F
     expect(labels[1]).toMatchObject({ barcode: 'VN-000001', callNo: '895.92234 H63d', dewey: '895.92234', cutter: 'H63d', language: 'vi' });
     const list = (await call('GET', '/api/v1/library/titles?language=vi', librarian)).body.items;
     expect(list).toHaveLength(2);
+    // The Kệ column: the shelves of a title's copies.
+    expect(list.find((x: { id: string }) => x.id === titleId).shelves).toEqual(['A1']);
     expect(list.find((x: { id: string }) => x.id === titleId)).toMatchObject({ callNo: '895.92234 H63d', copies: 2, available: 2 });
     expect((await call('GET', '/api/v1/library/titles?unclassified=true', librarian)).body.items.map((x: { id: string }) => x.id)).toEqual([other]);
     // Accession numbers are found with or without the hyphen.
@@ -252,6 +268,10 @@ describe('damage, loss, reservations and the cash book (FR-LIB-09a, FR-LIB-11, F
     let c = (await call('GET', `/api/v1/library/counts/${id}`, librarian)).body;
     expect(c.lines.map((l: { barcode: string }) => l.barcode)).toEqual(['VN-000001']);
     expect(c.lines[0].status).toBeUndefined(); // blind for the librarian
+    // An ISBN marks the next not yet counted copy of that title; then there is none left to mark.
+    await h.t.sql`update library.lib_title set isbn13 = '9786042000017' where title = 'Dế Mèn phiêu lưu ký'`;
+    expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: '978-604-2-00001-7' })).body).toMatchObject({ barcode: 'VN-000001', inScope: true });
+    expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: '9786042000017' })).body.error.code).toBe('isbn_all_counted');
     expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: 'vn000001' })).body).toMatchObject({ inScope: true });
     expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: 'EN-000001' })).body).toMatchObject({ inScope: false });
     expect((await call('POST', `/api/v1/library/counts/${id}/scan`, librarian, { barcode: 'XX-1' })).body.error.code).toBe('copy_not_found');
@@ -289,10 +309,14 @@ describe('damage, loss, reservations and the cash book (FR-LIB-09a, FR-LIB-11, F
     expect(r.popular[0]).toMatchObject({ callNo: '895.92234 H63d', title: 'Dế Mèn phiêu lưu ký' });
   });
 
-  it('gives the library overview on Mượn / trả and the dashboard (FR-LIB-15a, FR-RPT-01)', async () => {
-    // VN-000001 on the shelf, VN-000002 damaged, EN-000001 lent to Mai.
+  it('gives the library overview on the dashboard (FR-LIB-15a, FR-RPT-01)', async () => {
+    // VN-000001 and EN-000002 (from the shop) on the shelf, VN-000002 damaged, EN-000001 lent to Mai.
     const ov = (await call('GET', '/api/v1/library/overview', librarian)).body;
-    expect(ov).toMatchObject({ copies: 3, available: 1, onLoan: 1, overdue: 0, period: 'week' });
+    expect(ov).toMatchObject({ copies: 4, available: 2, onLoan: 1, overdue: 0, period: 'week' });
+    // A “Khách mới” on the borrow form borrows on the default terms until the form is confirmed.
+    const fresh = (await call('GET', '/api/v1/library/new-borrower', librarian)).body;
+    expect(fresh).toMatchObject({ openLoans: [], blocks: [], unpaidChargesVnd: 0, fee: expect.objectContaining({ discountPct: 0 }) });
+    expect(fresh.loanDays).toBeGreaterThan(0);
     // Fees collected this week (from Monday, store time), receipts less refunds (FR-LIB-15a).
     const book = (await call('GET', `/api/v1/library/payments?from=${ov.from}&to=${ov.to}`, librarian)).body;
     expect(ov.collectedVnd).toBeGreaterThan(0);

@@ -383,7 +383,7 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
     }
   };
   return (
-    <Dialog title="Thông tin khách hàng" size="sm" plain onClose={onClose}>
+    <Dialog title="Thông tin khách hàng" size="sm" onClose={onClose}>
       <div className="flex flex-col gap-4">
         <div>
           <div className="relative">

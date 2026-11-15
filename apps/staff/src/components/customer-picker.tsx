@@ -65,12 +65,7 @@ export function CustomerPicker({ value, onChange, newNameLabel = 'Tên khách' }
     const dupe = known.data && samePhone(known.data.phoneE164, value.phone) ? known.data : null;
     return (
       <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <p className="text-[13px] font-medium text-ink-700">Khách mới</p>
-          <Button variant="ghost" size="sm" onClick={() => onChange(null)}>
-            Tìm khách cũ
-          </Button>
-        </div>
+        {/* No way back to the search here: to find an existing customer, close and reopen the form (Design §12.8). */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Số điện thoại" required inputMode="tel" value={value.phone} onChange={(e) => onChange({ ...value, phone: e.target.value })} />
           <Field label={newNameLabel} required value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} />

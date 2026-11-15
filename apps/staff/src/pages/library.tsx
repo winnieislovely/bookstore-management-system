@@ -1,12 +1,14 @@
 import { barcodeSvg, BORROW_BLOCK_TEXT, cutterNumber, deweyCategory, discountedLoanFees, dueAfter, escapeXml, normalizeDewey, vietnameseNaturalOrder, type BorrowBlock, type LoanDiscount } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeftRight, BookmarkCheck, CheckCircle2, ChevronDown, Library, Phone, Plus, Printer, ScanBarcode, Search, Truck, User, UserPlus, X } from 'lucide-react';
-import { useId, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { AlertOctagon, ArrowLeft, ArrowLeftRight, BookmarkCheck, CheckCircle2, ChevronRight, Library, Pencil, Phone, Plus, Printer, ScanBarcode, Search, User, X } from 'lucide-react';
+import { useId, useRef, useState, type ReactNode } from 'react';
+import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, SearchBox, SelectField, TextArea, TimeFilter, errText, timeDays, timeLabel, toast, useDebounced, useParam, type Column } from '../components/data';
 import { BookLookup, type BookResult } from '../components/bookLookup';
-import { ProductSearch } from '../components/product-search';
+import { normalizeShelf, ShelfPicker } from '../components/shelfPicker';
+import { CustomerPicker, type CustomerChoice } from '../components/customer-picker';
+import { DiscountInput } from '../components/discount-input';
 import { Button, Card, EmptyState, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, patch, post } from '../lib/api';
 import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
@@ -127,6 +129,8 @@ interface TitleRow {
   available: number;
   queued: number;
   onLoan: number;
+  /** Shelves holding its copies, in order. */
+  shelves: string[];
   /** Earliest due date of an open loan of the title. */
   nextDueAt: string | null;
 }
@@ -175,130 +179,20 @@ function DueCell({ loan }: { loan: Pick<Loan, 'dueAt' | 'overdue' | 'daysLate'> 
   );
 }
 
-/** Ưu đãi on the borrow form: a number with a % / ₫ switch (FR-LIB-18, Design §13.8). */
-function DiscountInput({ value, onChange, disabled }: { value: LoanDiscount | null; onChange: (d: LoanDiscount) => void; disabled?: boolean }) {
-  const kind = value?.kind ?? 'vnd';
-  const text = value && value.value > 0 ? formatNumber(value.value) : '';
-  return (
-    <span className="flex w-full items-center justify-between gap-3">
-      {/* The kind is a dropdown on the left, the value on the right (Design §13.8). */}
-      <select
-        className="h-9 rounded-md border border-paper-500 bg-white pr-8 pl-2 text-sm focus:border-navy-700 disabled:bg-paper-100"
-        aria-label="Kiểu ưu đãi"
-        disabled={disabled}
-        value={kind}
-        onChange={(e) => onChange({ kind: e.target.value as LoanDiscount['kind'], value: 0 })}
-      >
-        <option value="vnd">Giảm theo số tiền (₫)</option>
-        <option value="pct">Giảm theo phần trăm (%)</option>
-      </select>
-      <span className="relative">
-      <input
-        className="h-9 w-32 rounded-md border border-paper-500 bg-white pr-7 pl-2 text-right num focus:border-navy-700 disabled:bg-paper-100"
-        inputMode="numeric"
-        aria-label={kind === 'pct' ? 'Ưu đãi theo phần trăm' : 'Ưu đãi theo số tiền'}
-        placeholder="0"
-        disabled={disabled}
-        value={text}
-        onChange={(e) => {
-          const digits = e.target.value.replace(/\D/g, '');
-          onChange({ kind, value: digits ? Number(digits) : 0 });
-        }}
-      />
-      <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-sm text-ink-500">{kind === 'pct' ? '%' : '₫'}</span>
-      </span>
-    </span>
-  );
-}
-
 // =============================================================================================
-// Borrower picker: customer by phone or name, or a new one (FR-LIB-05, UC-17 step 1)
+// Borrower: the pre-order customer picker (search by phone or name; “Khách mới” only when nothing
+// matches, created when the form is confirmed – FR-LIB-05, UC-17 step 1, Design §12.8, §13.8)
 
-interface PickedCustomer {
-  id: string;
-  name: string;
-  phoneE164: string | null;
-}
+const phoneDigits = (s: string) => s.replace(/\D/g, '');
+/** A new customer's phone and name are filled in. */
+const newCustomerReady = (c: CustomerChoice) => c?.kind === 'new' && !!c.name.trim() && phoneDigits(c.phone).length >= 9;
 
-function BorrowerPicker({ value, onChange }: { value: PickedCustomer | null; onChange: (c: PickedCustomer | null) => void }) {
-  const [q, setQ] = useState('');
-  const [creating, setCreating] = useState<{ name: string; phone: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const term = useDebounced(q.trim(), 300);
-  const found = useQuery({ queryKey: ['library-borrower-search', term], enabled: term.length >= 2 && !value, queryFn: () => get<{ items: PickedCustomer[] }>('/api/v1/customers', { q: term, limit: 6 }) });
-  if (value) {
-    return (
-      <div className="flex items-center gap-3 rounded-md border border-paper-300 p-3 text-sm">
-        <User size={20} aria-hidden />
-        <span className="min-w-0 flex-1">
-          <span className="block font-semibold">{value.name}</span>
-          <span className="text-ink-500 num">{value.phoneE164 && formatPhone(value.phoneE164)}</span>
-        </span>
-        <Button variant="ghost" icon={X} aria-label="Chọn khách khác" onClick={() => onChange(null)} />
-      </div>
-    );
-  }
-  if (creating) {
-    const create = async () => {
-      setError(null);
-      try {
-        const r = await post<{ id: string }>('/api/v1/customers', { name: creating.name.trim(), phone: creating.phone.trim() });
-        onChange({ id: r.id, name: creating.name.trim(), phoneE164: null });
-      } catch (e) {
-        setError(errText(e));
-      }
-    };
-    return (
-      <div className="flex flex-col gap-3">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Số điện thoại" required inputMode="tel" value={creating.phone} onChange={(e) => setCreating({ ...creating, phone: e.target.value })} />
-          <Field label="Họ tên" required value={creating.name} onChange={(e) => setCreating({ ...creating, name: e.target.value })} />
-        </div>
-        <div className="flex gap-2">
-          <Button variant="primary" size="sm" disabled={!creating.name.trim() || creating.phone.replace(/\D/g, '').length < 9} onClick={create}>
-            Tạo khách hàng
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setCreating(null)}>
-            Tìm khách cũ
-          </Button>
-        </div>
-        {error && <InlineAlert tone="danger">{error}</InlineAlert>}
-      </div>
-    );
-  }
-  const items = found.data?.items ?? [];
-  const digits = q.replace(/\D/g, '');
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="relative">
-      <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
-      <input
-        className="h-11 w-full rounded-md border border-paper-500 bg-white pr-3 pl-10 focus:border-navy-700"
-        placeholder="Nhập số điện thoại/tên khách"
-        aria-label="Số điện thoại hoặc tên khách"
-        autoFocus
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-      />
-      </div>
-      {term.length >= 2 && found.data && (
-        <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
-          {items.length === 0 && <li className="px-3 py-2 text-sm text-ink-500">Không có khách phù hợp.</li>}
-          {items.map((c) => (
-            <li key={c.id}>
-              <button type="button" className="flex min-h-12 w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-navy-50" onClick={() => onChange(c)}>
-                <span className="min-w-0 flex-1 font-medium">{c.name}</span>
-                <span className="whitespace-nowrap text-ink-500 num">{c.phoneE164 && formatPhone(c.phoneE164)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <Button variant="tonal" size="sm" icon={UserPlus} className="self-start" onClick={() => setCreating({ phone: digits.length >= 6 ? q.trim() : '', name: digits.length >= 6 ? '' : q.trim() })}>
-        Khách mới
-      </Button>
-    </div>
-  );
+/** The chosen customer's id, creating a new one first (once: `created` keeps it for a retry). */
+async function customerIdOf(c: CustomerChoice, created: { current: string | null }): Promise<string> {
+  if (c?.kind === 'existing') return c.customer.id;
+  if (!newCustomerReady(c) || c?.kind !== 'new') throw new Error('Nhập số điện thoại và tên khách mới.');
+  if (!created.current) created.current = (await post<{ id: string }>('/api/v1/customers', { name: c.name.trim(), phone: c.phone.trim() })).id;
+  return created.current;
 }
 
 // =============================================================================================
@@ -450,7 +344,10 @@ function EligibilityCard({ b, onPay }: { b: Borrower; onPay?: () => void }) {
 
 function BorrowDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
-  const [customer, setCustomer] = useState<PickedCustomer | null>(null);
+  const [customer, setCustomer] = useState<CustomerChoice>(null);
+  const created = useRef<string | null>(null);
+  const customerId = customer?.kind === 'existing' ? customer.customer.id : null;
+  const isNew = customer?.kind === 'new';
   const [scan, setScan] = useState('');
   const [camera, setCamera] = useState(false);
   // Copies on the shelf matching the code or title typed (Design §13.8).
@@ -473,7 +370,12 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
   const [done, setDone] = useState<{ totalFeeVnd: number; dueAt: string; count: number; holds: { callNo: string | null; title: string; position: number }[] } | null>(null);
   const [payment, setPayment] = useState<DeskPayment>({ method: 'cash' });
   const [payOwed, setPayOwed] = useState(false);
-  const b = useQuery({ queryKey: ['library-borrower', customer?.id], enabled: !!customer, queryFn: () => get<Borrower>(`/api/v1/library/borrowers/${customer!.id}`) });
+  // A new customer borrows on the default terms until the form is confirmed.
+  const b = useQuery({
+    queryKey: ['library-borrower', customerId ?? (isNew ? 'new' : null)],
+    enabled: !!customerId || isNew,
+    queryFn: () => get<Borrower>(customerId ? `/api/v1/library/borrowers/${customerId}` : '/api/v1/library/new-borrower'),
+  });
   // Ưu đãi entered by hand; until then the buyer discount applies (FR-LIB-18). Reset per borrower.
   const [manual, setManual] = useState<{ customerId: string; d: LoanDiscount } | null>(null);
   const [discountOpen, setDiscountOpen] = useState(false);
@@ -531,7 +433,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
         !t
           ? `Không tìm thấy sách có mã hoặc tên “${text}”.`
           : t.copies === 0
-            ? `Đầu sách “${t.title}” chưa có bản sách nào. Thêm bản ở Quản lý đầu sách trước khi cho mượn.`
+            ? `Đầu sách “${t.title}” chưa có bản sách nào. Thêm bản ở Quản lý thư viện trước khi cho mượn.`
             : `Mọi bản của “${t.title}” đang được giữ hoặc không dùng được.`,
       );
     } catch (e) {
@@ -547,8 +449,9 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
     setError(null);
     try {
       // The loan fee is taken at the desk before the loans are recorded (FR-LIB-07, FR-LIB-09a).
+      const id = await customerIdOf(customer, created);
       const r = await post<{ totalFeeVnd: number; dueAt: string; loans: unknown[]; holds: { callNo: string | null; title: string; position: number }[] }>('/api/v1/library/loans/checkout', {
-        customerId: customer!.id,
+        customerId: id,
         barcodes: copies.map((c) => c.barcode),
         holdTitleIds: holds.map((h) => h.titleId),
         ...(copies.length > 0 && { payment: paymentBody(payment), ...(discount && { discount }) }),
@@ -617,7 +520,7 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
           <Button variant="secondary" onClick={onClose}>
             Hủy
           </Button>
-          <Button variant="primary" loading={busy} disabled={!data || blocks.length > 0 || copies.length + holds.length === 0 || discountTooHigh || !paymentReady(payment)} onClick={confirm}>
+          <Button variant="primary" loading={busy} disabled={!data || (isNew && !newCustomerReady(customer)) || blocks.length > 0 || copies.length + holds.length === 0 || discountTooHigh || !paymentReady(payment)} onClick={confirm}>
             Xác nhận
           </Button>
         </>
@@ -626,14 +529,11 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
       <div className="flex flex-col gap-4">
         <section className="flex flex-col gap-2">
           <h3 className="text-[13px] font-semibold text-ink-700">1. Thông tin người mượn</h3>
-          <BorrowerPicker
-            value={customer}
-            onChange={setCustomer}
-          />
-          {b.isLoading && customer && <Skeleton className="h-20" />}
+          <CustomerPicker value={customer} onChange={setCustomer} />
+          {b.isLoading && customerId && <Skeleton className="h-20" />}
           {b.error && <ErrorState error={b.error} onRetry={() => b.refetch()} />}
-          {data && <EligibilityCard b={data} onPay={() => setPayOwed(true)} />}
-          {payOwed && customer && <PayChargesDialog customerId={customer.id} onClose={() => setPayOwed(false)} onDone={() => void b.refetch()} />}
+          {data && customerId && <EligibilityCard b={data} onPay={() => setPayOwed(true)} />}
+          {payOwed && customerId && <PayChargesDialog customerId={customerId} onClose={() => setPayOwed(false)} onDone={() => void b.refetch()} />}
         </section>
         {/* Every section is shown from the start (Design §13.8). */}
         <section className="flex flex-col gap-2">
@@ -716,7 +616,6 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
                 onClose={() => setCamera(false)}
               />
             )}
-            {copies.length + holds.length === 0 && <p className="text-sm text-ink-500">Chưa có sách nào.</p>}
             {copies.length + holds.length > 0 && (
               <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
                 {copies.map((c) => (
@@ -766,24 +665,24 @@ function BorrowDialog({ onClose }: { onClose: () => void }) {
               <span className="text-right font-semibold num">{formatNumber(copies.length)}</span>
               <span>Phí mượn</span>
               <span className="text-right font-semibold num">{data && copies.length ? formatVnd(listTotal) : '—'}</span>
-              {/* Ưu đãi folds open with an arrow to choose % or ₫ and enter the value (Design §13.8). */}
-              <button
-                type="button"
-                className="col-span-2 -mx-1 flex items-center justify-between gap-3 rounded px-1 py-0.5 text-left hover:bg-paper-200"
-                aria-expanded={discountOpen}
-                onClick={() => setDiscountOpen((o) => !o)}
-              >
-                <span className="inline-flex items-center gap-1">
+              {/* Like the POS “Giảm giá ›”: the label opens a % field under the row, at the right (Design §13.1, §13.8). */}
+              <span>
+                <button type="button" className="-mx-1 inline-flex min-h-8 items-center gap-0.5 rounded-sm px-1 hover:text-navy-700" aria-expanded={discountOpen} onClick={() => setDiscountOpen((o) => !o)}>
                   Ưu đãi
-                  <ChevronDown size={16} className={clsx('text-ink-500 transition-transform', discountOpen && 'rotate-180')} aria-hidden />
-                </span>
-                <span className={clsx('font-semibold num', listTotal > feeTotal && !discountTooHigh ? 'text-success-700' : 'text-ink-500')}>
-                  {data && copies.length > 0 && !discountTooHigh && listTotal > feeTotal ? `−${formatVnd(listTotal - feeTotal)}` : '—'}
-                </span>
-              </button>
+                  <ChevronRight size={16} className={clsx('transition-transform', discountOpen && 'rotate-90')} aria-hidden />
+                </button>
+              </span>
+              <span className={clsx('text-right font-semibold whitespace-nowrap num', listTotal > feeTotal && !discountTooHigh ? 'text-success-700' : 'text-ink-500')}>
+                {data && copies.length > 0 && !discountTooHigh && listTotal > feeTotal ? `−${formatVnd(listTotal - feeTotal)}` : '—'}
+              </span>
               {discountOpen && (
-                <div className="col-span-2">
-                  <DiscountInput value={discount} disabled={!data} onChange={(d) => data && setManual({ customerId: data.customer.id, d })} />
+                <div className="col-span-2 pb-1 text-right">
+                  <DiscountInput
+                    value={discount?.kind === 'pct' && discount.value > 0 ? { kind: 'percent', bp: discount.value * 100 } : null}
+                    disabled={!data || !copies.length}
+                    // A whole percentage, as the loan fee takes it (FR-LIB-18).
+                    onChange={(d) => data && setManual({ customerId: data.customer.id, d: { kind: 'pct', value: d && d.kind === 'percent' ? Math.round(d.bp / 100) : 0 } })}
+                  />
                 </div>
               )}
               <span className="font-semibold">Tổng phí mượn</span>
@@ -1001,26 +900,6 @@ export interface LibraryOverviewData {
   to: string;
   onLoan: number;
   overdue: number;
-}
-
-const COLLECTED_LABEL: Record<LibraryOverviewData['period'], string> = { day: 'Đã thu hôm nay', week: 'Đã thu trong tuần', month: 'Đã thu trong tháng' };
-
-export function LibraryOverview({ data }: { data: LibraryOverviewData | undefined }) {
-  const tile = (label: string, value: string | undefined, to: string, tone?: string) => (
-    <Link to={to} className="flex flex-col gap-1 rounded-lg border border-paper-300 bg-white p-4 hover:border-navy-700">
-      <span className="text-sm text-ink-500">{label}</span>
-      {value === undefined ? <Skeleton className="h-8 w-16" /> : <span className={clsx('text-2xl leading-8 font-semibold num', tone)}>{value}</span>}
-    </Link>
-  );
-  const n = (v: number | undefined) => (v === undefined ? undefined : formatNumber(v));
-  return (
-    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      {tile('Tổng', n(data?.copies), '/library/catalog')}
-      {tile(COLLECTED_LABEL[data?.period ?? 'week'], data && formatVnd(data.collectedVnd), data ? `/library?tab=all&time=${data.from}..${data.to}` : '/library?tab=all', 'text-success-700')}
-      {tile('Đang mượn', n(data?.onLoan), '/library')}
-      {tile('Quá hạn', n(data?.overdue), '/library?tab=overdue', data?.overdue ? 'text-danger-700' : undefined)}
-    </div>
-  );
 }
 
 /** Gia hạn: one more loan period; the fee is taken at the desk (FR-LIB-12, FR-LIB-09a). */
@@ -1318,7 +1197,6 @@ export function LibraryDeskPage() {
     queryFn: () => get<{ holds: Hold[] }>('/api/v1/library/loans', { filter: 'held', q: q || undefined }),
   });
   const counts = list.data?.counts;
-  const overview = useQuery({ queryKey: ['library-loans', 'overview'], queryFn: () => get<LibraryOverviewData>('/api/v1/library/overview') });
   const refresh = () => void qc.invalidateQueries({ queryKey: ['library-loans'] });
   const slipColumns: Column<Slip>[] = [
     { header: 'Số phiếu', className: 'whitespace-nowrap', cell: (s) => <span className="code font-medium">{s.docNo ?? '—'}</span> },
@@ -1390,10 +1268,6 @@ export function LibraryDeskPage() {
           )
         }
       />
-      {/* One card like the dashboard's (Design §12.5, §13.8). */}
-      <Card title="Tổng quan thư viện" className="mb-4">
-        <LibraryOverview data={overview.data} />
-      </Card>
       {/* Loan slips with a filter beside the search box, not tabs (Design §13.8). */}
       <div className="mb-4 flex items-center gap-2">
         <SearchBox value={q} onChange={setQ} placeholder="Tìm số phiếu, tên, SĐT khách hoặc tên sách, mã bản…" />
@@ -1455,7 +1329,7 @@ export function LibraryDeskPage() {
 }
 
 // =============================================================================================
-// Quản lý đầu sách: titles and copies (FR-LIB-01..04)
+// Quản lý thư viện: titles and copies (FR-LIB-01..04)
 
 export function LibraryCatalogPage() {
   const navigate = useNavigate();
@@ -1483,6 +1357,7 @@ export function LibraryCatalogPage() {
           <CallNo value={r.callNo} />
         ),
     },
+    { header: 'Kệ', className: 'whitespace-nowrap', cell: (r) => (r.shelves.length ? r.shelves.join(', ') : <span className="text-ink-500">—</span>) },
     {
       header: 'Tên sách',
       cell: (r) => (
@@ -1495,7 +1370,7 @@ export function LibraryCatalogPage() {
     { header: 'Ngôn ngữ', cell: (r) => <StatusChip tone="neutral">{LANG[r.language]}</StatusChip> },
     { header: 'Thể loại', cell: (r) => r.category ?? '—' },
     {
-      header: 'Số bản (còn/tổng)',
+      header: 'Số lượng',
       align: 'right',
       cell: (r) => (
         <span className={r.available === 0 && r.copies > 0 ? 'text-warning-700' : ''}>
@@ -1510,7 +1385,7 @@ export function LibraryCatalogPage() {
   return (
     <>
       <PageHeader
-        title="Quản lý đầu sách"
+        title="Quản lý thư viện"
         actions={
           manage && (
             <>
@@ -1543,7 +1418,7 @@ export function LibraryCatalogPage() {
         onRetry={() => list.refetch()}
         empty={filtered ? { icon: Search, title: 'Không có đầu sách phù hợp', help: 'Thử đổi từ khóa hoặc bộ lọc.' } : { icon: Library, title: 'Thư viện chưa có đầu sách', help: 'Thêm đầu sách cùng số cuốn để in tem gáy.' }}
       />
-      {dialog === 'new' && <TitleForm title={null} onClose={() => setDialog(null)} onSaved={(id, copyIds) => navigate(`/library/titles/${id}${copyIds.length ? `?print=${copyIds.join(',')}` : ''}`)} />}
+      {dialog === 'new' && <TitleForm title={null} onClose={() => setDialog(null)} onSaved={(id) => navigate(`/library/titles/${id}`)} />}
     </>
   );
 }
@@ -1575,21 +1450,14 @@ interface TitleDetail {
   reservations: Hold[];
 }
 
-function AutoChip() {
-  return (
-    <span className="ml-1.5 align-middle">
-      <StatusChip tone="info">Tự điền</StatusChip>
-    </span>
-  );
-}
-
 const storeToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
 
-/** Ngày nhập, Số cuốn, Giá trị, Nguồn for copies added with a title or later (FR-LIB-02, Design §13.8). */
-type CopiesDraft = { count: string; acquiredAt: string; valueVnd: number | null; acquiredVia: 'purchase' | 'donation' };
-const newCopiesDraft = (): CopiesDraft => ({ count: '1', acquiredAt: storeToday(), valueVnd: null, acquiredVia: 'purchase' });
+/** Ngày nhập, Số cuốn, Giá trị, Nguồn, Kệ for copies added with a title or later (FR-LIB-02, Design §13.8). */
+type CopiesDraft = { count: string; acquiredAt: string; valueVnd: number | null; acquiredVia: 'purchase' | 'donation' | 'transfer'; shelf: string };
+const newCopiesDraft = (): CopiesDraft => ({ count: '1', acquiredAt: storeToday(), valueVnd: null, acquiredVia: 'purchase', shelf: '' });
 
-function CopiesFields({ value, onChange, allowZero }: { value: CopiesDraft; onChange: (v: CopiesDraft) => void; allowZero?: boolean }) {
+/** `dewey` (new title) or `titleId` (more copies) picks the suggested shelf. */
+function CopiesFields({ value, onChange, dewey, titleId }: { value: CopiesDraft; onChange: (v: CopiesDraft) => void; dewey?: string | null | undefined; titleId?: string | undefined }) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <Field label="Ngày nhập" type="date" value={value.acquiredAt} max={storeToday()} onChange={(e) => onChange({ ...value, acquiredAt: e.target.value })} />
@@ -1597,19 +1465,21 @@ function CopiesFields({ value, onChange, allowZero }: { value: CopiesDraft; onCh
         label="Số cuốn"
         inputMode="numeric"
         value={value.count}
-        helper={allowZero ? 'Để 0 nếu chỉ lưu đầu sách.' : undefined}
         onChange={(e) => onChange({ ...value, count: e.target.value.replace(/\D/g, '').slice(0, 2) })}
       />
       <MoneyInput label="Giá trị mỗi cuốn" value={value.valueVnd} onChange={(v) => onChange({ ...value, valueVnd: v })} />
-      <SelectField label="Nguồn" value={value.acquiredVia} onChange={(e) => onChange({ ...value, acquiredVia: e.target.value as 'purchase' | 'donation' })}>
+      <SelectField label="Nguồn" value={value.acquiredVia} onChange={(e) => onChange({ ...value, acquiredVia: e.target.value as CopiesDraft['acquiredVia'] })}>
         <option value="purchase">Mua</option>
         <option value="donation">Tặng</option>
+        {/* Recorded only: sale stock is adjusted by warehouse staff, not here (FR-INV-13 withdrawn). */}
+        <option value="transfer">Chuyển từ kho bán</option>
       </SelectField>
+      <ShelfPicker value={value.shelf} onChange={(shelf) => onChange({ ...value, shelf })} required={Number(value.count) > 0} dewey={dewey} titleId={titleId} suggest />
     </div>
   );
 }
 
-const copiesBody = (c: CopiesDraft) => ({ count: Number(c.count) || 0, acquiredAt: c.acquiredAt, valueVnd: c.valueVnd ?? 0, acquiredVia: c.acquiredVia });
+const copiesBody = (c: CopiesDraft) => ({ count: Number(c.count) || 0, acquiredAt: c.acquiredAt, valueVnd: c.valueVnd ?? 0, acquiredVia: c.acquiredVia, shelf: normalizeShelf(c.shelf) || null });
 
 /** “Thêm đầu sách” / “Sửa”: Tìm sách, Thông tin sách, Ký hiệu xếp giá and, for a new title, Nhập bản (Design §13.8). */
 function TitleForm({ title, onClose, onSaved }: { title: TitleDetail | null; onClose: () => void; onSaved: (id: string, copyIds: string[]) => void }) {
@@ -1638,12 +1508,6 @@ function TitleForm({ title, onClose, onSaved }: { title: TitleDetail | null; onC
     unmark(k);
     setF({ ...f, [k]: e.target.value });
   };
-  const label = (text: string, k: string) => (
-    <>
-      {text}
-      {auto.has(k) && <AutoChip />}
-    </>
-  );
   const lang = f.language === 'en' ? 'en' : 'vi';
   const firstAuthor = f.authors.split(',')[0]?.trim() ?? '';
   const cutter = cutterTouched ? f.cutter : cutterNumber(firstAuthor, f.title, lang);
@@ -1723,8 +1587,8 @@ function TitleForm({ title, onClose, onSaved }: { title: TitleDetail | null; onC
           <Button variant="secondary" onClick={onClose}>
             Hủy
           </Button>
-          <Button variant="primary" {...(isNew && count > 0 && { icon: Printer })} loading={busy} disabled={!f.title.trim() || deweyBad} onClick={save}>
-            {isNew && count > 0 ? 'Lưu và in tem' : 'Lưu'}
+          <Button variant="primary" loading={busy} disabled={!f.title.trim() || deweyBad || (isNew && count > 0 && !normalizeShelf(copies.shelf))} onClick={save}>
+            Lưu
           </Button>
         </>
       }
@@ -1733,16 +1597,15 @@ function TitleForm({ title, onClose, onSaved }: { title: TitleDetail | null; onC
         {isNew && (
           <div className="sm:col-span-2">
             <BookLookup onPick={fill} endpoint="/api/v1/library/book-lookup" />
-            {auto.size > 0 && <p className="mt-1 text-xs text-ink-500">Dữ liệu từ Open Library</p>}
           </div>
         )}
         <h3 className={section}>Thông tin sách</h3>
-        <Field label={label('Tên sách', 'title')} required className="sm:col-span-2" autoFocus={!!title} value={f.title} onChange={set('title')} />
-        <Field label={label('Tác giả', 'authors')} helper="Nhiều tác giả cách nhau bởi dấu phẩy; tác giả đầu dùng để tính Cutter." className="sm:col-span-2" value={f.authors} onChange={set('authors')} />
-        <Field label={label('ISBN', 'isbn13')} className="code" value={f.isbn13} onChange={set('isbn13')} />
-        <Field label={label('Nhà xuất bản', 'publisher')} value={f.publisher} onChange={set('publisher')} />
-        <Field label={label('Năm xuất bản', 'year')} inputMode="numeric" value={f.year} onChange={(e) => (unmark('year'), setF({ ...f, year: e.target.value.replace(/\D/g, '').slice(0, 4) }))} />
-        <SelectField label={label('Ngôn ngữ', 'language')} required value={f.language} onChange={set('language')}>
+        <Field label="Tên sách" required className="sm:col-span-2" autoFocus={!!title} value={f.title} onChange={set('title')} />
+        <Field label="Tác giả" className="sm:col-span-2" value={f.authors} onChange={set('authors')} />
+        <Field label="ISBN" className="code" value={f.isbn13} onChange={set('isbn13')} />
+        <Field label="Nhà xuất bản" value={f.publisher} onChange={set('publisher')} />
+        <Field label="Năm xuất bản" inputMode="numeric" value={f.year} onChange={(e) => (unmark('year'), setF({ ...f, year: e.target.value.replace(/\D/g, '').slice(0, 4) }))} />
+        <SelectField label="Ngôn ngữ" required value={f.language} onChange={set('language')}>
           <option value="vi">Tiếng Việt</option>
           <option value="en">Tiếng Anh</option>
         </SelectField>
@@ -1759,19 +1622,17 @@ function TitleForm({ title, onClose, onSaved }: { title: TitleDetail | null; onC
 
         <h3 className={clsx(section, 'mt-2')}>Ký hiệu xếp giá</h3>
         <Field
-          label={label('Dewey', 'dewey')}
+          label="Dewey"
           inputMode="decimal"
           className="code"
           value={f.dewey}
           error={deweyBad ? 'Số Dewey gồm 3 chữ số, có thể thêm phần thập phân (ví dụ 891.733).' : undefined}
-          helper="Để trống nếu chưa phân loại."
           onChange={set('dewey')}
         />
         <Field
           label="Cutter"
           className="code"
           value={cutter}
-          helper="Tự tính theo bảng Cutter LC; có thể sửa."
           onChange={(e) => {
             setCutterTouched(true);
             setF({ ...f, cutter: e.target.value });
@@ -1791,9 +1652,9 @@ function TitleForm({ title, onClose, onSaved }: { title: TitleDetail | null; onC
 
         {isNew && (
           <>
-            <h3 className={clsx(section, 'mt-2')}>Nhập bản</h3>
-            <div className="sm:col-span-2">
-              <CopiesFields value={copies} onChange={setCopies} allowZero />
+            {/* Copies follow the call number without a “Nhập bản” heading (Design §13.8). */}
+            <div className="mt-2 sm:col-span-2">
+              <CopiesFields value={copies} onChange={setCopies} dewey={dewey} />
               <p className="mt-2 text-[13px] text-ink-500">Mã cá biệt được cấp tự động theo ngôn ngữ ({lang === 'vi' ? 'VN' : 'EN'}-000…).</p>
             </div>
           </>
@@ -1815,12 +1676,8 @@ export function LibraryTitlePage() {
   const { data: me } = useMe();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [params, setParams] = useSearchParams();
-  // Copies just added open their spine labels straight away (FR-LIB-17).
-  const [dialog, setDialog] = useState<null | 'edit' | 'add' | 'transfer' | 'reserve' | { kind: 'labels'; ids: string[] } | { kind: 'copy'; copy: TitleDetail['copies'][number] } | { kind: 'unreserve'; hold: Hold }>(() => {
-    const ids = params.get('print')?.split(',').filter(Boolean) ?? [];
-    return ids.length ? { kind: 'labels', ids } : null;
-  });
+  // Labels are printed from ticked copies only (FR-LIB-17).
+  const [dialog, setDialog] = useState<null | 'edit' | 'add' | 'reserve' | { kind: 'labels'; ids: string[] } | { kind: 'copy'; copy: TitleDetail['copies'][number] } | { kind: 'unreserve'; hold: Hold }>(null);
   const t = useQuery({ queryKey: ['library-title', id], queryFn: () => get<TitleDetail>(`/api/v1/library/titles/${id}`) });
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['library-title', id] });
@@ -1861,44 +1718,41 @@ export function LibraryTitlePage() {
       <PageHeader
         title={d.title}
         breadcrumb={
-          <Link to="/library/catalog" className="hover:underline">
-            Quản lý đầu sách
+          <Link to="/library/catalog" className="inline-flex items-center gap-1 hover:underline">
+            <ArrowLeft size={16} aria-hidden /> Quản lý thư viện
           </Link>
         }
+        // Icon-only “Sửa” on the title row, like the other record pages (Design §12.3, §13.8).
+        menu={manage && <Button variant="ghost" icon={Pencil} aria-label="Sửa" title="Sửa" onClick={() => setDialog('edit')} />}
         subtitle={
           <span className="flex flex-wrap items-center gap-2">
             <CallNo value={d.callNo} />
             <StatusChip tone="neutral">{LANG[d.language]}</StatusChip>
           </span>
         }
-        actions={
-          manage && (
-            <Button variant="secondary" onClick={() => setDialog('edit')}>
-              Sửa
-            </Button>
-          )
-        }
       />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex min-w-0 flex-col gap-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="flex-1 text-base font-semibold">Bản sách ({d.copies.length})</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="min-w-0 flex-1 text-base font-semibold">Số lượng: {d.copies.length}</h2>
             {manage && (
               <>
-                <Button size="sm" variant="secondary" icon={Printer} disabled={selected.size === 0} onClick={() => setDialog({ kind: 'labels', ids: [...selected] })}>
-                  In tem{selected.size ? ` (${selected.size})` : ''}
-                </Button>
-                {can(me, 'inventory.adjust') && (
-                  <Button size="sm" variant="secondary" icon={Truck} onClick={() => setDialog('transfer')}>
-                    Chuyển từ kho bán
-                  </Button>
-                )}
-                <Button size="sm" variant="primary" icon={Plus} onClick={() => setDialog('add')}>
-                  Thêm bản
-                </Button>
+                {/* A bare navy “+”, no circle, like the scan buttons (Design §13.8). */}
+                <button type="button" className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50" aria-label="Thêm bản" title="Thêm bản" onClick={() => setDialog('add')}>
+                  <Plus size={28} aria-hidden />
+                </button>
               </>
             )}
           </div>
+          {manage && selected.size > 0 && (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-paper-300 bg-white px-3 py-2 text-sm">
+              <span>Đã chọn {selected.size} bản</span>
+              {/* A 32 px pill; on touch screens its tap area still reaches 44 px (NFR-USE-02). */}
+              <Button size="sm" variant="secondary" icon={Printer} className="relative min-h-0! before:absolute before:inset-x-0 before:-inset-y-1.5 before:content-['']" onClick={() => setDialog({ kind: 'labels', ids: [...selected] })}>
+                In tem
+              </Button>
+            </div>
+          )}
           <DataTable
             columns={columns}
             rows={d.copies}
@@ -1916,7 +1770,20 @@ export function LibraryTitlePage() {
                 ['Nhà xuất bản', d.publisher ?? '—'],
                 ['Năm', d.year ?? '—'],
                 ['Thể loại', d.category ?? '—'],
-                ['Ký hiệu xếp giá', d.callNo ?? 'Chưa phân loại'],
+                // Dewey and Cutter on their own lines, as on the spine label (Design §13.8).
+                [
+                  'Ký hiệu xếp giá',
+                  d.dewey ? (
+                    <span className="inline-flex flex-col items-end leading-5">
+                      <span>{normalizeDewey(d.dewey)}</span>
+                      {d.cutter && <span>{d.cutter}</span>}
+                    </span>
+                  ) : (
+                    'Chưa phân loại'
+                  ),
+                ],
+                // Shelves of its copies, as in the titles list (Design §13.8).
+                ['Kệ', [...new Set(d.copies.flatMap((c) => (c.shelf ? [c.shelf] : [])))].sort().join(', ') || '—'],
               ]}
             />
           </Card>
@@ -1960,19 +1827,17 @@ export function LibraryTitlePage() {
         <AddCopiesDialog
           titleId={d.id}
           onClose={() => setDialog(null)}
-          onDone={(ids) => {
+          onDone={() => {
             refresh();
-            setDialog({ kind: 'labels', ids });
+            setDialog(null);
           }}
         />
       )}
-      {dialog === 'transfer' && <TransferDialog titleId={d.id} onClose={() => setDialog(null)} onDone={refresh} />}
       {typeof dialog === 'object' && dialog?.kind === 'labels' && (
         <LabelsDialog
           copyIds={dialog.ids}
           onClose={() => {
             setDialog(null);
-            if (params.has('print')) setParams({}, { replace: true });
           }}
         />
       )}
@@ -2041,14 +1906,13 @@ function useSubmit(fn: () => Promise<unknown>, done: () => void) {
 /** “Thêm bản”: Ngày nhập, Số cuốn, Giá trị, Nguồn; then the spine labels of the new copies (FR-LIB-02, Design §13.8). */
 function AddCopiesDialog({ titleId, onClose, onDone }: { titleId: string; onClose: () => void; onDone: (copyIds: string[]) => void }) {
   const [copies, setCopies] = useState<CopiesDraft>(newCopiesDraft);
-  const [shelf, setShelf] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const run = async () => {
     setBusy(true);
     setError(null);
     try {
-      const r = await post<{ items: { id: string; barcode: string }[] }>(`/api/v1/library/titles/${titleId}/copies`, { ...copiesBody(copies), shelf: shelf || null });
+      const r = await post<{ items: { id: string; barcode: string }[] }>(`/api/v1/library/titles/${titleId}/copies`, copiesBody(copies));
       toast.success(`Đã thêm ${r.items.length} cuốn (${r.items[0]!.barcode}${r.items.length > 1 ? ` – ${r.items[r.items.length - 1]!.barcode}` : ''}).`);
       onDone(r.items.map((c) => c.id));
     } catch (e) {
@@ -2058,41 +1922,8 @@ function AddCopiesDialog({ titleId, onClose, onDone }: { titleId: string; onClos
     }
   };
   return (
-    <FormDialog title="Thêm bản sách" busy={busy} error={error} disabled={!Number(copies.count)} onSave={run} onClose={onClose} confirm="Thêm và in tem">
-      <CopiesFields value={copies} onChange={setCopies} />
-      <Field label="Kệ" value={shelf} onChange={(e) => setShelf(e.target.value)} />
-    </FormDialog>
-  );
-}
-
-function TransferDialog({ titleId, onClose, onDone }: { titleId: string; onClose: () => void; onDone: () => void }) {
-  const [pick, setPick] = useState<{ variantId: string; title: string; sku: string } | null>(null);
-  const [count, setCount] = useState('1');
-  const [shelf, setShelf] = useState('');
-  const s = useSubmit(
-    async () => {
-      const r = await post<{ items: { barcode: string }[] }>(`/api/v1/library/titles/${titleId}/transfer-from-stock`, { variantId: pick!.variantId, count: Number(count), shelf: shelf || null });
-      toast.success(`Đã chuyển ${r.items.length} cuốn vào thư viện.`);
-      onDone();
-    },
-    onClose,
-  );
-  return (
-    <FormDialog title="Chuyển từ kho bán" busy={s.busy} error={s.error} disabled={!pick || !Number(count)} onSave={s.run} onClose={onClose} confirm="Chuyển">
-      <p className="text-sm text-ink-700">Sách rời tồn kho bán theo giá vốn; giá trị mỗi bản là giá bán hiện tại (FR-INV-13).</p>
-      {pick ? (
-        <div className="flex items-center gap-3 rounded-md border border-paper-300 p-3 text-sm">
-          <span className="min-w-0 flex-1">
-            <span className="block font-semibold">{pick.title}</span>
-            <span className="code text-ink-500">{pick.sku}</span>
-          </span>
-          <Button variant="ghost" icon={X} aria-label="Chọn sản phẩm khác" onClick={() => setPick(null)} />
-        </div>
-      ) : (
-        <ProductSearch placeholder="Tìm sản phẩm trong kho bán" autoFocus onPick={(h) => setPick({ variantId: h.variantId, title: h.titleVi || h.title, sku: h.sku })} />
-      )}
-      <Field label="Số cuốn" inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, '').slice(0, 2))} />
-      <Field label="Kệ" value={shelf} onChange={(e) => setShelf(e.target.value)} />
+    <FormDialog title="Thêm bản sách" busy={busy} error={error} disabled={!Number(copies.count) || !normalizeShelf(copies.shelf)} onSave={run} onClose={onClose} confirm="Thêm">
+      <CopiesFields value={copies} onChange={setCopies} titleId={titleId} />
     </FormDialog>
   );
 }
@@ -2127,7 +1958,7 @@ function CopyDialog({ copy, canFind, onClose, onDone }: { copy: TitleDetail['cop
           <Button variant="secondary" onClick={onClose}>
             Hủy
           </Button>
-          <Button variant="primary" loading={busy} onClick={() => act(() => patch(`/api/v1/library/copies/${copy.id}`, { shelf: shelf || null, condition: condition || null, valueVnd: value ?? 0 }), 'Đã lưu bản sách.')}>
+          <Button variant="primary" loading={busy} onClick={() => act(() => patch(`/api/v1/library/copies/${copy.id}`, { shelf: normalizeShelf(shelf) || null, condition: condition || null, valueVnd: value ?? 0 }), 'Đã lưu bản sách.')}>
             Lưu
           </Button>
         </>
@@ -2138,7 +1969,7 @@ function CopyDialog({ copy, canFind, onClose, onDone }: { copy: TitleDetail['cop
           <span className="text-sm text-ink-700">Trạng thái</span>
           <CopyChip status={copy.status} />
         </div>
-        <Field label="Kệ" value={shelf} onChange={(e) => setShelf(e.target.value)} />
+        <ShelfPicker value={shelf} onChange={setShelf} />
         <Field label="Tình trạng" value={condition} onChange={(e) => setCondition(e.target.value)} />
         <MoneyInput label="Giá trị" value={value} onChange={setValue} />
         <div className="flex flex-wrap gap-2">
@@ -2165,18 +1996,19 @@ function CopyDialog({ copy, canFind, onClose, onDone }: { copy: TitleDetail['cop
 }
 
 function ReserveDialog({ titleId, title, onClose, onDone }: { titleId: string; title: string; onClose: () => void; onDone: () => void }) {
-  const [customer, setCustomer] = useState<PickedCustomer | null>(null);
+  const [customer, setCustomer] = useState<CustomerChoice>(null);
+  const created = useRef<string | null>(null);
   const s = useSubmit(
     async () => {
-      await post('/api/v1/library/reservations', { titleId, customerId: customer!.id });
+      await post('/api/v1/library/reservations', { titleId, customerId: await customerIdOf(customer, created) });
       toast.success('Đã đặt giữ. Khi có sách trả về, gọi khách từ mục Đang giữ.');
       onDone();
     },
     onClose,
   );
   return (
-    <FormDialog title={`Đặt giữ “${title}”`} busy={s.busy} error={s.error} disabled={!customer} onSave={s.run} onClose={onClose} confirm="Đặt giữ">
-      <BorrowerPicker value={customer} onChange={setCustomer} />
+    <FormDialog title={`Đặt giữ “${title}”`} busy={s.busy} error={s.error} disabled={!customer || (customer.kind === 'new' && !newCustomerReady(customer))} onSave={s.run} onClose={onClose} confirm="Đặt giữ">
+      <CustomerPicker value={customer} onChange={setCustomer} />
     </FormDialog>
   );
 }
@@ -2225,8 +2057,7 @@ function LabelsDialog({ copyIds, onClose }: { copyIds: string[]; onClose: () => 
     printHtml(labelsHtml(r.items, sheet));
   }, onClose);
   return (
-    <FormDialog title={`In tem gáy ${copyIds.length} cuốn`} busy={s.busy} error={s.error} onSave={s.run} onClose={onClose} confirm="In">
-      <p className="text-sm text-ink-700">Mỗi tem: mã vạch mã cá biệt, số Dewey và Cutter xếp chồng.</p>
+    <FormDialog title="In tem gáy" busy={s.busy} error={s.error} onSave={s.run} onClose={onClose} confirm="In">
       <SelectField label="Khổ giấy" value={sheet} onChange={(e) => setSheet(e.target.value as 'roll' | 'a4')}>
         <option value="roll">Cuộn tem 30 × 45 mm</option>
         <option value="a4">A4, 36 tem</option>

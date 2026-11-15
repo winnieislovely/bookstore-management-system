@@ -289,6 +289,9 @@ export const preorder = orders.table(
     expiresAt: ts(),
     /** Holding-period extensions so far (FR-ORD-16). */
     extensions: integer().notNull().default(0),
+    /** Chờ nhận: Giao hàng rather than Nhận tại quầy, with a note staff write by hand (FR-ORD-14). */
+    delivery: boolean().notNull().default(false),
+    deliveryNote: text(),
     /** The counter sale that collected it (FR-POS-09). */
     saleId: uuid().references(() => sale.id),
     note: text(),

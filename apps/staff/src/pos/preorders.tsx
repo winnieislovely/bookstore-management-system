@@ -64,6 +64,9 @@ export interface PreorderRow {
   contactedAt: string | null;
   expiresAt: string | null;
   extensions: number;
+  /** Chờ nhận: Giao hàng rather than Nhận tại quầy, with the note staff wrote. */
+  delivery: boolean;
+  deliveryNote: string | null;
   note: string | null;
   saleId: string | null;
   customerId: string;
@@ -281,7 +284,7 @@ export function PreorderRecord({ p, onClose }: { p: PreorderRow; onClose: () => 
   if (step === 'cancel') return <CancelPreorder p={p} shiftId={shift.data?.id ?? null} onClose={() => { setStep(null); refresh(); }} />;
   if (step === 'update') return <UpdateStatusDialog p={p} onClose={() => setStep(null)} onDone={refresh} />;
   return (
-    <Dialog title={`Phiếu ${p.docNo}`} size="md" plain onClose={onClose}>
+    <Dialog title={`Phiếu ${p.docNo}`} size="md" onClose={onClose}>
       <div className="flex flex-col gap-4 text-sm">
         <Facts
           items={[
@@ -289,9 +292,30 @@ export function PreorderRecord({ p, onClose }: { p: PreorderRow; onClose: () => 
             ['Khách hàng', p.customerName],
             ['Điện thoại', p.customerPhone ? <a href={`tel:${p.customerPhone}`} className="font-semibold whitespace-nowrap text-navy-700 underline num">{formatPhone(p.customerPhone)}</a> : '—'],
             ['Tổng tiền', <span className="num">{p.unpriced ? '—' : formatVnd(p.totalVnd)}</span>],
-            ['Đã cọc', <span className="num">{p.depositVnd ? `${formatVnd(p.depositVnd)}${p.depositMethod ? ` · ${METHOD[p.depositMethod] ?? p.depositMethod}` : ''}` : '—'}</span>],
-            ['Thời gian tạo phiếu', <span className="num">{formatDateTime(p.createdAt)}</span>],
-            ...(p.expiresAt && p.status === 'contacted' ? ([['Giữ đến', <span className={clsx(isOverdue(p) && 'font-semibold text-danger-700')}>{formatDateTime(p.expiresAt)}</span>]] as [string, React.ReactNode][]) : []),
+            [
+              'Đã cọc',
+              p.depositVnd ? (
+                <span className="inline-flex flex-col items-end">
+                  <span className="num">{formatVnd(p.depositVnd)}</span>
+                  {p.depositMethod && <span className="text-[13px] text-ink-500">{METHOD[p.depositMethod] ?? p.depositMethod}</span>}
+                </span>
+              ) : (
+                '—'
+              ),
+            ],
+            ['Thời gian', <span className="num">{formatDateTime(p.createdAt)}</span>],
+            ...(isReady(p)
+              ? ([
+                  [
+                    'Nhận hàng',
+                    <span className="inline-flex flex-col items-end">
+                      <span>{p.delivery ? 'Giao hàng' : 'Tại quầy'}</span>
+                      {p.delivery && p.deliveryNote && <span className="text-[13px] text-ink-500">{p.deliveryNote}</span>}
+                    </span>,
+                  ],
+                ] as [string, React.ReactNode][])
+              : []),
+            ...(p.expiresAt && p.status === 'contacted' ? ([['Hạn giữ', <span className={clsx(isOverdue(p) && 'font-semibold text-danger-700')}>{formatDateTime(p.expiresAt)}</span>]] as [string, React.ReactNode][]) : []),
             ...(p.note ? ([['Ghi chú', p.note]] as [string, React.ReactNode][]) : []),
           ]}
         />
@@ -332,20 +356,24 @@ const TARGETS: { key: Target; label: string }[] = [
 ];
 
 /**
- * “Cập nhật”: staff set the status by hand (FR-ORD-14). Chờ nhận and Đã nhận need every free-text book
- * linked to a product, priced at its selling price; Đã nhận opens the POS with the slip in the cart.
+ * “Cập nhật”: staff set the status by hand from a dropdown (FR-ORD-14). Chờ nhận records Nhận tại quầy
+ * or Giao hàng (with a note written by hand); Chờ nhận and Đã nhận need every free-text book linked to
+ * a product, priced at its selling price; Đã nhận opens the POS with the slip in the cart.
  */
 function UpdateStatusDialog({ p, onClose, onDone }: { p: PreorderRow; onClose: () => void; onDone: () => void }) {
   const navigate = useNavigate();
   const hold = p.status === 'contacted';
   const current: Target = p.status === 'confirmed' ? 'quote' : p.status === 'contacted' ? 'arrived' : (p.status as Target);
-  const [target, setTarget] = useState<Target>(hold ? 'collected' : current);
+  const [target, setTarget] = useState<Target>(current);
+  const [delivery, setDelivery] = useState(p.delivery);
+  const [deliveryNote, setDeliveryNote] = useState(p.deliveryNote ?? '');
   const [links, setLinks] = useState<Record<string, ProductHit>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const free = p.lines.filter((l) => l.freeText);
   const needsLinks = (target === 'arrived' || target === 'collected') && free.length > 0;
-  const options = hold ? TARGETS.filter((t) => t.key === 'collected') : TARGETS;
+  // A hold is Chờ nhận from the start.
+  const options = hold ? TARGETS.filter((t) => t.key === 'arrived' || t.key === 'collected') : TARGETS;
   const save = async () => {
     setError(null);
     if (needsLinks && free.some((l) => !links[l.lineId])) return setError('Chọn sản phẩm cho mọi sách chưa có trong danh mục. Sách chưa có thì thêm ở trang Sản phẩm trước.');
@@ -358,8 +386,9 @@ function UpdateStatusDialog({ p, onClose, onDone }: { p: PreorderRow; onClose: (
         navigate(`/pos?preorder=${encodeURIComponent(p.docNo)}`);
         return;
       }
-      if (target !== current || body.links.length) await post(`/api/v1/preorders/${p.id}/status`, { status: target, ...body });
-      toast.success(`Đã cập nhật ${p.docNo}: ${TARGETS.find((t) => t.key === target)!.label}.`);
+      if (target === 'arrived') await post(`/api/v1/preorders/${p.id}/status`, { status: 'arrived', ...body, delivery, deliveryNote: delivery ? deliveryNote.trim() || null : null });
+      else if (target !== current || body.links.length) await post(`/api/v1/preorders/${p.id}/status`, { status: target, ...body });
+      toast.success(`Đã cập nhật ${p.docNo}: ${TARGETS.find((t) => t.key === target)!.label}${target === 'arrived' ? (delivery ? ' · Giao hàng' : ' · Nhận tại quầy') : ''}.`);
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -379,48 +408,54 @@ function UpdateStatusDialog({ p, onClose, onDone }: { p: PreorderRow; onClose: (
       }
     >
       <div className="flex flex-col gap-3 text-sm">
-        <div className="flex flex-col gap-2" role="radiogroup" aria-label="Trạng thái">
+        <SelectField label="Trạng thái" value={target} onChange={(e) => setTarget(e.target.value as Target)}>
           {options.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              role="radio"
-              aria-checked={target === t.key}
-              onClick={() => setTarget(t.key)}
-              className={clsx('flex h-11 items-center justify-between rounded-xl border px-4 text-left font-medium', target === t.key ? 'border-2 border-navy-700 bg-navy-50 text-navy-700' : 'border-paper-500')}
-            >
+            <option key={t.key} value={t.key}>
               {t.label}
-              {t.key === current && !hold && <span className="text-[13px] font-normal text-ink-500">Hiện tại</span>}
-            </button>
+            </option>
           ))}
-        </div>
-        {needsLinks && (
+        </SelectField>
+        {target === 'arrived' && (
           <div className="flex flex-col gap-3">
-            <p className="text-[13px] text-ink-500">Chọn sản phẩm cho sách chưa có trong danh mục; giá lấy theo giá bán của sản phẩm.</p>
-            {free.map((l) => {
-              const h = links[l.lineId];
-              return (
-                <div key={l.lineId} className="flex flex-col gap-2 rounded-md border border-paper-300 p-3">
-                  <p className="font-medium italic">
-                    {l.title} · {formatNumber(l.qty)} cuốn
-                  </p>
-                  {h ? (
-                    <p className="flex items-center justify-between gap-2">
-                      <span className="min-w-0">
-                        {hitTitle(h)} <span className="text-ink-500 num">· {formatVnd(h.priceVnd)}</span>
-                      </span>
-                      <button type="button" className="text-ink-500 hover:text-danger-700" aria-label="Đổi sản phẩm" onClick={() => setLinks(({ [l.lineId]: _, ...rest }) => rest)}>
-                        <X size={16} aria-hidden />
-                      </button>
-                    </p>
-                  ) : (
-                    <ProductSearch hideSku placeholder="Chọn sản phẩm trong danh mục" onPick={(x) => setLinks((m) => ({ ...m, [l.lineId]: x }))} />
-                  )}
-                </div>
-              );
-            })}
+            <div className="flex flex-wrap gap-x-6 gap-y-2" role="group" aria-label="Cách nhận hàng">
+              {(
+                [
+                  [false, 'Nhận tại quầy'],
+                  [true, 'Giao hàng'],
+                ] as const
+              ).map(([v, label]) => (
+                <label key={label} className="flex min-h-11 items-center gap-2 font-medium">
+                  <input type="checkbox" className="size-5 accent-navy-700" checked={delivery === v} onChange={() => setDelivery(v)} />
+                  {label}
+                </label>
+              ))}
+            </div>
+            {delivery && <TextArea label="Ghi chú giao hàng" value={deliveryNote} maxLength={500} onChange={(e) => setDeliveryNote(e.target.value)} />}
           </div>
         )}
+        {needsLinks &&
+          free.map((l) => {
+            const h = links[l.lineId];
+            return (
+              <div key={l.lineId} className="flex flex-col gap-2 rounded-md border border-paper-300 p-3">
+                <p className="font-medium italic">
+                  {l.title} · {formatNumber(l.qty)} cuốn
+                </p>
+                {h ? (
+                  <p className="flex items-center justify-between gap-2">
+                    <span className="min-w-0">
+                      {hitTitle(h)} <span className="text-ink-500 num">· {formatVnd(h.priceVnd)}</span>
+                    </span>
+                    <button type="button" className="text-ink-500 hover:text-danger-700" aria-label="Đổi sản phẩm" onClick={() => setLinks(({ [l.lineId]: _, ...rest }) => rest)}>
+                      <X size={16} aria-hidden />
+                    </button>
+                  </p>
+                ) : (
+                  <ProductSearch hideSku placeholder="Chọn sản phẩm trong danh mục" onPick={(x) => setLinks((m) => ({ ...m, [l.lineId]: x }))} />
+                )}
+              </div>
+            );
+          })}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       </div>
     </Dialog>

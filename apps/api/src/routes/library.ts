@@ -12,6 +12,9 @@ export function libraryRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'get', path: '/api/v1/library/titles', access: 'session', summary: 'Library titles with copy counts', query: library.TitlesQuery }, async ({ ctx, query }) =>
     library.listTitles(ctx, query),
   );
+  defineRoute(app, { method: 'get', path: '/api/v1/library/shelves', access: 'session', summary: 'Shelves in use and the suggestion for a Dewey class', query: library.ShelvesQuery }, async ({ ctx, query }) =>
+    library.listShelves(ctx, query),
+  );
   defineRoute(app, { method: 'post', path: '/api/v1/library/titles', access: 'library.manage', summary: 'Add a title', status: 201, body: library.TitleSchema }, async ({ ctx, body }) => library.createTitle(ctx, body));
   defineRoute(app, { method: 'get', path: '/api/v1/library/titles/:id', access: 'session', summary: 'Title with copies and reservations', params: IdParams }, async ({ ctx, params }) => library.getTitle(ctx, params.id));
   defineRoute(app, { method: 'patch', path: '/api/v1/library/titles/:id', access: 'library.manage', summary: 'Edit a title', params: IdParams, body: library.TitleSchema }, async ({ ctx, params, body }) =>
@@ -19,13 +22,8 @@ export function libraryRoutes(app: OpenAPIHono<AppEnv>): void {
   );
   defineRoute(
     app,
-    { method: 'post', path: '/api/v1/library/titles/:id/copies', access: 'library.manage', summary: 'Add copies (purchase or donation)', status: 201, params: IdParams, body: library.AddCopiesSchema },
+    { method: 'post', path: '/api/v1/library/titles/:id/copies', access: 'library.manage', summary: 'Add copies (purchase, donation or from the shop)', status: 201, params: IdParams, body: library.AddCopiesSchema },
     async ({ ctx, params, body }) => library.addCopies(ctx, params.id, body),
-  );
-  defineRoute(
-    app,
-    { method: 'post', path: '/api/v1/library/titles/:id/transfer-from-stock', access: 'library.manage', summary: 'Move retail stock into the collection', status: 201, params: IdParams, body: library.TransferSchema },
-    async ({ ctx, params, body }) => library.transferFromStock(ctx, params.id, body),
   );
   defineRoute(app, { method: 'patch', path: '/api/v1/library/copies/:id', access: 'library.manage', summary: 'Edit a copy', params: IdParams, body: library.UpdateCopySchema }, async ({ ctx, params, body }) =>
     library.updateCopy(ctx, params.id, body),
@@ -87,6 +85,7 @@ export function libraryRoutes(app: OpenAPIHono<AppEnv>): void {
 
   // --- Borrowers, loans and charges (FR-LIB-05..15) -------------------------------------------
   defineRoute(app, { method: 'get', path: '/api/v1/library/overview', access: 'session', summary: 'Library overview now (FR-LIB-15a)' }, async ({ ctx }) => library.overview(ctx));
+  defineRoute(app, { method: 'get', path: '/api/v1/library/new-borrower', access: 'session', summary: 'Borrow terms for a customer not created yet (Khách mới)' }, async ({ ctx }) => library.newBorrowerTerms(ctx));
   defineRoute(app, { method: 'get', path: '/api/v1/library/borrowers/:id', access: 'session', summary: 'Eligibility, fee, loans, charges and history of a customer', params: IdParams }, async ({ ctx, params }) =>
     library.borrower(ctx, params.id),
   );

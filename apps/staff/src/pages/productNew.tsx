@@ -19,14 +19,6 @@ type AutoField = 'title' | 'isbn' | 'authors' | 'publisherId' | 'description' | 
 /** Select value for a publisher from the lookup that is not on file yet: created on save. */
 const NEW_PUBLISHER = '__new__';
 
-function AutoChip() {
-  return (
-    <span className="ml-1.5 align-middle">
-      <StatusChip tone="info">Tự điền</StatusChip>
-    </span>
-  );
-}
-
 interface Unit {
   code: string;
   i18n: { vi?: { name?: string }; en?: { name?: string } };
@@ -53,12 +45,6 @@ export function ProductNewPage() {
     unmark(k);
     setF({ ...f, [k]: e.target.value });
   };
-  const label = (text: string, k: AutoField) => (
-    <>
-      {text}
-      {auto.has(k) && <AutoChip />}
-    </>
-  );
   const num = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value.replace(/\D/g, '') });
   const digits = (v: string) => Number(v.replace(/\D/g, ''));
   const money = (v: string) => (v ? formatNumber(digits(v)) : '');
@@ -205,7 +191,6 @@ export function ProductNewPage() {
           {book && (
             <div className="mb-4">
               <BookLookup onPick={fill} />
-              {auto.size > 0 && <p className="mt-1 text-xs text-ink-500">Dữ liệu từ Open Library</p>}
             </div>
           )}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -215,7 +200,7 @@ export function ProductNewPage() {
               <option value="other">Sản phẩm khác</option>
             </SelectField>
             <Field label="SKU" required className="code" value={f.sku} onChange={(e) => setF({ ...f, sku: e.target.value.toUpperCase() })} autoFocus />
-            <Field label={label('Tên sản phẩm', 'title')} required value={f.title} onChange={set('title')} className="sm:col-span-2" />
+            <Field label="Tên sản phẩm" required value={f.title} onChange={set('title')} className="sm:col-span-2" />
             <SelectField label="Danh mục" required value={f.categoryId} onChange={set('categoryId')} className="sm:col-span-2">
               <option value="">— Chọn —</option>
               {categoryOptions(categories.data?.items ?? [], []).map((c) => (
@@ -233,13 +218,13 @@ export function ProductNewPage() {
               ))}
             </SelectField>
             <div className="sm:col-span-2">
-              <TextArea label={label('Mô tả', 'description')} required value={f.description} onChange={set('description')} rows={auto.has('description') ? 6 : 3} helper={auto.has('description') ? 'Tự điền từ Open Library – nên kiểm tra hoặc viết lại.' : undefined} />
+              <TextArea label="Mô tả" required value={f.description} onChange={set('description')} rows={auto.has('description') ? 6 : 3} />
             </div>
             {book ? (
               <>
-                <Field label={label('ISBN', 'isbn')} inputMode="numeric" value={f.isbn} onChange={set('isbn')} />
-                <Field label={label('Tác giả', 'authors')} value={f.authors} onChange={set('authors')} helper="Nhiều tác giả cách nhau bằng dấu phẩy." />
-                <SelectField label={label('Nhà xuất bản', 'publisherId')} value={f.publisherId} onChange={set('publisherId')} className="sm:col-span-2">
+                <Field label="ISBN" inputMode="numeric" value={f.isbn} onChange={set('isbn')} />
+                <Field label="Tác giả" value={f.authors} onChange={set('authors')} helper="Nhiều tác giả cách nhau bằng dấu phẩy." />
+                <SelectField label="Nhà xuất bản" value={f.publisherId} onChange={set('publisherId')} className="sm:col-span-2">
                   <option value="">—</option>
                   {newPublisher && <option value={NEW_PUBLISHER}>NXB mới: {newPublisher}</option>}
                   {(publishers.data?.items ?? []).map((p) => (
@@ -308,8 +293,7 @@ export function ProductNewPage() {
             <div className="mb-3 flex items-center gap-3">
               <img src={`/api/v1/files/${cover.fileId}`} alt="Ảnh bìa" className="h-24 w-16 rounded-sm border border-paper-300 object-cover" />
               <span className="text-sm text-ink-700">
-                Ảnh bìa từ Open Library
-                <AutoChip />
+                Ảnh bìa
               </span>
             </div>
           )}

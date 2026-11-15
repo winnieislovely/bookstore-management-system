@@ -20,7 +20,6 @@ import {
 import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
-import * as inventory from '../inventory/index.js';
 import * as notifications from '../notifications/index.js';
 import * as settings from '../settings/index.js';
 import { AppError, can, emit, errors, nextDocNo, requirePermission, tsParam, type Ctx, type Tx } from '../platform/index.js';
@@ -70,13 +69,21 @@ const optText = (max: number) =>
     .nullish()
     .transform((v) => (v ? v : null));
 
-/** Copies added with a title or later: entry date, count, value and source (FR-LIB-02). */
+/** A shelf as stored: capitals, single spaces – “a1 ” and “A1” are one shelf (FR-LIB-02). */
+export const normalizeShelf = (v: string | null | undefined) => (v ? v.trim().replace(/\s+/g, ' ').toUpperCase() || null : null);
+const shelfText = optText(60).transform(normalizeShelf);
+const shelfRequired = () => new AppError(422, 'shelf_required', 'Chọn kệ cho sách.');
+
+/** Copies added with a title or later: entry date, count, value, source and shelf (FR-LIB-02). */
 export const CopiesBlock = z.object({
   count: z.number().int().min(0).max(50).default(1),
   /** Entry date (store day); default today. */
   acquiredAt: z.iso.date().optional(),
   valueVnd: z.number().int().min(0).default(0),
-  acquiredVia: z.enum(['purchase', 'donation']).default('purchase'),
+  /** `transfer`: taken from the shop's stock – recorded only, sale stock is not touched (FR-INV-13 withdrawn). */
+  acquiredVia: z.enum(['purchase', 'donation', 'transfer']).default('purchase'),
+  /** Required for new copies (FR-LIB-02, 15 Nov 2026). */
+  shelf: shelfText,
 });
 
 export const TitleSchema = z.object({
@@ -121,6 +128,7 @@ export async function createTitle(ctx: Ctx, input: z.input<typeof TitleSchema>) 
   const data = TitleSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
     const values = titleValues(data);
+    if (data.copies?.count && !data.copies.shelf) throw shelfRequired();
     const [row] = await tx.insert(schema.libTitle).values(values).returning({ id: schema.libTitle.id, callNo: schema.libTitle.callNo });
     const copies = data.copies?.count ? await insertCopies(tx, ctx, row!.id, data.copies.count, copyValues(ctx, data.copies)) : [];
     await audit.record(tx, ctx, { action: 'library.title.create', entity: 'lib_title', entityId: row!.id, after: { ...values, barcodes: copies.map((c) => c.barcode) } });
@@ -183,6 +191,8 @@ export async function listTitles(ctx: Ctx, input: z.input<typeof TitlesQuery>) {
       copies: sql<number>`(select count(*)::int from library.lib_copy c where c.title_id = library.lib_title.id)`,
       available: sql<number>`(select count(*)::int from library.lib_copy c where c.title_id = library.lib_title.id and c.status = 'available')`,
       queued: sql<number>`(select count(*)::int from library.lib_reservation r where r.title_id = library.lib_title.id and r.status = 'queued')`,
+      // Shelves holding its copies, in order (Kệ column, Design §13.8).
+      shelves: sql<string[]>`(select coalesce(array_agg(distinct c.shelf order by c.shelf), '{}') from library.lib_copy c where c.title_id = library.lib_title.id and c.shelf is not null)`,
       onLoan: sql<number>`(select count(*)::int from library.lib_copy c where c.title_id = library.lib_title.id and c.status = 'on_loan')`,
       // Earliest due date of an open loan: when a reserved title should be back (FR-LIB-13).
       nextDueAt: sql<string | null>`(select min(l.due_at) from library.loan l join library.lib_copy c on c.id = l.copy_id where c.title_id = library.lib_title.id and l.returned_at is null)`,
@@ -245,16 +255,50 @@ export async function getTitle(ctx: Ctx, id: string) {
 }
 
 // =============================================================================================
+// Shelves (FR-LIB-02)
+
+export const ShelvesQuery = z.object({
+  /** Suggest from this Dewey number, or from this title's. */
+  dewey: z.string().trim().max(40).optional(),
+  title: z.uuid().optional(),
+});
+
+/** Shelves in use with their copy counts, and the shelf holding most copies of the same Dewey tens, else hundreds. */
+export async function listShelves(ctx: Ctx, input: z.input<typeof ShelvesQuery>) {
+  requireAny(ctx);
+  const q = ShelvesQuery.parse(input);
+  const items = await ctx.db.execute<{ shelf: string; copies: number }>(
+    sql`select shelf, count(*)::int as copies from library.lib_copy where shelf is not null group by shelf order by shelf`,
+  );
+  let dewey = normalizeDewey(q.dewey ?? null);
+  if (!dewey && q.title) {
+    const [t] = await ctx.db.select({ dewey: schema.libTitle.dewey }).from(schema.libTitle).where(eq(schema.libTitle.id, q.title));
+    dewey = t?.dewey ?? null;
+  }
+  let suggested: string | null = null;
+  for (const prefix of dewey ? [dewey.slice(0, 2), dewey.slice(0, 1)] : []) {
+    const [top] = await ctx.db.execute<{ shelf: string }>(sql`
+      select c.shelf from library.lib_copy c join library.lib_title t on t.id = c.title_id
+      where c.shelf is not null and t.dewey like ${prefix + '%'}
+      group by c.shelf order by count(*) desc, c.shelf limit 1`);
+    if (top) {
+      suggested = top.shelf;
+      break;
+    }
+  }
+  return { items: items.map((r) => ({ shelf: r.shelf, copies: r.copies })), suggested };
+}
+
+// =============================================================================================
 // Copies (FR-LIB-02, FR-INV-13)
 
 export const AddCopiesSchema = CopiesBlock.extend({
   count: z.number().int().min(1).max(50).default(1),
-  shelf: optText(60),
   condition: optText(200),
 });
 
 /** Entry date at the start of that store day, or now when it is today or not given. */
-function copyValues(ctx: Ctx, b: { acquiredAt?: string | undefined; valueVnd: number; acquiredVia: 'purchase' | 'donation'; shelf?: string | null; condition?: string | null }) {
+function copyValues(ctx: Ctx, b: { acquiredAt?: string | undefined; valueVnd: number; acquiredVia: 'purchase' | 'donation' | 'transfer'; shelf?: string | null; condition?: string | null }) {
   const now = ctx.clock.now();
   const today = new Date(now.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
   const acquiredAt = !b.acquiredAt || b.acquiredAt === today ? now : new Date(`${b.acquiredAt}T00:00:00+07:00`);
@@ -277,7 +321,7 @@ async function insertCopies(
   ctx: Ctx,
   titleId: string,
   n: number,
-  values: { valueVnd: number; acquiredVia: 'purchase' | 'donation' | 'transfer'; shelf: string | null; condition: string | null; acquiredAt?: Date; sourceVariantId?: string },
+  values: { valueVnd: number; acquiredVia: 'purchase' | 'donation' | 'transfer'; shelf: string | null; condition: string | null; acquiredAt?: Date },
 ) {
   const [title] = await tx.select({ id: schema.libTitle.id, language: schema.libTitle.language }).from(schema.libTitle).where(eq(schema.libTitle.id, titleId)).for('update');
   if (!title) throw errors.notFound('Đầu sách');
@@ -291,6 +335,7 @@ async function insertCopies(
 export async function addCopies(ctx: Ctx, titleId: string, input: z.input<typeof AddCopiesSchema>) {
   requirePermission(ctx, 'library.manage');
   const data = AddCopiesSchema.parse(input);
+  if (!data.shelf) throw shelfRequired();
   return ctx.db.transaction(async (tx) => {
     const copies = await insertCopies(tx, ctx, titleId, data.count, copyValues(ctx, data));
     await audit.record(tx, ctx, { action: 'library.copy.add', entity: 'lib_title', entityId: titleId, after: { ...data, barcodes: copies.map((c) => c.barcode) } });
@@ -298,32 +343,8 @@ export async function addCopies(ctx: Ctx, titleId: string, input: z.input<typeof
   });
 }
 
-export const TransferSchema = z.object({
-  variantId: z.uuid(),
-  count: z.number().int().min(1).max(50).default(1),
-  shelf: optText(60),
-});
-
-/**
- * Transfer retail stock into the collection (FR-LIB-02, FR-INV-13): the units leave sale stock at
- * cost (`library_transfer`); each copy's value is the selling price, its replacement value.
- */
-export async function transferFromStock(ctx: Ctx, titleId: string, input: z.input<typeof TransferSchema>) {
-  requirePermission(ctx, 'library.manage');
-  requirePermission(ctx, 'inventory.adjust');
-  const data = TransferSchema.parse(input);
-  return ctx.db.transaction(async (tx) => {
-    const [v] = await tx.select({ id: schema.itemVariant.id, priceVnd: schema.itemVariant.priceVnd, sku: schema.itemVariant.sku }).from(schema.itemVariant).where(eq(schema.itemVariant.id, data.variantId));
-    if (!v) throw errors.notFound('Sản phẩm');
-    await inventory.apply(tx, ctx, { variantId: v.id, type: 'library_transfer', qtyDelta: -data.count, refType: 'lib_title', refId: titleId });
-    const copies = await insertCopies(tx, ctx, titleId, data.count, { valueVnd: v.priceVnd, acquiredVia: 'transfer', shelf: data.shelf, condition: null, sourceVariantId: v.id });
-    await audit.record(tx, ctx, { action: 'library.copy.transfer', entity: 'lib_title', entityId: titleId, after: { sku: v.sku, count: data.count, barcodes: copies.map((c) => c.barcode) } });
-    return { items: copies };
-  });
-}
-
 export const UpdateCopySchema = z.object({
-  shelf: optText(60).optional(),
+  shelf: shelfText.optional(),
   condition: optText(200).optional(),
   valueVnd: z.number().int().min(0).optional(),
   /** Back on the shelf after repair, or out of circulation as damaged without a charge. */
@@ -509,6 +530,30 @@ export async function borrower(ctx: Ctx, customerId: string) {
     history: loans.filter((l) => l.returned_at !== null).map((l) => loanView(l, now, r)),
     charges: await chargesOf(tx, sql`ch.customer_id = ${customerId}::uuid`, 100),
     reservations: await reservationsOf(ctx, sql`r.customer_id = ${customerId}::uuid and r.status in ('queued', 'held')`),
+  };
+}
+
+/**
+ * The borrow form's terms for a customer not created yet (“Khách mới”, created when the form is
+ * confirmed – Design §13.8): no loans, charges or purchases; the list fee, loan days and loan limit.
+ */
+export async function newBorrowerTerms(ctx: Ctx) {
+  requireAny(ctx);
+  const r = await rules(ctx, ctx.db);
+  return {
+    customer: { id: '', name: '', phone: null },
+    openLoans: [],
+    overdueLoans: 0,
+    unpaidChargesVnd: 0,
+    maxLoans: r['library.max_loans'],
+    blocks: [],
+    spendVnd: 0,
+    fee: loanFee(0, feeRules(r)),
+    discountSpendVnd: r['library.fee_discount_spend_vnd'],
+    loanDays: r['library.loan_days'],
+    history: [],
+    charges: [],
+    reservations: [],
   };
 }
 

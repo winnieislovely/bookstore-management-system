@@ -90,7 +90,9 @@ export function BookLookup({ onPick, endpoint = '/api/v1/catalog/book-lookup' }:
           <Search size={18} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
           <input
             id={inputId}
-            type="search"
+            // Text, not search: no browser clear “×” inside the field (Design §12.4).
+            type="text"
+            enterKeyHint="search"
             role="combobox"
             aria-expanded={open}
             aria-controls={listId}

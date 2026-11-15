@@ -259,6 +259,9 @@ export const PreorderStatusSchema = z.object({
   status: z.enum(['quote', 'ordered', 'arrived']),
   /** Free-text books linked to catalogue products; required for every one of them to reach `arrived`. */
   links: z.array(z.object({ lineId: z.uuid(), variantId: z.uuid() })).max(30).default([]),
+  /** With Chờ nhận: Giao hàng rather than Nhận tại quầy, and the note staff write by hand. */
+  delivery: z.boolean().optional(),
+  deliveryNote: z.string().trim().max(500).nullable().optional(),
 });
 
 /**
@@ -270,7 +273,9 @@ export async function updatePreorderStatus(ctx: Ctx, id: string, input: z.input<
   const data = PreorderStatusSchema.parse(input);
   return ctx.db.transaction(async (tx) => {
     const row = await lockPreorder(tx, id);
-    if (row.status !== data.status) assertTransition(row, data.status);
+    // A hold is Chờ nhận from the start: sent Chờ nhận, it stays Contacted.
+    const to = row.status === 'contacted' && data.status === 'arrived' ? 'contacted' : data.status;
+    if (row.status !== to) assertTransition(row, to);
     const lines = await linesOf(tx, id);
     const byId = new Map(lines.map((l) => [l.id, l]));
     for (const k of data.links) {
@@ -288,9 +293,14 @@ export async function updatePreorderStatus(ctx: Ctx, id: string, input: z.input<
     if (data.status === 'arrived' && lines.some((l) => !l.variantId && !linked.has(l.id))) {
       throw new AppError(422, 'link_required', 'Chọn sản phẩm cho mọi sách gõ tự do trước khi chuyển sang Chờ nhận. Sách chưa có thì thêm ở trang Sản phẩm.');
     }
-    await tx.update(schema.preorder).set({ status: data.status, ...(data.status === 'arrived' && { allocatedAt: ctx.clock.now() }) }).where(eq(schema.preorder.id, id));
-    await audit.record(tx, ctx, { action: 'preorder.status', entity: 'preorder', entityId: id, before: { status: row.status }, after: { status: data.status, links: data.links } });
-    return { id, status: data.status };
+    const ready = data.status === 'arrived';
+    const delivery = ready && data.delivery !== undefined ? { delivery: data.delivery, deliveryNote: data.delivery ? (data.deliveryNote ?? null) : null } : {};
+    await tx
+      .update(schema.preorder)
+      .set({ status: to, ...(to === 'arrived' && row.status !== 'arrived' && { allocatedAt: ctx.clock.now() }), ...delivery })
+      .where(eq(schema.preorder.id, id));
+    await audit.record(tx, ctx, { action: 'preorder.status', entity: 'preorder', entityId: id, before: { status: row.status, delivery: row.delivery, deliveryNote: row.deliveryNote }, after: { status: to, links: data.links, ...delivery } });
+    return { id, status: to, ...delivery };
   });
 }
 
@@ -429,6 +439,8 @@ export async function listPreorders(ctx: Ctx, input: z.input<typeof HoldsQuery>)
       contactedAt: p.contactedAt,
       expiresAt: p.expiresAt,
       extensions: p.extensions,
+      delivery: p.delivery,
+      deliveryNote: p.deliveryNote,
       note: p.note,
       saleId: p.saleId,
       customerId: p.customerId,
