@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Minus, Plus, RefreshCw, X, XCircle } from 'lucide-react';
+import { Minus, Plus, X } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { ConfirmDialog, Facts, SelectField, TextArea, toast } from '../components/data';
@@ -281,15 +281,15 @@ export function PreorderRecord({ p, onClose }: { p: PreorderRow; onClose: () => 
   if (step === 'cancel') return <CancelPreorder p={p} shiftId={shift.data?.id ?? null} onClose={() => { setStep(null); refresh(); }} />;
   if (step === 'update') return <UpdateStatusDialog p={p} onClose={() => setStep(null)} onDone={refresh} />;
   return (
-    <Dialog title={`Phiếu ${p.docNo}`} size="md" onClose={onClose}>
+    <Dialog title={`Phiếu ${p.docNo}`} size="md" plain onClose={onClose}>
       <div className="flex flex-col gap-4 text-sm">
         <Facts
           items={[
             ['Trạng thái', <PreorderChip p={p} />],
             ['Khách hàng', p.customerName],
             ['Điện thoại', p.customerPhone ? <a href={`tel:${p.customerPhone}`} className="font-semibold whitespace-nowrap text-navy-700 underline num">{formatPhone(p.customerPhone)}</a> : '—'],
-            ['Tổng tiền', <span className="num">{p.unpriced ? 'Chưa đủ giá' : formatVnd(p.totalVnd)}</span>],
-            ['Đã cọc', <span className="num">{p.depositVnd ? `${formatVnd(p.depositVnd)}${p.depositMethod ? ` · ${METHOD[p.depositMethod] ?? p.depositMethod}` : ''}` : 'Chưa cọc'}</span>],
+            ['Tổng tiền', <span className="num">{p.unpriced ? '—' : formatVnd(p.totalVnd)}</span>],
+            ['Đã cọc', <span className="num">{p.depositVnd ? `${formatVnd(p.depositVnd)}${p.depositMethod ? ` · ${METHOD[p.depositMethod] ?? p.depositMethod}` : ''}` : '—'}</span>],
             ['Thời gian tạo phiếu', <span className="num">{formatDateTime(p.createdAt)}</span>],
             ...(p.expiresAt && p.status === 'contacted' ? ([['Giữ đến', <span className={clsx(isOverdue(p) && 'font-semibold text-danger-700')}>{formatDateTime(p.expiresAt)}</span>]] as [string, React.ReactNode][]) : []),
             ...(p.note ? ([['Ghi chú', p.note]] as [string, React.ReactNode][]) : []),
@@ -300,22 +300,20 @@ export function PreorderRecord({ p, onClose }: { p: PreorderRow; onClose: () => 
             <li key={l.lineId} className="flex items-baseline justify-between gap-3 p-3">
               <span className="min-w-0">
                 <span className={clsx('block font-medium', l.freeText && 'italic')}>{l.title}</span>
-                <span className="text-[13px] text-ink-500 num">
-                  {formatNumber(l.qty)} × {l.unitPriceVnd == null || l.freeText ? 'chưa có giá' : formatVnd(l.unitPriceVnd)}
-                </span>
+                <span className="text-[13px] text-ink-500 num">x{formatNumber(l.qty)}</span>
               </span>
-              {l.unitPriceVnd != null && !l.freeText && <span className="font-medium whitespace-nowrap num">{formatVnd(l.qty * l.unitPriceVnd)}</span>}
+              <span className="font-medium whitespace-nowrap num">{l.unitPriceVnd != null && !l.freeText ? formatVnd(l.qty * l.unitPriceVnd) : '—'}</span>
             </li>
           ))}
         </ul>
         {live && (
           <div className={clsx('grid gap-2', canCancel && 'grid-cols-2')}>
             {canCancel && (
-              <Button variant="destructive-outline" icon={XCircle} onClick={() => setStep('cancel')}>
+              <Button variant="destructive-outline" onClick={() => setStep('cancel')}>
                 Hủy phiếu
               </Button>
             )}
-            <Button variant="primary" icon={RefreshCw} onClick={() => setStep('update')}>
+            <Button variant="primary" onClick={() => setStep('update')}>
               Cập nhật
             </Button>
           </div>
