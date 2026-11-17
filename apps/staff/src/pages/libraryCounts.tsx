@@ -1,14 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ArrowLeft, CheckCircle2, ChevronDown, ClipboardList, Download, MoreVertical, Plus, ScanBarcode, Search, Send, Upload, XCircle } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { ArrowLeft, CheckCircle2, ChevronDown, ClipboardList, Download, MoreVertical, Plus, ScanBarcode, Send, Upload, XCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, FilterMenu, SearchBox, TimeFilter, errText, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Card, ErrorState, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
 import { can, useMe } from '../lib/session';
-import { CameraScanner, Dialog } from '../pos/widgets';
+import { ScanSession, type ScanOutcome } from '../components/scanSession';
+import { Dialog } from '../pos/widgets';
 import { COPY_STATUS } from './library';
 
 /**
@@ -216,7 +217,6 @@ interface Line {
 }
 interface Detail extends Omit<CountRow, 'lines' | 'found' | 'checked'> {
   approvedAt: string | null;
-  markLimit: number;
   summary: { lines: number; found: number; missing: number; unchecked: number; outOfScope: number };
   lines: Line[];
 }
@@ -239,45 +239,70 @@ export function LibraryCountDetailPage() {
   const [byShelf, setByShelf] = useState(false);
   const [camera, setCamera] = useState(false);
   const [filter, setFilter] = useState('');
-  const [scan, setScan] = useState('');
   const [scanMsg, setScanMsg] = useState<{ tone: 'success' | 'warning' | 'danger'; text: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [sheetResult, setSheetResult] = useState<{ tone: 'success' | 'danger'; text: string; rows?: { row: number; barcode: string; message: string }[] } | null>(null);
-  const scanRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Latest scan handler for the keyboard listener below (set once the count is loaded).
+  const scanCode = useRef<(code: string) => void>(() => undefined);
+  const counting = c.data?.status === 'open' && !camera;
+  /**
+   * A hand scanner (Bluetooth or USB) types like a keyboard: a burst of keys ending in Enter. It works
+   * anywhere on the page – there is no search field (Design §13.8); slow typing is not taken as a scan.
+   */
+  useEffect(() => {
+    if (!counting) return;
+    let buf = '';
+    let last = 0;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const now = performance.now();
+      if (now - last > 100) buf = '';
+      last = now;
+      if (e.key === 'Enter') {
+        if (buf.length >= 4) {
+          e.preventDefault();
+          scanCode.current(buf);
+        }
+        buf = '';
+      } else if (e.key.length === 1) {
+        buf += e.key;
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [counting]);
 
   if (c.isError) return <ErrorState error={c.error} onRetry={() => c.refetch()} />;
   if (!c.data) return <Skeleton className="h-64" />;
   const x = c.data;
   const open = x.status === 'open';
-  const markable = open && x.summary.lines <= x.markLimit;
   const showStatus = x.lines.some((l) => l.inScope && l.status !== undefined);
   const rows = x.lines.filter((l) => (filter === 'unchecked' ? l.inScope && l.found === null : filter === 'missing' ? l.inScope && l.found === false : filter === 'out' ? !l.inScope : true));
 
-  // A scanner's Enter or a camera read records the copy at once: no “Ghi nhận” button (Design §13.8).
-  const doScan = async (raw = scan) => {
-    const code = raw.trim();
-    if (!code) return;
-    setScan('');
+  /** Records one code (accession barcode or ISBN); the same outcome feeds the hand-scanner message and the camera session. */
+  const record = async (code: string): Promise<ScanOutcome> => {
     try {
-      const r = await post<{ barcode: string; title: string; inScope: boolean }>(`/api/v1/library/counts/${x.id}/scan`, { barcode: code });
-      setScanMsg(r.inScope ? { tone: 'success', text: `Có: ${r.barcode} – ${r.title}` } : { tone: 'warning', text: `${r.barcode} – ${r.title} không thuộc phiếu này (ngoài phạm vi hoặc sai kệ).` });
-      await c.refetch();
+      const r = await post<{ barcode: string; title: string; shelf: string | null; inScope: boolean }>(`/api/v1/library/counts/${x.id}/scan`, { barcode: code });
+      const fresh = (await c.refetch()).data?.summary ?? x.summary;
+      const done = fresh.lines - fresh.unchecked;
+      return r.inScope
+        ? { tone: 'success', title: 'Đã đếm', lines: [`${r.barcode} – ${r.title}`, `Kệ ${r.shelf ?? '—'} · ${formatNumber(done)}/${formatNumber(fresh.lines)} · ${fresh.lines ? Math.floor((done / fresh.lines) * 100) : 0}%`] }
+        : { tone: 'warning', title: 'Ngoài phạm vi / sai kệ', lines: [`${r.barcode} – ${r.title}`, `Đang ở kệ ${r.shelf ?? '—'}; đã ghi vào danh sách kiểm.`] };
     } catch (e) {
-      setScanMsg({ tone: 'danger', text: errText(e) });
-    } finally {
-      scanRef.current?.focus();
+      return { tone: 'danger', title: 'Không đếm được', lines: [errText(e)] };
     }
   };
 
-  const setFound = async (line: Line, found: boolean | null) => {
-    try {
-      await post(`/api/v1/library/counts/${x.id}/lines`, { copyId: line.copyId, found });
-      await c.refetch();
-    } catch (e) {
-      toast.error(errText(e));
-    }
+  const doScan = async (raw: string) => {
+    const code = raw.trim();
+    if (!code) return;
+    const o = await record(code);
+    setScanMsg({ tone: o.tone, text: o.tone === 'success' ? `Có: ${o.lines?.[0] ?? ''}` : [o.title, ...(o.lines ?? [])].join(' – ') });
   };
+  scanCode.current = (code) => void doScan(code);
 
   const uploadSheet = async (file: File) => {
     setUploading(true);
@@ -304,26 +329,8 @@ export function LibraryCountDetailPage() {
       const o = OUTCOME[l.outcome ?? ''] ?? OUTCOME.out_of_scope!;
       return <StatusChip tone={o.tone}>{o.label}</StatusChip>;
     }
-    if (markable) {
-      // Two small toggles per row for counts of up to 50 copies (Design §13.8).
-      const btn = (on: boolean, label: string, value: boolean) => (
-        <button
-          type="button"
-          aria-pressed={on}
-          onClick={() => void setFound(l, on ? null : value)}
-          className={clsx('h-8 rounded-full border px-3 text-sm whitespace-nowrap', on ? (value ? 'border-success-700 bg-success-50 text-success-700' : 'border-danger-700 bg-danger-50 text-danger-700') : 'border-paper-500 bg-white')}
-        >
-          {label}
-        </button>
-      );
-      return (
-        <span className="inline-flex gap-2">
-          {btn(l.found === true, 'Có', true)}
-          {btn(l.found === false, 'Không thấy', false)}
-        </span>
-      );
-    }
-    return l.found === null ? <span className="text-ink-500">Chưa kiểm</span> : l.found ? <StatusChip tone="success">Có</StatusChip> : <StatusChip tone="danger">Không thấy</StatusChip>;
+    // Read-only: counted only by scanning or the count sheet (Design §13.8).
+    return l.found === null ? <StatusChip tone="neutral">Chưa kiểm</StatusChip> : l.found ? <StatusChip tone="success">Có</StatusChip> : <StatusChip tone="danger">Không thấy</StatusChip>;
   };
 
   return (
@@ -344,7 +351,8 @@ export function LibraryCountDetailPage() {
         </div>
       )}
       {/* One box: “Tiến độ”, the overall bar with its %, and per shelf when opened (Design §13.8). */}
-      <div className="mb-4 rounded-lg border border-paper-300 bg-white shadow-sm">
+      <div className="mb-4 flex items-start gap-2">
+      <div className="min-w-0 flex-1 rounded-lg border border-paper-300 bg-white shadow-sm">
         <button type="button" aria-expanded={byShelf} onClick={() => setByShelf((v) => !v)} className="flex w-full flex-col gap-2 px-4 py-3 text-left">
           <span className="flex w-full items-center justify-between gap-3">
             <span className="text-sm font-semibold text-ink-900">Tiến độ</span>
@@ -366,6 +374,12 @@ export function LibraryCountDetailPage() {
           </ul>
         )}
       </div>
+      {open && (
+        <button type="button" className="inline-flex size-12 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50" aria-label="Quét mã bằng camera" title="Quét mã bằng camera" onClick={() => setCamera(true)}>
+          <ScanBarcode size={28} aria-hidden />
+        </button>
+      )}
+      </div>
 
       {!open && (
         <Card title="Báo cáo chênh lệch" className="mb-6">
@@ -385,46 +399,25 @@ export function LibraryCountDetailPage() {
       )}
 
       {open && (
-        <div className="mb-6">
-          <div>
-            <form
-              className="flex gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void doScan();
-              }}
-            >
-              <div className="relative min-w-0 flex-1">
-              <Search size={20} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-500" aria-hidden />
-              <input
-                ref={scanRef}
-                className="h-11 w-full rounded-md border border-paper-500 bg-white pr-3 pl-10 focus:border-navy-700"
-                placeholder="Quét mã cá biệt hoặc ISBN"
-                aria-label="Quét mã cá biệt hoặc ISBN"
-                autoFocus
-                value={scan}
-                onChange={(e) => setScan(e.target.value)}
-              />
-              </div>
-              <button type="button" className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50" aria-label="Quét mã bằng camera" title="Quét mã bằng camera" onClick={() => setCamera(true)}>
-                <ScanBarcode size={26} aria-hidden />
-              </button>
-            </form>
+        <div className="mb-6 empty:hidden">
+          <div className="flex flex-col gap-3 empty:hidden">
+            {/* Continuous camera session: Tiếp tục after each book, Xong to finish (Design §13.8). */}
             {camera && (
-              <CameraScanner
-                onCode={(code) => {
+              <ScanSession
+                onScan={record}
+                progress={`Đã đếm ${formatNumber(x.summary.lines - x.summary.unchecked)}/${formatNumber(x.summary.lines)}`}
+                onClose={() => {
                   setCamera(false);
-                  void doScan(code);
+                  setScanMsg(null);
                 }}
-                onClose={() => setCamera(false)}
               />
             )}
             {scanMsg && (
-              <div className="mt-3">
+              <div>
                 <InlineAlert tone={scanMsg.tone}>{scanMsg.text}</InlineAlert>
               </div>
             )}
-            {uploading && <p className="mt-3 text-sm text-ink-500">Đang tải lên phiếu đếm…</p>}
+            {uploading && <p className="text-sm text-ink-500">Đang tải lên phiếu đếm…</p>}
             {sheetResult && (
               <div className="mt-3">
                 <InlineAlert tone={sheetResult.tone}>

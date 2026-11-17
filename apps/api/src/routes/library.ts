@@ -56,9 +56,6 @@ export function libraryRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'post', path: '/api/v1/library/counts/:id/scan', access: 'library.count', summary: 'A scanned copy is found', params: IdParams, body: counts.ScanSchema }, async ({ ctx, params, body }) =>
     counts.scan(ctx, params.id, body),
   );
-  defineRoute(app, { method: 'post', path: '/api/v1/library/counts/:id/lines', access: 'library.count', summary: 'Mark a copy found or not seen (up to 50 copies)', params: IdParams, body: counts.MarkSchema }, async ({ ctx, params, body }) =>
-    counts.mark(ctx, params.id, body),
-  );
   defineRoute(
     app,
     { method: 'get', path: '/api/v1/library/counts/:id/sheet', access: 'library.count', summary: 'Download the count sheet (XLSX or CSV)', params: IdParams, query: z.object({ format: z.enum(['xlsx', 'csv']).default('xlsx') }) },

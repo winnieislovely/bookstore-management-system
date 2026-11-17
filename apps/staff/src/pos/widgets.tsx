@@ -4,6 +4,7 @@ import { Delete, X } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { formatNumber } from '../lib/format';
 import { t } from '../lib/i18n';
+import { createFrameReader } from '../components/barcodeReader';
 
 /** Touch-first POS widgets (Design §10.3, §10.9, §13). */
 
@@ -124,39 +125,43 @@ export function PinPad({ value, onChange, dark, length = 6 }: { value: string; o
   );
 }
 
-/** Camera barcode scanner (FR-POS-10, Design §13.3) using BarcodeDetector where available. */
+/** Camera barcode scanner (FR-POS-10, Design §13.3): the built-in reader on Android Chrome, the bundled decoder on iPhone. */
 export function CameraScanner({ onCode, onClose }: { onCode: (code: string) => void; onClose: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let stream: MediaStream | null = null;
-    let raf = 0;
+    let timer = 0;
     let stopped = false;
-    const Detector = (window as unknown as { BarcodeDetector?: new (o: { formats: string[] }) => { detect: (v: HTMLVideoElement) => Promise<{ rawValue: string }[]> } }).BarcodeDetector;
-    if (!Detector) {
-      setError('Trình duyệt này chưa hỗ trợ quét bằng camera. Hãy dùng máy quét hoặc nhập mã.');
-      return;
-    }
-    const detector = new Detector({ formats: ['ean_13', 'code_128', 'qr_code'] });
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: 'environment' } })
-      .then(async (s) => {
+    // Built-in reader on Android Chrome, the bundled decoder on iPhone (Design §13.3).
+    Promise.all([createFrameReader(), navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })])
+      .then(async ([reader, s]) => {
         stream = s;
-        if (!video.current) return;
+        // A run already cleaned up (the scanner re-mounting) must not report an error.
+        if (stopped || !video.current) return void s.getTracks().forEach((tr) => tr.stop());
         video.current.srcObject = s;
-        await video.current.play();
+        try {
+          await video.current.play();
+        } catch (e) {
+          if (stopped) return;
+          throw e;
+        }
         const tick = async () => {
           if (stopped || !video.current) return;
-          const codes = await detector.detect(video.current).catch(() => []);
-          if (codes[0]) return onCode(codes[0].rawValue);
-          raf = requestAnimationFrame(() => void tick());
+          const code = await reader.read(video.current);
+          if (code && !stopped) return onCode(code);
+          timer = reader.intervalMs ? window.setTimeout(() => void tick(), reader.intervalMs) : requestAnimationFrame(() => void tick());
         };
         void tick();
       })
-      .catch(() => setError('Không mở được camera. Hãy cho phép truy cập camera.'));
+      .catch((e: unknown) => {
+        if (stopped) return;
+        setError(e instanceof DOMException && e.name === 'NotAllowedError' ? 'Không mở được camera. Hãy cho phép truy cập camera.' : 'Không mở được camera hoặc bộ đọc mã. Hãy thử lại, hoặc dùng máy quét / nhập mã.');
+      });
     return () => {
       stopped = true;
-      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+      cancelAnimationFrame(timer);
       stream?.getTracks().forEach((tr) => tr.stop());
     };
   }, [onCode]);

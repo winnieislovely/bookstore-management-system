@@ -8,13 +8,10 @@ import { AppError, can, errors, nextDocNo, requirePermission, type Ctx, type Tx 
 
 /**
  * Library counts (FR-LIB-04, TDD §4.8), modelled on stock counts: a session snapshots the copies
- * expected on the shelves in scope; copies are marked found by scanning (accession barcode or ISBN),
- * on screen (up to 50 lines) or through the count sheet; submit, approve or cancel. Approval only
+ * expected on the shelves in scope; copies are marked found only by scanning (accession barcode or
+ * ISBN) or through the Excel count sheet – never by hand; submit, approve or cancel. Approval only
  * closes the variance report.
  */
-
-/** Above this many copies, results come from scanning or the count sheet (as FR-INV-06). */
-export const LIB_COUNT_MARK_LIMIT = 50;
 
 const ON_SHELF = ['available', 'reserved'];
 
@@ -144,7 +141,6 @@ export async function getCount(ctx: Ctx, id: string) {
   const inScope = rows.filter((r) => r.inScope);
   return {
     ...count,
-    markLimit: LIB_COUNT_MARK_LIMIT,
     summary: {
       lines: inScope.length,
       found: inScope.filter((r) => r.found).length,
@@ -186,8 +182,8 @@ export async function scan(ctx: Ctx, id: string, input: z.input<typeof ScanSchem
       const isbn = normalizeIsbn(data.barcode);
       const [title] = isbn ? await tx.select({ title: schema.libTitle.title }).from(schema.libTitle).where(eq(schema.libTitle.isbn13, isbn)).limit(1) : [];
       if (!isbn || !title) throw new AppError(404, 'copy_not_found', `Không tìm thấy bản sách có mã cá biệt hoặc ISBN ${data.barcode}.`, { barcode: data.barcode });
-      const lines = await tx.execute<{ copy_id: string; barcode: string; title: string; found: boolean | null }>(sql`
-        select l.copy_id, c.barcode, t.title, l.found from library.lib_count_line l
+      const lines = await tx.execute<{ copy_id: string; barcode: string; title: string; shelf: string | null; found: boolean | null }>(sql`
+        select l.copy_id, c.barcode, t.title, c.shelf, l.found from library.lib_count_line l
         join library.lib_copy c on c.id = l.copy_id join library.lib_title t on t.id = c.title_id
         where l.count_id = ${id}::uuid and l.in_scope and t.isbn13 = ${isbn}
         order by c.barcode for update of l`);
@@ -198,37 +194,16 @@ export async function scan(ctx: Ctx, id: string, input: z.input<typeof ScanSchem
           : new AppError(404, 'isbn_not_in_count', `“${title.title}” không có bản nào trong phiếu này. Hãy quét mã cá biệt của bản sách.`);
       }
       await tx.update(l).set({ found: true, checkedAt: now, checkedBy: actor.userId }).where(and(eq(l.countId, id), eq(l.copyId, next.copy_id)));
-      return { barcode: next.barcode, title: next.title, inScope: true };
+      return { barcode: next.barcode, title: next.title, shelf: next.shelf, inScope: true };
     }
     const [line] = await tx
       .update(l)
       .set({ found: true, checkedAt: now, checkedBy: actor.userId })
       .where(and(eq(l.countId, id), eq(l.copyId, copy.id)))
       .returning({ inScope: l.inScope });
-    if (line) return { barcode: copy.barcode, title: copy.title, inScope: line.inScope };
+    if (line) return { barcode: copy.barcode, title: copy.title, shelf: copy.shelf, inScope: line.inScope };
     await tx.insert(l).values({ countId: id, copyId: copy.id, inScope: false, expectedShelf: copy.shelf, expectedStatus: copy.status, found: true, checkedAt: now, checkedBy: actor.userId });
-    return { barcode: copy.barcode, title: copy.title, inScope: false };
-  });
-}
-
-export const MarkSchema = z.object({ copyId: z.uuid(), found: z.boolean().nullable() });
-
-/** Marked on the count screen, for counts of up to 50 copies (as FR-INV-06). */
-export async function mark(ctx: Ctx, id: string, input: z.input<typeof MarkSchema>) {
-  const actor = requirePermission(ctx, 'library.count');
-  const data = MarkSchema.parse(input);
-  return ctx.db.transaction(async (tx) => {
-    await lockOpen(tx, id);
-    const [{ n }] = (await tx.execute<{ n: number }>(sql`select count(*)::int as n from library.lib_count_line where count_id = ${id}::uuid and in_scope`)) as unknown as [{ n: number }];
-    if (n > LIB_COUNT_MARK_LIMIT) throw errors.conflict('count_sheet_required', `Phiếu có hơn ${LIB_COUNT_MARK_LIMIT} bản sách: hãy quét mã hoặc dùng phiếu đếm.`);
-    const l = schema.libCountLine;
-    const [line] = await tx
-      .update(l)
-      .set({ found: data.found, checkedAt: data.found === null ? null : ctx.clock.now(), checkedBy: data.found === null ? null : actor.userId })
-      .where(and(eq(l.countId, id), eq(l.copyId, data.copyId), eq(l.inScope, true)))
-      .returning({ copyId: l.copyId });
-    if (!line) throw errors.notFound('Bản sách trong phiếu');
-    return { copyId: data.copyId, found: data.found };
+    return { barcode: copy.barcode, title: copy.title, shelf: copy.shelf, inScope: false };
   });
 }
 

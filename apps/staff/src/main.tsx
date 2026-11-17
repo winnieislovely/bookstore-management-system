@@ -34,6 +34,7 @@ import { ShiftDetailPage, ShiftsPage } from './pages/shifts';
 import { StockItemPage, StockPage } from './pages/stock';
 import { SuppliersPage } from './pages/suppliers';
 import { PosPage } from './pos/PosPage';
+import { warmBarcodeReader } from './components/barcodeReader';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -174,6 +175,8 @@ const router = createBrowserRouter([
 
 // App shell cache so a registered POS reloads offline (TDD §7.2).
 if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register('/sw.js');
+// iPhone has no built-in barcode reader: fetch the bundled one now so the camera also works offline.
+warmBarcodeReader();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
