@@ -90,6 +90,9 @@ importers:
       zustand:
         specifier: ^5.0.15
         version: 5.0.15(@types/react@19.3.0)(react@19.3.0)
+      zxing-wasm:
+        specifier: 3.1.6
+        version: 3.1.6(@types/emscripten@1.41.6)
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4.3.3
@@ -1253,6 +1256,9 @@ packages:
 
   '@types/dockerode@4.0.2':
     resolution: {integrity: sha512-hA4myZ0XzwHG/p/eCLElYsQS3y1XZfvi6AfLFKVp1SNpPkO6J3xLatacAFVkReTxXRoIa3eHJmhJi9w6I3+zNA==}
+
+  '@types/emscripten@1.41.6':
+    resolution: {integrity: sha512-uN+9i8bFT5CUcZfyIEYDrSueACEyKGbUs5kC/72DGlZZoinh84sJfVV0i8UOJD1asdzkvLPBRrKs41kZ8MdEXg==}
 
   '@types/esrecurse@4.3.1':
     resolution: {integrity: sha512-xJBAbDifo5hpffDBuHl0Y8ywswbiAp/Wi7Y/GtAgSlZyIABppyurxVueOPE8LUQOxdlgi6Zqce7uoEpqNTeiUw==}
@@ -3532,6 +3538,11 @@ packages:
       use-sync-external-store:
         optional: true
 
+  zxing-wasm@3.1.6:
+    resolution: {integrity: sha512-mU7UNuvl+hOT+nlSOQTMHZ2tM8lRMsbjDIp5IO/+HmBl/FOq77q0OSZPJ3cm42A9c1MKU6Uve67FiGdkhsrT9g==}
+    peerDependencies:
+      '@types/emscripten': '>=1.39.6'
+
 snapshots:
 
   '@asteasolutions/zod-to-openapi@9.1.0(zod@4.6.5)':
@@ -4274,6 +4285,8 @@ snapshots:
       '@types/docker-modem': 3.0.6
       '@types/node': 26.6.5
       '@types/ssh2': 1.15.6
+
+  '@types/emscripten@1.41.6': {}
 
   '@types/esrecurse@4.3.1': {}
 
@@ -6660,3 +6673,8 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.3.0
       react: 19.3.0
+
+  zxing-wasm@3.1.6(@types/emscripten@1.41.6):
+    dependencies:
+      '@types/emscripten': 1.41.6
+      type-fest: 5.10.0
