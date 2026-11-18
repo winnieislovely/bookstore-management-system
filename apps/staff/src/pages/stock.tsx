@@ -11,6 +11,7 @@ import { t } from '../lib/i18n';
 import { can, useMe } from '../lib/session';
 import { Dialog } from '../pos/widgets';
 import { ImportWizard } from './import';
+import { ProductStockInDialog } from './stockin';
 
 /**
  * Stock (FR-INV-01..11, FR-PUR-01..07, Design §12.1): one page for stock and stock-in – a product-style
@@ -248,6 +249,8 @@ interface Movement {
 }
 interface ItemStock {
   id: string;
+  kind: string;
+  images: { fileId: string }[];
   i18n: { en: { title: string }; vi?: { title?: string } };
   authors: string[];
   variants: { id: string; sku: string; priceVnd: number; minStock: number | null; avgCostVnd?: number; stock: { onHand: number; reserved: number; available: number; byLocation: { location: string; onHand: number; reserved: number }[] } }[];
@@ -260,8 +263,8 @@ export function StockItemPage() {
   const item = useQuery({ queryKey: ['item', id], queryFn: () => get<ItemStock>(`/api/v1/catalog/items/${id}`) });
   const [type, setType] = useState('');
   const [pages, setPages] = useState<string[]>(['']);
-  const [dialog, setDialog] = useState<null | 'adjust'>(null);
-  const navigate = useNavigate();
+  // 'in': Nhập thêm hàng for this product only, in a dialog (SRS UC-05 1a, Design §12.1).
+  const [dialog, setDialog] = useState<null | 'in' | 'adjust'>(null);
   const v = item.data?.variants.find((x) => x.id === params.get('v')) ?? item.data?.variants[0];
   const cursor = pages[pages.length - 1];
   const moves = useQuery({
@@ -301,7 +304,7 @@ export function StockItemPage() {
               </Button>
             )}
             {can(me, 'purchasing.manage') && (
-              <Button variant="primary" icon={PackagePlus} onClick={() => navigate(`/stock/in?item=${id}&v=${v.id}`)}>
+              <Button variant="primary" icon={PackagePlus} onClick={() => setDialog('in')}>
                 Nhập thêm hàng
               </Button>
             )}
@@ -345,6 +348,13 @@ export function StockItemPage() {
           </Link>
         </Card>
       </div>
+      {dialog === 'in' && (
+        <ProductStockInDialog
+          product={{ variantId: v.id, title, sku: v.sku, kind: item.data.kind, imageFileId: item.data.images[0]?.fileId ?? null, priceVnd: v.priceVnd, avgCostVnd: v.avgCostVnd ?? null }}
+          onClose={() => setDialog(null)}
+          onPosted={refresh}
+        />
+      )}
       {dialog === 'adjust' && <BulkAdjustDialog picks={[{ variantId: v.id, title, sku: v.sku }]} onClose={() => setDialog(null)} onDone={refresh} />}
     </>
   );

@@ -2,12 +2,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { BookOpen, ChevronDown, Minus, Package, PackageOpen, Plus, ScanBarcode } from 'lucide-react';
 import { useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useNavigate } from 'react-router';
 import { ConfirmDialog, toast } from '../components/data';
 import { hitTitle, ProductSearch, type ProductHit } from '../components/product-search';
 import { ScanSession, type ScanOutcome } from '../components/scanSession';
 import { Dialog } from '../pos/widgets';
-import { Button, ErrorState, Field, InlineAlert, PageHeader, Skeleton } from '../components/ui';
+import { Button, Field, InlineAlert, PageHeader } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
 import { formatNumber } from '../lib/format';
 import { can, useMe } from '../lib/session';
@@ -73,32 +73,13 @@ const lineOf = (p: LineSource, key: string): Line => ({
   price: String(p.priceVnd),
 });
 
-interface ItemForPick {
-  kind: string;
-  i18n: { vi?: { title?: string }; en: { title: string } };
-  images: { fileId: string }[];
-  variants: { id: string; sku: string; priceVnd: number; avgCostVnd?: number }[];
-}
-
 /**
- * “Nhập thêm hàng” page, `/stock/in` (FR-PUR-01..06, Design §12.1, §12.4). From the Tồn kho header it
- * starts empty; from a product's stock page (`?item=&v=`) it starts with that product. Either way
- * products are scanned (camera or handheld scanner) or searched one at a time. Posts one stock-in entry.
+ * “Nhập thêm hàng” page, `/stock/in` (FR-PUR-01..06, Design §12.1, §12.4), opened from the Tồn kho
+ * header: products are scanned (camera or handheld scanner) or searched one at a time; posts one
+ * stock-in entry. A product's stock page uses `ProductStockInDialog` instead (SRS UC-05 1a).
  */
 export function StockInPage() {
-  const [params] = useSearchParams();
-  const itemId = params.get('item');
-  const variantId = params.get('v');
-  const item = useQuery({ queryKey: ['item', itemId], enabled: !!itemId, queryFn: () => get<ItemForPick>(`/api/v1/catalog/items/${itemId}`) });
-  if (itemId && item.isError) return <ErrorState error={item.error} onRetry={() => void item.refetch()} />;
-  if (itemId && !item.data) return <Skeleton className="h-64" />;
-  const v = item.data?.variants.find((x) => x.id === variantId) ?? item.data?.variants[0];
-  const title = item.data ? item.data.i18n.vi?.title || item.data.i18n.en.title : null;
-  const initial: LineSource[] =
-    item.data && v ? [{ variantId: v.id, title: title!, sku: v.sku, kind: item.data.kind, imageFileId: item.data.images[0]?.fileId ?? null, priceVnd: v.priceVnd, avgCostVnd: v.avgCostVnd ?? null }] : [];
-  // Back to where the page was opened from.
-  const back = itemId ? { to: `/stock/${itemId}${v ? `?v=${v.id}` : ''}`, label: title! } : { to: '/stock', label: 'Tồn kho' };
-  return <StockInForm key={`${itemId ?? ''}:${v?.id ?? ''}`} initial={initial} back={back} />;
+  return <StockInForm initial={[]} back={{ to: '/stock', label: 'Tồn kho' }} />;
 }
 
 function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: string; label: string } }) {
@@ -228,10 +209,10 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
           {result.lines.some((l) => l.marginFlag) && <InlineAlert tone="warning">{result.lines.filter((l) => l.marginFlag).length} dòng có lãi dưới mức tối thiểu. Kiểm tra giá bán.</InlineAlert>}
           {result.lines.some((l) => l.priceChanged) && <InlineAlert tone="info">Giá bán đã được cập nhật cho {result.lines.filter((l) => l.priceChanged).length} sản phẩm.</InlineAlert>}
           <div className="mt-2 flex gap-2 max-sm:[&>*]:flex-1">
-            <Button variant="secondary" className="sm:w-48" onClick={restart}>
+            <Button variant="secondary" className="sm:w-32" onClick={restart}>
               Nhập tiếp
             </Button>
-            <Button variant="primary" className="sm:w-48" onClick={() => navigate(back.to)}>
+            <Button variant="primary" className="sm:w-32" onClick={() => navigate(back.to)}>
               Xong
             </Button>
           </div>
@@ -339,13 +320,13 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
         />
       )}
 
-      {/* Sticky action bar (Design §12.4): Hủy and Xác nhận the same size – half each on phones, 192 px from sm. */}
+      {/* Sticky action bar (Design §12.4): Hủy and Xác nhận the same size – half each on phones, 128 px from sm. */}
       <div className="fixed inset-x-0 bottom-0 z-30 flex h-16 items-center justify-end gap-2 border-t border-paper-300 bg-white px-4 shadow-sm max-sm:[&>*]:flex-1 sm:px-6 md:left-[72px] lg:left-[264px]">
-        <Button variant="secondary" className="sm:w-48" onClick={() => navigate(back.to)}>
+        <Button variant="secondary" className="sm:w-32" onClick={() => navigate(back.to)}>
           Hủy
         </Button>
-        <Button variant="primary" className="sm:w-48" loading={busy} disabled={!lines.length} onClick={confirm}>
-          Xác nhận nhập hàng
+        <Button variant="primary" className="sm:w-32" loading={busy} disabled={!lines.length} onClick={confirm}>
+          Xác nhận
         </Button>
       </div>
       {/* Phones: the supplier is chosen here, when confirming; it stays optional (SRS FR-PUR-04). */}
@@ -360,7 +341,7 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
                 Quay lại
               </Button>
               <Button variant="primary" loading={busy} onClick={() => void submit()}>
-                Xác nhận nhập hàng
+                Xác nhận
               </Button>
             </>
           }
@@ -470,4 +451,153 @@ function LineThumb({ line }: { line: Pick<Line, 'kind' | 'imageFileId'> }) {
     );
   }
   return <img src={`/api/v1/files/${line.imageFileId}`} alt="" loading="lazy" className={clsx(box, 'block rounded-sm bg-white', book ? 'object-cover' : 'object-contain')} />;
+}
+
+/** The product a stock page stocks in (Design §12.1). */
+export interface StockInProduct {
+  variantId: string;
+  title: string;
+  sku: string;
+  kind: string;
+  imageFileId: string | null;
+  priceVnd: number;
+  /** Current average cost, when this user may see costs. */
+  avgCostVnd?: number | null;
+}
+
+/**
+ * “Nhập thêm hàng” on a product's stock page (SRS UC-05 1a, Design §12.1): a dialog for that product
+ * only – quantity, cost and selling price prefilled with the current values, and the supplier.
+ * Posts one stock-in entry with that one line; only a changed cost or price is sent (FR-PUR-03).
+ */
+export function ProductStockInDialog({ product: p, onClose, onPosted }: { product: StockInProduct; onClose: () => void; onPosted: () => void }) {
+  const suppliers = useSuppliers();
+  const { data: me } = useMe();
+  const showCost = can(me, 'catalog.view_cost');
+  const qc = useQueryClient();
+  const [qty, setQty] = useState('1');
+  const costNow = p.avgCostVnd ?? null;
+  const [cost, setCost] = useState(costNow != null ? String(costNow) : '');
+  const [price, setPrice] = useState(String(p.priceVnd));
+  const [supplierId, setSupplierId] = useState('');
+  const [consignment, setConsignment] = useState(false);
+  const [discount, setDiscount] = useState('');
+  const [deadline, setDeadline] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const supplier = suppliers.data?.items.find((s) => s.id === supplierId);
+  const isConsignment = consignment && !!supplier?.isConsignor;
+  const n = digits(qty);
+  const lowMargin = showCost && digits(price) > 0 && cost.trim() !== '' && digits(cost) >= digits(price);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const costChanged = showCost && cost.trim() !== '' && digits(cost) !== costNow;
+      const priceChanged = price.trim() !== '' && digits(price) !== p.priceVnd;
+      const r = await post<{ entryNo: string; lines: { marginFlag: boolean; priceChanged: boolean }[] }>('/api/v1/purchasing/stock-in', {
+        ...(supplierId && { supplierId }),
+        consignment: isConsignment,
+        ...(isConsignment && discount && { consignmentDiscountBp: Math.round(Number(discount.replace(',', '.')) * 100) }),
+        ...(isConsignment && deadline && { consignmentDeadline: new Date(deadline).toISOString() }),
+        lines: [{ kind: 'existing', variantId: p.variantId, qty: Math.max(1, n), ...(costChanged && { costVnd: digits(cost) }), ...(priceChanged && { sellingPriceVnd: digits(price) }) }],
+      });
+      for (const key of ['stock-list', 'item', 'movements', 'valuation']) void qc.invalidateQueries({ queryKey: [key] });
+      toast.success(`Đã nhập kho phiếu ${r.entryNo}.`);
+      if (r.lines.some((l) => l.marginFlag)) toast.error('Giá nhập mới để lại lãi dưới mức tối thiểu. Kiểm tra giá bán.');
+      onPosted();
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      title="Nhập thêm hàng"
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          {/* Exactly the same size: half each on phones, 128 px each from sm (Design §12.1). */}
+          <Button variant="secondary" className="sm:w-32" onClick={onClose}>
+            Hủy
+          </Button>
+          <Button variant="primary" className="sm:w-32" loading={busy} onClick={() => void submit()}>
+            Xác nhận
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-3">
+          <LineThumb line={p} />
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold break-words text-ink-900">{p.title}</p>
+            <p className="code text-[13px] break-all text-ink-500">{p.sku}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-sm font-medium text-ink-700">Số lượng</span>
+          {/* The POS cart stepper (Design §13.2); minimum 1. */}
+          <div className="flex items-center gap-1">
+            <button type="button" className="inline-flex size-10 items-center justify-center rounded-full text-ink-700 hover:bg-paper-200 disabled:opacity-40" aria-label="Bớt 1" disabled={n <= 1} onClick={() => setQty(String(Math.max(1, n - 1)))}>
+              <Minus size={18} aria-hidden />
+            </button>
+            <input
+              className="h-10 w-14 rounded-md border border-paper-500 text-center num focus:border-navy-700"
+              inputMode="numeric"
+              aria-label="Số lượng"
+              value={qty}
+              onChange={(e) => setQty(e.target.value.replace(/\D/g, ''))}
+              onBlur={() => n < 1 && setQty('1')}
+            />
+            <button type="button" className="inline-flex size-10 items-center justify-center rounded-full text-ink-700 hover:bg-paper-200" aria-label="Thêm 1" onClick={() => setQty(String(n + 1))}>
+              <Plus size={18} aria-hidden />
+            </button>
+          </div>
+        </div>
+
+        <div className={clsx('grid gap-3', showCost ? 'grid-cols-2' : 'grid-cols-1')}>
+          {showCost && <Field label="Giá nhập" suffix="₫" inputMode="numeric" value={money(cost)} onChange={(e) => setCost(e.target.value)} />}
+          <Field label="Giá bán" suffix="₫" inputMode="numeric" value={money(price)} onChange={(e) => setPrice(e.target.value)} />
+        </div>
+        {lowMargin && <InlineAlert tone="warning">Giá nhập không thấp hơn giá bán.</InlineAlert>}
+
+        {/* No label above: the select reads “Nhà cung cấp” until one is chosen (Design §12.4). */}
+        <select
+          aria-label="Nhà cung cấp"
+          className={clsx('h-12 w-full rounded-md border border-paper-500 bg-white px-3 text-base focus:border-navy-700', supplierId ? 'text-ink-900' : 'text-ink-500')}
+          value={supplierId}
+          onChange={(e) => setSupplierId(e.target.value)}
+        >
+          <option value="">Nhà cung cấp</option>
+          {suppliers.data?.items.map((s) => (
+            <option key={s.id} value={s.id} className="text-ink-900">
+              {s.name}
+            </option>
+          ))}
+        </select>
+        {supplier?.isConsignor && (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="inline-flex items-center gap-2 text-sm sm:col-span-2">
+              <input type="checkbox" className="size-5" checked={consignment} onChange={(e) => setConsignment(e.target.checked)} />
+              Hàng ký gửi
+            </label>
+            {isConsignment && (
+              <>
+                <Field label="Chiết khấu thỏa thuận" suffix="%" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+                <Field label="Hạn đối soát / trả hàng" type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+              </>
+            )}
+          </div>
+        )}
+        {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+      </div>
+    </Dialog>
+  );
 }
