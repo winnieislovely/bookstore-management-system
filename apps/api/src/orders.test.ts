@@ -510,3 +510,92 @@ describe('Orders and Delivery screens (FR-ORD-01..03, FR-ORD-05)', () => {
     expect(cashierBadges).not.toHaveProperty('shipmentsWaiting');
   });
 });
+
+describe('order notifications (FR-ADM-08, TDD §4.12)', () => {
+  // Earlier tests used up the book: stock it so these orders are not held for review.
+  beforeAll(async () => {
+    const r = await h.stockInOne({ cookie: owner, body: { line: { variantId: book, qty: 20 } } });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  const notices = async (cookie: string, docNo: string) =>
+    ((await h.call('GET', '/api/v1/notifications', { cookie })).body.items as { template: string; vars: Record<string, unknown> }[]).filter(
+      (n) => n.template === 'order.needs_action' && n.vars.docNo === docNo,
+    );
+
+  it('a website order waiting for confirmation tells order staff once each; a Tạo đơn giao order tells nobody', async () => {
+    const web = (await create({ recipient: { name: 'Lê Minh', phone: '0955000111' } })).body;
+    expect(web.status).toBe('new');
+    expect(await notices(online, web.docNo)).toEqual([expect.objectContaining({ vars: expect.objectContaining({ kind: 'web_order', id: web.id, reason: 'confirm' }) })]);
+    expect(await notices(owner, web.docNo)).toHaveLength(1);
+    const chat = (await create({ source: 'facebook', recipient: { name: 'Lê Minh', phone: '0955000111' } })).body;
+    expect(chat.status).toBe('confirmed');
+    expect(await notices(online, chat.docNo)).toEqual([]);
+  });
+
+  it('a return request waits for a decision and tells order staff', async () => {
+    const o = (await create({ recipient: { name: 'Phan Nga', phone: '0955000222' } })).body;
+    await h.call('POST', `/api/v1/orders/${o.id}/confirm`, { cookie: online });
+    await h.call('POST', `/api/v1/orders/${o.id}/shipment`, { cookie: online, body: { carrier: 'manual', trackingNo: 'TAY00000099' } });
+    await h.call('POST', `/api/v1/orders/${o.id}/delivered`, { cookie: online });
+    const rec = (await h.call('GET', `/api/v1/orders/${o.id}`, { cookie: online })).body;
+    const req = await h.call('POST', `/api/v1/orders/${o.id}/return-request`, { cookie: online, body: { reason: 'Đổi ý', lines: [{ orderLineId: rec.lines[0].id, qty: 1 }], returnShippingPaidBy: 'customer' } });
+    expect(req.status, JSON.stringify(req.body)).toBe(201);
+    expect((await notices(online, o.docNo)).map((n) => n.vars.reason)).toEqual(['return', 'confirm']);
+  });
+});
+
+describe('delivery order notifications (FR-ADM-08, TDD §4.12)', () => {
+  const events = async (cookie: string, docNo: string) =>
+    ((await h.call('GET', '/api/v1/notifications', { cookie })).body.items as { template: string; vars: Record<string, unknown> }[])
+      .filter((n) => n.template === 'delivery.update' && n.vars.docNo === docNo)
+      .map((n) => n.vars.event)
+      .reverse();
+  beforeAll(async () => {
+    const r = await h.stockInOne({ cookie: owner, body: { line: { variantId: book, qty: 20 } } });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it('a new order to ship tells online staff, not the one who made it; pickup orders tell nobody', async () => {
+    const chat = (await create({ source: 'facebook', recipient: { name: 'Vũ Lan', phone: '0944000111' } })).body;
+    expect(chat.status).toBe('confirmed');
+    expect(await events(owner, chat.docNo)).toEqual(['new']);
+    expect(await events(online, chat.docNo)).toEqual([]);
+    // A website order to ship becomes a delivery order when someone confirms it.
+    const web = (await create({ recipient: { name: 'Vũ Lan', phone: '0944000111' } })).body;
+    expect((await h.call('POST', `/api/v1/orders/${web.id}/confirm`, { cookie: owner })).status).toBe(200);
+    expect(await events(online, web.docNo)).toEqual(['new']);
+    expect(await events(owner, web.docNo)).toEqual([]);
+    const pickup = (await create({ delivery: 'pickup', address: null, recipient: { name: 'Vũ Lan', phone: '0944000111' } })).body;
+    await h.call('POST', `/api/v1/orders/${pickup.id}/confirm`, { cookie: online });
+    expect(await events(owner, pickup.docNo)).toEqual([]);
+  });
+
+  it('carrier updates: failed, returning, returned and delivered each tell online staff once', async () => {
+    const o = (await create({ recipient: { name: 'Tạ Hùng', phone: '0944000222' } })).body;
+    await h.call('POST', `/api/v1/orders/${o.id}/confirm`, { cookie: online });
+    const tracking = (await h.call('POST', `/api/v1/orders/${o.id}/shipment`, { cookie: online, body: { carrier: 'ghn' } })).body.shipment.trackingNo;
+    for (const raw of ['delivery_fail', 'delivery_fail', 'returning', 'returned']) {
+      h.carrier.statuses.set(tracking, raw);
+      await orders.pollShipments(h.ctx(), h.carrier);
+    }
+    expect(await events(online, o.docNo)).toEqual(['failed', 'returning', 'returned']);
+
+    const ok = (await create({ recipient: { name: 'Tạ Hùng', phone: '0944000333' } })).body;
+    await h.call('POST', `/api/v1/orders/${ok.id}/confirm`, { cookie: online });
+    const t2 = (await h.call('POST', `/api/v1/orders/${ok.id}/shipment`, { cookie: online, body: { carrier: 'ghn' } })).body.shipment.trackingNo;
+    h.carrier.statuses.set(t2, 'delivered');
+    await orders.pollShipments(h.ctx(), h.carrier);
+    expect(await events(online, ok.docNo)).toEqual(['delivered']);
+    expect(await events(owner, ok.docNo)).toEqual(['new', 'delivered']);
+  });
+
+  it('a delivery marked by staff tells the others, not that staff member', async () => {
+    const o = (await create({ recipient: { name: 'Ninh Thu', phone: '0944000444' } })).body;
+    await h.call('POST', `/api/v1/orders/${o.id}/confirm`, { cookie: online });
+    await h.call('POST', `/api/v1/orders/${o.id}/shipment`, { cookie: online, body: { carrier: 'manual', trackingNo: 'TAY00000777' } });
+    expect((await h.call('POST', `/api/v1/orders/${o.id}/delivered`, { cookie: online })).status).toBe(200);
+    expect(await events(online, o.docNo)).toEqual([]);
+    expect(await events(owner, o.docNo)).toEqual(['new', 'delivered']);
+  });
+});

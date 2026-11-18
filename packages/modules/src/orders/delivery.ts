@@ -4,6 +4,7 @@ import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { CarrierAdapter, ShipmentStatusResult } from '../integrations/ghn.js';
 import { CarrierError } from '../integrations/ghn.js';
+import * as notifications from '../notifications/index.js';
 import { AppError, errors, requirePermission, type Ctx, type Tx } from '../platform/index.js';
 import { deliveredTx, handToCarrierTx } from './index.js';
 import { carrierReturnTx } from './returns.js';
@@ -139,6 +140,10 @@ export async function applyShipmentStatus(ctx: Ctx, trackingNo: string, r: Shipm
     await tx.update(schema.shipment).set({ status: r.status, carrierStatus: r.carrierStatus, statusAt: r.at ?? ctx.clock.now() }).where(eq(schema.shipment.id, s.id));
     const [o] = await tx.select().from(schema.webOrder).where(eq(schema.webOrder.id, s.orderId)).for('update');
     if (!o) return true;
+    // A failed delivery or a parcel coming back tells online staff once per change (FR-ADM-08, TDD §4.12).
+    if (s.status !== r.status && (r.status === 'failed' || r.status === 'returning' || r.status === 'returned')) {
+      await notifications.notifyHolders(tx, 'online.manage', 'delivery.update', { id: o.id, docNo: o.docNo, event: r.status });
+    }
     if (r.status === 'delivered') await deliveredTx(tx, ctx, o, s.id);
     // Brought back to the store: a return to receive and inspect (FR-ORD-17).
     if (r.status === 'returned' && o.status === 'shipping') await carrierReturnTx(tx, ctx, o);

@@ -8,19 +8,32 @@ import { errors, type Ctx, type Tx } from '../platform/index.js';
  * the matching permission; they are not dashboard tiles (FR-RPT-01).
  */
 
-export type InAppTemplate = 'shift.variance_exceeded' | 'einvoice.failed' | 'order.needs_action' | 'consignment.deadline' | 'backup.problem' | 'library.loans_to_call';
+export type InAppTemplate = 'shift.variance_exceeded' | 'einvoice.failed' | 'order.needs_action' | 'preorder.created' | 'delivery.update' | 'consignment.deadline' | 'backup.problem' | 'library.loans_to_call';
 
-/** Active users who hold `permission` (owners always do). */
-async function holders(tx: Tx, permission: Permission): Promise<string[]> {
+/** Active users who hold any of `permissions` (owners always do), each once. */
+async function holders(tx: Tx, permissions: Permission[]): Promise<string[]> {
   const rows = await tx.execute<{ id: string }>(sql`
     select u.id from platform.app_user u join platform.role r on r.id = u.role_id
     where u.status = 'active'
-      and (r.is_owner or exists (select 1 from platform.role_permission rp where rp.role_id = r.id and rp.permission = ${permission}))`);
+      and (r.is_owner or exists (select 1 from platform.role_permission rp where rp.role_id = r.id and rp.permission in (${sql.join(
+        permissions.map((p) => sql`${p}`),
+        sql`, `,
+      )})))`);
   return rows.map((r) => r.id);
 }
 
-export async function notifyHolders(tx: Tx, permission: Permission, template: InAppTemplate, vars: Record<string, unknown>): Promise<number> {
-  const users = await holders(tx, permission);
+/**
+ * One in-app notification per user holding the permission (or any of the permissions); `except` leaves
+ * out the user who caused it (e.g. who took a pre-order slip).
+ */
+export async function notifyHolders(
+  tx: Tx,
+  permission: Permission | Permission[],
+  template: InAppTemplate,
+  vars: Record<string, unknown>,
+  opts: { except?: string | null } = {},
+): Promise<number> {
+  const users = (await holders(tx, Array.isArray(permission) ? permission : [permission])).filter((u) => u !== opts.except);
   if (users.length) {
     await tx.insert(schema.notification).values(users.map((to) => ({ channel: 'in_app', to, template, vars, status: 'sent', sentAt: new Date() })));
   }

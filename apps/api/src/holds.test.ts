@@ -196,3 +196,28 @@ describe('pre-orders (FR-POS-09, FR-ORD-14, FR-ORD-16, BR-10)', () => {
     expect((await h.call('POST', `/api/v1/preorders/${ha.id}/cancel`, { cookie: owner, body: { reason: 'Khách không đến', deposit: 'forfeit' } })).body).toMatchObject({ status: 'cancelled', depositOutcome: 'forfeit' });
   });
 });
+
+describe('new slip notification (FR-ADM-08, TDD §4.12)', () => {
+  const created = async (cookie: string, docNo: string) =>
+    ((await h.call('GET', '/api/v1/notifications', { cookie })).body.items as { template: string; vars: Record<string, unknown> }[]).filter(
+      (n) => n.template === 'preorder.created' && n.vars.docNo === docNo,
+    );
+  const slip = (cookie: string, phone: string) =>
+    h.call('POST', '/api/v1/preorders', { cookie, body: { customer: { name: 'Mai Chi', phone }, lines: [{ title: 'Sách chưa có trong kho', qty: 1 }] } });
+
+  it('every new slip tells the pre-order staff, except the one who took it', async () => {
+    const roles = (await h.call('GET', '/api/v1/admin/roles', { cookie: owner })).body.items as { code: string; id: string }[];
+    const manager = await h.staff(owner, 'quanly', roles.find((r) => r.code === 'manager')!.id);
+
+    const byCashier = await slip(cashier, '0911000777');
+    expect(byCashier.status, JSON.stringify(byCashier.body)).toBe(201);
+    expect(await created(owner, byCashier.body.docNo)).toEqual([expect.objectContaining({ vars: expect.objectContaining({ id: byCashier.body.id, customerName: 'Mai Chi' }) })]);
+    expect(await created(manager, byCashier.body.docNo)).toHaveLength(1);
+    expect(await created(cashier, byCashier.body.docNo)).toEqual([]);
+
+    const byManager = await slip(manager, '0911000778');
+    expect(byManager.status, JSON.stringify(byManager.body)).toBe(201);
+    expect(await created(owner, byManager.body.docNo)).toHaveLength(1);
+    expect(await created(manager, byManager.body.docNo)).toEqual([]);
+  });
+});

@@ -4,6 +4,7 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
 import * as customers from '../customers/index.js';
+import * as notifications from '../notifications/index.js';
 import * as sales from '../sales/index.js';
 import { AppError, emit, errors, requirePermission, type Ctx } from '../platform/index.js';
 import { transition } from './index.js';
@@ -56,6 +57,8 @@ export async function requestReturn(ctx: Ctx, id: string, input: z.input<typeof 
       .values({ orderId: id, reason: data.reason, lines: data.lines, returnShippingPaidBy: data.returnShippingPaidBy, requestedBy: actor.userId, createdAt: ctx.clock.now() })
       .returning({ id: schema.returnRequest.id });
     await transition(tx, ctx, o, 'return_requested', data.reason);
+    // The return waits for a decision on Đơn hàng (FR-ADM-08, TDD §4.12).
+    await notifications.notifyHolders(tx, 'online.manage', 'order.needs_action', { kind: 'web_order', id: o.id, docNo: o.docNo, reason: 'return' });
     return { id: r!.id, orderStatus: o.status };
   });
 }

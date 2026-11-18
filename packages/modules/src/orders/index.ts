@@ -27,6 +27,7 @@ import * as audit from '../audit/index.js';
 import * as customers from '../customers/index.js';
 import * as identity from '../identity/index.js';
 import * as inventory from '../inventory/index.js';
+import * as notifications from '../notifications/index.js';
 import * as promotions from '../promotions/index.js';
 import * as sales from '../sales/index.js';
 import * as settings from '../settings/index.js';
@@ -433,6 +434,14 @@ export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof Creat
   if (staffConfirmed) reasons.length = 0;
   await tx.update(schema.webOrder).set({ status, reviewReasons: reasons }).where(eq(schema.webOrder.id, orderId));
   await tx.insert(schema.orderEvent).values({ orderId, fromStatus: null, toStatus: status, actorId: opts.createdBy, at: now, reason: reasons.length ? reasons.join(',') : null });
+  // An order waiting for confirmation or review tells the staff who work orders (FR-ADM-08, TDD §4.12).
+  if (status === 'new' || status === 'pending_review') {
+    await notifications.notifyHolders(tx, ['online.confirm', 'online.manage'], 'order.needs_action', { kind: 'web_order', id: orderId, docNo, reason: status === 'new' ? 'confirm' : 'review' });
+  }
+  // A new order to ship by carrier, keyed on Tạo đơn giao and confirmed at once (FR-ADM-08, TDD §4.12).
+  if (status === 'confirmed' && data.delivery === 'ship') {
+    await notifications.notifyHolders(tx, 'online.manage', 'delivery.update', { id: orderId, docNo, event: 'new' }, { except: opts.createdBy });
+  }
 
   if (priced.redeemPoints > 0) await customers.post(tx, ctx, { customerId, delta: -priced.redeemPoints, reason: 'redeem', refType: REF, refId: orderId });
   const uses = new Map<string, { discountVnd: number; revenueVnd: number }>();
@@ -645,6 +654,10 @@ async function confirmTx(tx: Tx, ctx: Ctx, o: OrderRow): Promise<void> {
     throw new AppError(409, 'insufficient_stock', `Đơn ${o.docNo} chưa đủ hàng để xác nhận. Giảm số lượng, chờ nhập hàng hoặc chuyển thành đơn đặt trước.`);
   }
   await transition(tx, ctx, o, 'confirmed', null, { reviewReasons: [] });
+  // A confirmed order to ship by carrier is a new delivery order (FR-ADM-08, TDD §4.12).
+  if (o.delivery === 'ship') {
+    await notifications.notifyHolders(tx, 'online.manage', 'delivery.update', { id: o.id, docNo: o.docNo, event: 'new' }, { except: ctx.actor?.userId ?? null });
+  }
 }
 
 export async function confirm(ctx: Ctx, id: string) {
@@ -843,7 +856,11 @@ export async function deliveredTx(tx: Tx, ctx: Ctx, o: OrderRow, shipmentId: str
   if (!s) throw errors.notFound('Vận đơn');
   if (s.status !== 'delivered') await tx.update(schema.shipment).set({ status: 'delivered', statusAt: ctx.clock.now() }).where(eq(schema.shipment.id, s.id));
   if (s.codVnd > 0) await tx.insert(schema.codRemittance).values({ shipmentId: s.id, expectedVnd: s.codVnd, createdAt: ctx.clock.now() }).onConflictDoNothing();
-  if (o.status === 'shipping') await completeTx(tx, ctx, o, 'delivered');
+  if (o.status === 'shipping') {
+    await completeTx(tx, ctx, o, 'delivered');
+    // Delivered, by the carrier or marked by staff: once, not to the staff member who marked it (TDD §4.12).
+    await notifications.notifyHolders(tx, 'online.manage', 'delivery.update', { id: o.id, docNo: o.docNo, event: 'delivered' }, { except: ctx.actor?.userId ?? null });
+  }
 }
 
 /** Staff mark a manual shipment delivered (GHN shipments update themselves). */

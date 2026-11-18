@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, AlertTriangle, Bell, LogOut, Menu, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, Bell, CheckCircle2, Info, LogOut, Menu, WifiOff, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router';
 import { get, post } from '../lib/api';
@@ -119,8 +119,45 @@ function notificationTitle(n: NotificationItem): string {
       return t('notify.consignment.deadline', { sku: String(v.sku ?? '') });
     case 'library.loans_to_call':
       return t('notify.library.loansToCall', { overdue: String(v.overdue ?? 0), dueSoon: String(v.dueSoon ?? 0) });
+    case 'delivery.update': {
+      const keys = { new: 'notify.delivery.new', failed: 'notify.delivery.failed', returning: 'notify.delivery.returning', returned: 'notify.delivery.returned', delivered: 'notify.delivery.delivered' } as const;
+      const key = keys[String(v.event) as keyof typeof keys] as (typeof keys)[keyof typeof keys] | undefined;
+      return key ? t(key, { docNo: String(v.docNo ?? '') }) : t('notify.generic');
+    }
+    case 'preorder.created':
+      return v.customerName ? t('notify.preorder.created', { docNo: String(v.docNo ?? ''), customer: String(v.customerName) }) : t('notify.preorder.createdNoName', { docNo: String(v.docNo ?? '') });
+    case 'order.needs_action':
+      if (v.kind === 'preorder') return t('notify.preorder.holdExpired', { docNo: String(v.docNo ?? '') });
+      return t(v.reason === 'return' ? 'notify.order.return' : v.reason === 'review' ? 'notify.order.review' : 'notify.order.confirm', { docNo: String(v.docNo ?? '') });
     default:
-      return n.template;
+      // Never a raw template code (Design §10.11).
+      return t('notify.generic');
+  }
+}
+
+/** Where a notification opens (Design §10.11): its order, slip, shift, sale or list. */
+function notificationLink(n: NotificationItem): string | null {
+  const v = n.vars;
+  switch (n.template) {
+    case 'delivery.update':
+      return v.id ? `/orders/${String(v.id)}` : null;
+    case 'preorder.created':
+      return `/preorders?q=${encodeURIComponent(String(v.docNo ?? ''))}`;
+    case 'order.needs_action':
+      if (v.kind === 'preorder') return `/preorders?q=${encodeURIComponent(String(v.docNo ?? ''))}`;
+      return v.id ? `/orders/${String(v.id)}` : null;
+    case 'shift.variance_exceeded':
+      return v.shiftId ? `/shifts/${String(v.shiftId)}` : null;
+    case 'einvoice.failed':
+      return v.saleId ? `/sales/${String(v.saleId)}` : v.orderId ? `/orders/${String(v.orderId)}` : null;
+    case 'consignment.deadline':
+      return '/consignment';
+    case 'backup.problem':
+      return '/settings';
+    case 'library.loans_to_call':
+      return `/library?tab=${Number(v.overdue ?? 0) > 0 ? 'overdue' : 'due_soon'}`;
+    default:
+      return null;
   }
 }
 
@@ -179,11 +216,19 @@ function NotificationBell() {
                     <ul>
                       {list.map((n) => (
                         <li key={n.id} className={clsx('flex gap-3 px-4 py-3', !n.readAt && 'bg-sand-50')}>
-                          {n.template === 'einvoice.failed' ? <AlertOctagon size={20} className="shrink-0 text-danger-700" aria-hidden /> : <AlertTriangle size={20} className="shrink-0 text-warning-700" aria-hidden />}
+                          {n.template === 'einvoice.failed' ? (
+                            <AlertOctagon size={20} className="shrink-0 text-danger-700" aria-hidden />
+                          ) : n.template === 'delivery.update' && n.vars.event === 'delivered' ? (
+                            <CheckCircle2 size={20} className="shrink-0 text-success-700" aria-hidden />
+                          ) : n.template === 'preorder.created' || (n.template === 'delivery.update' && n.vars.event === 'new') ? (
+                            <Info size={20} className="shrink-0 text-info-700" aria-hidden />
+                          ) : (
+                            <AlertTriangle size={20} className="shrink-0 text-warning-700" aria-hidden />
+                          )}
                           <div className="min-w-0 flex-1">
-                            {n.template === 'library.loans_to_call' ? (
-                              // Opens the list to call (FR-LIB-14).
-                              <Link to={`/library?tab=${Number(n.vars.overdue ?? 0) > 0 ? 'overdue' : 'due_soon'}`} className="font-semibold hover:underline" onClick={() => setOpen(false)}>
+                            {/* Each notification opens its record (Design §10.11). */}
+                            {notificationLink(n) ? (
+                              <Link to={notificationLink(n)!} className="font-semibold hover:underline" onClick={() => setOpen(false)}>
                                 {notificationTitle(n)}
                               </Link>
                             ) : (

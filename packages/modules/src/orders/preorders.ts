@@ -235,6 +235,9 @@ export async function createPreorder(ctx: Ctx, input: z.input<typeof CreatePreor
       }
     }
     await audit.record(tx, ctx, { action: 'preorder.create', entity: 'preorder', entityId: id, after: { docNo, lines: data.lines, depositVnd: data.deposit?.amountVnd ?? 0, status } });
+    // Every new slip tells the other pre-order staff, not the one who took it (FR-ADM-08, TDD §4.12).
+    const [who] = await tx.select({ name: schema.customer.name }).from(schema.customer).where(eq(schema.customer.id, customerId));
+    await notifications.notifyHolders(tx, 'preorder.manage', 'preorder.created', { id, docNo, customerName: who?.name ?? null }, { except: actor.userId });
     return { id, docNo, status, expiresAt };
   });
 }
