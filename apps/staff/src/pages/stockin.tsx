@@ -3,10 +3,10 @@ import { clsx } from 'clsx';
 import { ArrowLeft, BookOpen, ChevronDown, Minus, Package, Plus, ScanBarcode } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ConfirmDialog, SelectField, toast } from '../components/data';
+import { ConfirmDialog, toast } from '../components/data';
 import { hitTitle, ProductSearch, type ProductHit } from '../components/product-search';
 import { ScanSession, type ScanOutcome } from '../components/scanSession';
-import { Button, ErrorState, Field, InlineAlert, PageHeader, Skeleton } from '../components/ui';
+import { Button, ErrorState, Field, InlineAlert, Skeleton } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
 import { formatNumber } from '../lib/format';
 import { can, useMe } from '../lib/session';
@@ -209,15 +209,21 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
     if (window.location.search) navigate('/stock/in', { replace: true });
   };
 
+  // One-row header (Design §12.4): a back arrow in the title colour and a heading-size title, centred on
+  // each other; the arrow's left edge is level with the content below.
   const header = (
-    <PageHeader
-      breadcrumb={
-        <Link to={back.to} className="inline-flex items-center gap-1 hover:underline">
-          <ArrowLeft size={16} aria-hidden /> {back.label}
-        </Link>
-      }
-      title="Nhập thêm hàng"
-    />
+    // The 40 px arrow target sits 8 px (6 px from sm) below the title line, so the title is 16 px above the supplier.
+    <div className="mb-2 flex items-center gap-1 sm:mb-2.5">
+      <Link
+        to={back.to}
+        aria-label="Quay lại"
+        title={`Quay lại ${back.label}`}
+        className="-ml-2.5 inline-flex size-10 shrink-0 items-center justify-center rounded-full text-navy-700 hover:bg-navy-50"
+      >
+        <ArrowLeft size={20} aria-hidden />
+      </Link>
+      <h1 className="min-w-0 text-base leading-6 font-semibold text-navy-700 sm:text-xl sm:leading-7">Nhập thêm hàng</h1>
+    </div>
   );
 
   if (result)
@@ -246,24 +252,28 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
   return (
     <div className="max-w-[720px] pb-20">
       {header}
-      {/* No card borders (Design §12.4): sections are set apart by space; each product row has its own border. */}
-      <div className="flex flex-col gap-8">
-        <section>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <SelectField label="Nhà cung cấp" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-              <option value="">— Chọn —</option>
-              {suppliers.data?.items.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </SelectField>
-            {supplier?.isConsignor && (
-              <label className="inline-flex items-center gap-2 text-sm sm:col-span-2">
-                <input type="checkbox" className="size-5" checked={consignment} onChange={(e) => setConsignment(e.target.checked)} />
-                Hàng ký gửi
-              </label>
-            )}
+      {/* Lean layout (Design §12.4): 16 px under the title, 12 px between the supplier, the search and the rows. */}
+      <div className="flex flex-col gap-3">
+        {/* No label above: the select reads “Nhà cung cấp” until one is chosen; the name stays for screen readers. */}
+        <select
+          aria-label="Nhà cung cấp"
+          className={clsx('h-12 w-full rounded-md border border-paper-500 bg-white px-3 text-base focus:border-navy-700', supplierId ? 'text-ink-900' : 'text-ink-500')}
+          value={supplierId}
+          onChange={(e) => setSupplierId(e.target.value)}
+        >
+          <option value="">Nhà cung cấp</option>
+          {suppliers.data?.items.map((s) => (
+            <option key={s.id} value={s.id} className="text-ink-900">
+              {s.name}
+            </option>
+          ))}
+        </select>
+        {supplier?.isConsignor && (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="inline-flex items-center gap-2 text-sm sm:col-span-2">
+              <input type="checkbox" className="size-5" checked={consignment} onChange={(e) => setConsignment(e.target.checked)} />
+              Hàng ký gửi
+            </label>
             {isConsignment && (
               <>
                 <Field label="Chiết khấu thỏa thuận" suffix="%" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} />
@@ -271,52 +281,43 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
               </>
             )}
           </div>
-        </section>
+        )}
 
-        <section aria-labelledby="stockin-lines">
-          <h2 id="stockin-lines" className="mb-3 text-base font-semibold text-ink-900">
-            Sản phẩm
-          </h2>
-          <div className="flex flex-col gap-4">
-            {/* Products are scanned or searched one at a time; only existing products – new ones are created
-                on “Thêm sản phẩm mới” (Design §12.4). */}
-            <div className="flex flex-col gap-2">
-              <div className="flex items-start gap-2">
-                <div className="min-w-0 flex-1">
-                  <ProductSearch autoFocus placeholder="Quét mã hoặc tìm SKU, tên sản phẩm" onPick={(h) => void addHit(h)} onUnknownCode={setUnknown} />
-                </div>
-                <button
-                  type="button"
-                  className="inline-flex size-12 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50"
-                  aria-label="Quét mã"
-                  title="Quét mã"
-                  onClick={() => setScanning(true)}
-                >
-                  <ScanBarcode size={24} aria-hidden />
-                </button>
-              </div>
-              {unknown && <InlineAlert tone="warning">Mã {unknown} chưa có trong danh mục. Đây là sản phẩm mới – hãy để riêng và tạo ở trang Thêm sản phẩm mới.</InlineAlert>}
-            </div>
-
-            {!lines.length && <p className="text-sm text-ink-500">Chưa có sản phẩm. Quét mã hoặc tìm sản phẩm để thêm vào phiếu nhập.</p>}
-            {lines.length > 0 && (
-              // Rows follow the POS cart line, nothing cut off; tapping a row opens its prices (Design §12.4).
-              <ul className="flex flex-col gap-2">
-                {lines.map((l) => (
-                  <StockInRow
-                    key={l.key}
-                    line={l}
-                    open={open.has(l.key)}
-                    showCost={showCost}
-                    onToggle={() => toggle(l.key)}
-                    onChange={(patch) => update(l.key, patch)}
-                    onRemoveAsk={() => setRemoving(l)}
-                  />
-                ))}
-              </ul>
-            )}
+        {/* Products are scanned or searched one at a time; only existing products – new ones are created
+            on “Thêm sản phẩm mới” (Design §12.4). */}
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <ProductSearch autoFocus placeholder="Nhập SKU/tên sản phẩm" onPick={(h) => void addHit(h)} onUnknownCode={setUnknown} />
           </div>
-        </section>
+          <button
+            type="button"
+            className="inline-flex size-12 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50"
+            aria-label="Quét mã"
+            title="Quét mã"
+            onClick={() => setScanning(true)}
+          >
+            <ScanBarcode size={24} aria-hidden />
+          </button>
+        </div>
+        {unknown && <InlineAlert tone="warning">Mã {unknown} chưa có trong danh mục. Đây là sản phẩm mới – hãy để riêng và tạo ở trang Thêm sản phẩm mới.</InlineAlert>}
+
+        {!lines.length && <p className="text-sm text-ink-500">Chưa có sản phẩm. Quét mã hoặc tìm sản phẩm để thêm vào phiếu nhập.</p>}
+        {lines.length > 0 && (
+          // Rows follow the POS cart line, nothing cut off; tapping a row opens its prices (Design §12.4).
+          <ul className="flex flex-col gap-2" aria-label="Sản phẩm">
+            {lines.map((l) => (
+              <StockInRow
+                key={l.key}
+                line={l}
+                open={open.has(l.key)}
+                showCost={showCost}
+                onToggle={() => toggle(l.key)}
+                onChange={(patch) => update(l.key, patch)}
+                onRemoveAsk={() => setRemoving(l)}
+              />
+            ))}
+          </ul>
+        )}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       </div>
       {scanning && <ScanSession label="Quét mã nhập hàng" prompt="Đưa mã vạch hoặc ISBN vào khung" progress={`${lines.length} dòng`} onScan={onScan} onClose={() => setScanning(false)} />}
