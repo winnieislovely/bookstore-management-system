@@ -38,7 +38,7 @@ beforeAll(async () => {
   const cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Books' } } } })).body.id;
   const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', phone: '0900000000' } })).body.id;
   const mk = async (sku: string, title: string, price: number, qty: number) => {
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
+    const r = await h.newProduct({
       cookie: owner,
       body: {
         supplierId: supplier,
@@ -329,7 +329,7 @@ describe('GHN (FR-ORD-06, FR-ORD-10, TDD §8.2)', () => {
   it('creates the GHN shipment and follows it to Done by polling', async () => {
     // More stock for the rest of the suite.
     const supplierId = (await h.call('GET', '/api/v1/purchasing/suppliers', { cookie: owner })).body.items[0].id;
-    const si = await h.call('POST', '/api/v1/purchasing/stock-in/existing', { cookie: owner, body: { supplierId, line: { variantId: book, costVnd: 50000, sellingPriceVnd: 100000, qty: 10 } } });
+    const si = await h.stockInOne({ cookie: owner, body: { supplierId, line: { variantId: book, costVnd: 50000, sellingPriceVnd: 100000, qty: 10 } } });
     expect(si.status, JSON.stringify(si.body)).toBe(201);
     const o = (await create({ recipient: { name: 'Phạm Dung', phone: '0944444444' } })).body;
     await h.call('POST', `/api/v1/orders/${o.id}/confirm`, { cookie: online });

@@ -1,4 +1,3 @@
-import { clsx } from 'clsx';
 import { Check, Download, FileSpreadsheet, ImageOff, Undo2, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { ConfirmDialog, SelectField, toast, useParam } from '../components/data';
@@ -7,11 +6,10 @@ import { ApiError, post } from '../lib/api';
 import { formatNumber, formatVnd } from '../lib/format';
 import { can, useMe } from '../lib/session';
 
-/** Import wizard (FR-CAT-11, FR-PUR-14, FR-ADM-07, Design §12.10): Tải tệp → Kiểm tra → Xem trước → Nhập. */
+/** Import wizard (FR-CAT-11, FR-PUR-14, FR-ADM-07, Design §12.10): Tải tệp → Kiểm tra → Xem trước → Nhập, with no step indicator (Design §10.14). */
 
 type Kind = 'products' | 'stock_in' | 'customers';
 const KIND_LABEL: Record<Kind, string> = { products: 'Sản phẩm (kèm tồn đầu kỳ)', stock_in: 'Phiếu nhập hàng', customers: 'Khách hàng (kèm điểm)' };
-const STEPS = ['Tải tệp', 'Kiểm tra', 'Xem trước', 'Nhập'];
 
 interface Issue {
   column: string;
@@ -112,14 +110,6 @@ export function ImportWizard({ kind, kinds, onKindChange, onImported }: { kind: 
 
   return (
     <>
-      <ol className="mb-6 flex flex-wrap gap-2" aria-label="Các bước">
-        {STEPS.map((label, i) => (
-          <li key={label} className={clsx('inline-flex h-9 items-center gap-2 rounded-full px-4 text-sm', i === step ? 'bg-navy-700 text-white' : i < step ? 'bg-success-50 text-success-700' : 'bg-paper-200 text-ink-500')} aria-current={i === step ? 'step' : undefined}>
-            {i < step ? <Check size={16} aria-hidden /> : <span className="num">{i + 1}</span>} {label}
-          </li>
-        ))}
-      </ol>
-
       {step === 0 && (
         <Card>
           <div className="flex max-w-xl flex-col gap-4">

@@ -116,42 +116,9 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
   );
 
   // --- Purchasing -----------------------------------------------------------------------------
-  const header = { supplierId: true, supplierInvoiceNo: true, invoiceFileId: true, note: true, consignment: true, consignmentDiscountBp: true, consignmentDeadline: true } as const;
-  const Header = purchasing.StockInBaseSchema.pick(header);
-
   defineRoute(
     app,
-    {
-      method: 'post',
-      path: '/api/v1/purchasing/stock-in/new-product',
-      access: 'purchasing.manage',
-      summary: 'Create a product and its first stock-in (FR-PUR-02)',
-      status: 201,
-      body: Header.extend({ line: purchasing.NewProductLineSchema.omit({ kind: true }) }),
-    },
-    async ({ ctx, body }) => {
-      const { line, ...h } = body;
-      return purchasing.postStockIn(ctx, { ...h, lines: [{ kind: 'new', ...line }] });
-    },
-  );
-  defineRoute(
-    app,
-    {
-      method: 'post',
-      path: '/api/v1/purchasing/stock-in/existing',
-      access: 'purchasing.manage',
-      summary: 'Add quantity with cost and selling price (FR-PUR-03)',
-      status: 201,
-      body: Header.extend({ line: purchasing.ExistingLineSchema.omit({ kind: true }) }),
-    },
-    async ({ ctx, body }) => {
-      const { line, ...h } = body;
-      return purchasing.postStockIn(ctx, { ...h, lines: [{ kind: 'existing', ...line }] });
-    },
-  );
-  defineRoute(
-    app,
-    { method: 'post', path: '/api/v1/purchasing/stock-in', access: 'purchasing.manage', summary: 'Stock-in entry with several lines', status: 201, body: purchasing.StockInSchema },
+    { method: 'post', path: '/api/v1/purchasing/stock-in', access: 'purchasing.manage', summary: 'Stock-in entry of existing products (FR-PUR-03)', status: 201, body: purchasing.ExistingStockInSchema },
     async ({ ctx, body }) => purchasing.postStockIn(ctx, body),
   );
   defineRoute(app, { method: 'get', path: '/api/v1/purchasing/stock-in', access: 'purchasing.manage', summary: 'List stock-in entries', query: purchasing.StockInQuery }, async ({ ctx, query }) =>

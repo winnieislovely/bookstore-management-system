@@ -25,7 +25,7 @@ beforeAll(async () => {
   manager = await h.staff(owner, 'quanly', roles.manager!, '112233');
   const cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Children' } } } })).body.id;
   const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', phone: '0900000000' } })).body.id;
-  const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
+  const r = await h.newProduct({
     cookie: owner,
     body: {
       supplierId: supplier,

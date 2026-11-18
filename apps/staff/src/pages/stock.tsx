@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, AlertTriangle, ArrowLeft, BookOpen, Boxes, Package, PackagePlus, Search, SlidersHorizontal } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, ArrowLeft, BookOpen, Boxes, FileSpreadsheet, Package, PackagePlus, Search, SlidersHorizontal } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ApprovalPrompt, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectionBar, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
@@ -10,7 +10,7 @@ import { formatDateTime, formatNumber, formatVnd } from '../lib/format';
 import { t } from '../lib/i18n';
 import { can, useMe } from '../lib/session';
 import { Dialog } from '../pos/widgets';
-import { StockInForm } from './stockin';
+import { ImportWizard } from './import';
 
 /**
  * Stock (FR-INV-01..11, FR-PUR-01..07, Design §12.1): one page for stock and stock-in – a product-style
@@ -85,8 +85,9 @@ export function StockPage() {
   const changedRange = timeRange(changed);
   const [page, setPage] = useParam('page', '1');
   const [selected, setSelected] = useState<Map<string, StockRow>>(new Map());
-  // 'in': ticked products; 'search': empty form from the header button, products added one at a time.
-  const [dialog, setDialog] = useState<null | 'in' | 'search' | 'adjust'>(null);
+  // 'import': Phiếu nhập hàng from Excel; 'adjust': ticked products. Ticking products serves only stock
+  // adjustment; Nhập thêm hàng is its own page, /stock/in (Design §12.1, §12.4).
+  const [dialog, setDialog] = useState<null | 'import' | 'adjust'>(null);
   const query = { q: q || undefined, stock: state.join(',') || undefined, changedFrom: changedRange.from, changedTo: changedRange.to, unsoldDays: unsold || undefined, page: Number(page), limit: 40 };
   const list = useQuery({ queryKey: ['stock-list', query], queryFn: () => get<{ items: StockRow[]; total: number }>('/api/v1/catalog/items', query) });
   const value = useQuery({ queryKey: ['valuation'], queryFn: () => get<{ totalVnd: number }>('/api/v1/inventory/valuation'), enabled: can(me, 'catalog.view_cost') });
@@ -137,9 +138,14 @@ export function StockPage() {
         subtitle={value.data ? <span className="num">Giá trị tồn kho: <span className="font-semibold text-ink-900">{formatVnd(value.data.totalVnd)}</span></span> : undefined}
         actions={
           can(me, 'purchasing.manage') && (
-            <Button variant="primary" icon={PackagePlus} onClick={() => setDialog('search')}>
-              Nhập thêm hàng
-            </Button>
+            <>
+              <Button variant="secondary" icon={FileSpreadsheet} onClick={() => setDialog('import')}>
+                Nhập từ Excel
+              </Button>
+              <Button variant="primary" icon={PackagePlus} onClick={() => navigate('/stock/in')}>
+                Nhập thêm hàng
+              </Button>
+            </>
           )
         }
       />
@@ -185,18 +191,11 @@ export function StockPage() {
           }}
           onClear={() => setSelected(new Map())}
           actions={
-            <>
-              {can(me, 'purchasing.manage') && (
-                <Button size="sm" variant="primary" icon={PackagePlus} onClick={() => setDialog('in')}>
-                  Nhập thêm hàng
-                </Button>
-              )}
-              {can(me, 'inventory.adjust') && (
-                <Button size="sm" variant="secondary" icon={SlidersHorizontal} onClick={() => setDialog('adjust')}>
-                  Điều chỉnh tồn
-                </Button>
-              )}
-            </>
+            can(me, 'inventory.adjust') && (
+              <Button size="sm" variant="primary" icon={SlidersHorizontal} onClick={() => setDialog('adjust')}>
+                Điều chỉnh tồn
+              </Button>
+            )
           }
         />
       )}
@@ -212,17 +211,12 @@ export function StockPage() {
         empty={filtered ? { icon: Search, title: 'Không có sản phẩm phù hợp', help: t('products.noResultsHelp') } : { icon: Boxes, title: 'Chưa có sản phẩm', help: 'Thêm sản phẩm ở trang Sản phẩm.' }}
       />
       <Pager page={Number(page)} hasMore={Number(page) * 40 < (list.data?.total ?? 0)} total={list.data?.total ?? 0} onPage={(p) => setPage(String(p))} />
-      {dialog === 'in' && (
-        <StockInForm
-          initial={picks.map((r) => ({ variantId: r.variantId, title: nameOfRow(r), sku: r.sku, priceVnd: r.priceVnd }))}
-          onClose={() => setDialog(null)}
-          onPosted={() => {
-            setSelected(new Map());
-            refresh();
-          }}
-        />
+      {/* Phiếu nhập hàng from Excel without leaving Tồn kho (Design §12.1, §12.10, FR-PUR-14). */}
+      {dialog === 'import' && (
+        <Dialog title="Nhập phiếu nhập hàng từ Excel" size="lg" onClose={() => setDialog(null)}>
+          <ImportWizard kind="stock_in" onImported={refresh} />
+        </Dialog>
       )}
-      {dialog === 'search' && <StockInForm onClose={() => setDialog(null)} onPosted={refresh} />}
       {dialog === 'adjust' && (
         <BulkAdjustDialog
           picks={picks.map((r) => ({ variantId: r.variantId, title: nameOfRow(r), sku: r.sku }))}
@@ -266,7 +260,8 @@ export function StockItemPage() {
   const item = useQuery({ queryKey: ['item', id], queryFn: () => get<ItemStock>(`/api/v1/catalog/items/${id}`) });
   const [type, setType] = useState('');
   const [pages, setPages] = useState<string[]>(['']);
-  const [dialog, setDialog] = useState<null | 'in' | 'adjust'>(null);
+  const [dialog, setDialog] = useState<null | 'adjust'>(null);
+  const navigate = useNavigate();
   const v = item.data?.variants.find((x) => x.id === params.get('v')) ?? item.data?.variants[0];
   const cursor = pages[pages.length - 1];
   const moves = useQuery({
@@ -289,7 +284,8 @@ export function StockItemPage() {
     { header: 'Chứng từ', cell: (m) => (m.refDocNo ? <span className="code">{m.refDocNo}</span> : '—') },
     { header: 'Nhà cung cấp', cell: (m) => m.supplierName ?? '—' },
     { header: 'Số lượng', align: 'right', cell: (m) => <span className={m.qtyDelta < 0 ? 'text-danger-700' : 'text-success-700'}>{m.qtyDelta > 0 ? '+' : ''}{formatNumber(m.qtyDelta)}</span> },
-    { header: 'Ghi chú', cell: (m) => m.note ?? '' },
+    // A stock-in's note is its entry number, already in Chứng từ (Design §12.1).
+    { header: 'Ghi chú', cell: (m) => (m.note && m.note !== m.refDocNo ? m.note : '') },
   ];
 
   return (
@@ -309,7 +305,7 @@ export function StockItemPage() {
               </Button>
             )}
             {can(me, 'purchasing.manage') && (
-              <Button variant="primary" icon={PackagePlus} onClick={() => setDialog('in')}>
+              <Button variant="primary" icon={PackagePlus} onClick={() => navigate(`/stock/in?item=${id}&v=${v.id}`)}>
                 Nhập thêm hàng
               </Button>
             )}
@@ -353,7 +349,6 @@ export function StockItemPage() {
           </Link>
         </Card>
       </div>
-      {dialog === 'in' && <StockInForm initial={[{ variantId: v.id, title, sku: v.sku, priceVnd: v.priceVnd }]} onClose={() => setDialog(null)} onPosted={refresh} />}
       {dialog === 'adjust' && <BulkAdjustDialog picks={[{ variantId: v.id, title, sku: v.sku }]} onClose={() => setDialog(null)} onDone={refresh} />}
     </>
   );

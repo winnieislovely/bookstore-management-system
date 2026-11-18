@@ -72,30 +72,32 @@ describe('quick stock-in of a new product (FR-PUR-02, FR-PUR-04, UC-05)', () => 
   it('requires the English description (FR-WEB-22)', async () => {
     const body = newBook();
     (body.line.item.i18n.en as Record<string, unknown>).description = '';
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', { cookie: warehouse, body });
+    const r = await h.newProduct({ cookie: warehouse, body });
     expect(r.status).toBe(400);
     expect(JSON.stringify(r.body.error.details)).toContain('tiếng Anh');
   });
 
   it('creates the product and its first stock-in in one step', async () => {
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', { cookie: warehouse, body: newBook() });
+    const r = await h.newProduct({ cookie: warehouse, body: newBook() });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
-    expect(r.body.entryNo).toBe('SI-2026-00001');
-    expect(r.body.lines[0]).toMatchObject({ createdProduct: true, marginFlag: false, avgCostVnd: 50000 });
     bookVariant = r.body.lines[0].variantId;
+    // The opening quantity is the product's first stock-in entry, from its supplier (FR-PUR-04).
+    const entries = (await h.call('GET', '/api/v1/purchasing/stock-in', { cookie: warehouse })).body.items;
+    expect(entries[0]).toMatchObject({ entryNo: 'SI-2026-00001', supplierName: 'Fahasa', lines: 1, marginFlags: 0 });
+    expect((await h.call('GET', `/api/v1/catalog/items/${r.body.itemId}`, { cookie: warehouse })).body.variants[0].avgCostVnd).toBe(50000);
 
     const found = await h.call('GET', `/api/v1/catalog/lookup?code=9786041234567`, { cookie: cashier });
     expect(found.body.variantId).toBe(bookVariant);
   });
 
   it('blocks duplicate SKU and ISBN (FR-CAT-05)', async () => {
-    const sku = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', { cookie: warehouse, body: newBook() });
+    const sku = await h.newProduct({ cookie: warehouse, body: newBook() });
     expect(sku.status).toBe(409);
     expect(sku.body.error.code).toBe('duplicate_sku');
     expect(sku.body.error.message).toContain('SACH-NNA-0012');
     const isbnOnly = newBook();
     isbnOnly.line.variant.sku = 'SACH-NNA-9999';
-    const isbn = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', { cookie: warehouse, body: isbnOnly });
+    const isbn = await h.newProduct({ cookie: warehouse, body: isbnOnly });
     expect(isbn.body.error.code).toBe('duplicate_isbn');
   });
 
@@ -107,7 +109,7 @@ describe('quick stock-in of a new product (FR-PUR-02, FR-PUR-04, UC-05)', () => 
       sellingPriceVnd: 6000,
       qty: 100,
     });
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', { cookie: warehouse, body: pen });
+    const r = await h.newProduct({ cookie: warehouse, body: pen });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     const [bc] = await h.t.sql`select code, kind from catalog.barcode b join catalog.item_variant v on v.id = b.variant_id where v.sku = 'VPP-0012'`;
     expect(bc!.kind).toBe('internal');
@@ -117,7 +119,7 @@ describe('quick stock-in of a new product (FR-PUR-02, FR-PUR-04, UC-05)', () => 
 
 describe('quick stock-in of an existing product (FR-PUR-03, FR-PUR-05, FR-INV-08)', () => {
   it('updates moving-average cost and the price history', async () => {
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/existing', {
+    const r = await h.stockInOne({
       cookie: warehouse,
       body: { line: { variantId: bookVariant, costVnd: 56000, sellingPriceVnd: 105000, qty: 5 } },
     });
@@ -130,12 +132,13 @@ describe('quick stock-in of an existing product (FR-PUR-03, FR-PUR-05, FR-INV-08
   });
 
   it('flags a cost that makes the selling price unprofitable', async () => {
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/existing', {
+    const r = await h.stockInOne({
       cookie: warehouse,
       body: { line: { variantId: bookVariant, costVnd: 110000, sellingPriceVnd: 105000, qty: 1 } },
     });
     expect(r.body.lines[0].marginFlag).toBe(true);
   });
+
 });
 
 describe('product list and detail (FR-CAT-14, Design §12.1)', () => {
@@ -350,7 +353,7 @@ describe('blind stock count (FR-INV-06, UC-07)', () => {
 describe('consignment stock-in (FR-PUR-09)', () => {
   it('creates a lot and leaves the average cost unchanged', async () => {
     const before = (await h.call('GET', `/api/v1/catalog/items/${bookItem}`, { cookie: warehouse })).body.variants[0].avgCostVnd;
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/existing', {
+    const r = await h.stockInOne({
       cookie: warehouse,
       body: { supplierId: consignorId, consignment: true, consignmentDiscountBp: 3000, line: { variantId: bookVariant, costVnd: 73500, sellingPriceVnd: 105000, qty: 20 } },
     });
@@ -360,7 +363,7 @@ describe('consignment stock-in (FR-PUR-09)', () => {
     expect(after.stock.onHand).toBe(25);
     const [lot] = await h.t.sql`select qty_received, discount_bp from purchasing.consignment_lot where variant_id = ${bookVariant}`;
     expect(lot).toMatchObject({ qty_received: 20, discount_bp: 3000 });
-    const notConsignor = await h.call('POST', '/api/v1/purchasing/stock-in/existing', {
+    const notConsignor = await h.stockInOne({
       cookie: warehouse,
       body: { supplierId, consignment: true, line: { variantId: bookVariant, costVnd: 1, sellingPriceVnd: 105000, qty: 1 } },
     });
@@ -394,5 +397,22 @@ describe('no overselling under concurrency (TDD §13.2)', () => {
     expect(rejected.every((a) => (a.reason as { code?: string }).code === 'insufficient_stock')).toBe(true);
     const [after] = await h.t.sql`select on_hand from inventory.stock_level where variant_id = ${variantId}`;
     expect(after!.on_hand).toBe(0);
+  });
+});
+
+describe('stock-in without prices (FR-PUR-03, 17 Nov 2026)', () => {
+  it('the Nhập thêm hàng form sends quantities only: average cost and price stay as they are (FR-PUR-03)', async () => {
+    const item = async () => {
+      const [row] = await h.t.sql`select v.price_vnd, l.on_hand, l.avg_cost_vnd from catalog.item_variant v join inventory.stock_level l on l.variant_id = v.id where v.id = ${bookVariant}`;
+      return { price: Number(row!.price_vnd), onHand: Number(row!.on_hand), avg: Number(row!.avg_cost_vnd) };
+    };
+    const was = await item();
+    const historyBefore = (await h.call('GET', `/api/v1/catalog/variants/${bookVariant}/price-history`, { cookie: warehouse })).body.items.length;
+    const r = await h.call('POST', '/api/v1/purchasing/stock-in', { cookie: warehouse, body: { lines: [{ kind: 'existing', variantId: bookVariant, qty: 4 }] } });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.lines[0]).toMatchObject({ priceChanged: false, marginFlag: false, avgCostVnd: was.avg });
+    expect(r.body.totalCostVnd).toBe(was.avg * 4);
+    expect(await item()).toEqual({ price: was.price, onHand: was.onHand + 4, avg: was.avg });
+    expect((await h.call('GET', `/api/v1/catalog/variants/${bookVariant}/price-history`, { cookie: warehouse })).body.items.length).toBe(historyBefore);
   });
 });

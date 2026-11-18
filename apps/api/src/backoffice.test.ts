@@ -26,7 +26,7 @@ beforeAll(async () => {
   const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', phone: '0900000000' } })).body.id;
   consignorId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Kim Đồng', phone: '0900000000', isConsignor: true } })).body.id;
   const mk = async (sku: string, price: number, opts: Record<string, unknown> = {}) => {
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
+    const r = await h.newProduct({
       cookie: owner,
       body: {
         supplierId: opts.consignor ? consignorId : supplier,
@@ -116,7 +116,8 @@ describe('consignment return (FR-PUR-12)', () => {
     expect(r.body.remaining).toBe(1);
     expect((await h.call('POST', '/api/v1/purchasing/consignment/returns', { cookie: owner, body: { lotId: lot.id, qty: 5 } })).body.error.code).toBe('return_exceeds_remaining');
     const [lvl] = await h.t.sql`select on_hand, avg_cost_vnd from inventory.stock_level where variant_id = ${consigned}`;
-    expect({ onHand: lvl!.on_hand, avgCost: Number(lvl!.avg_cost_vnd) }).toEqual({ onHand: 1, avgCost: 0 });
+    // The cost recorded when the product was created stays: consignment moves carry no cost (TDD §4.2).
+    expect({ onHand: lvl!.on_hand, avgCost: Number(lvl!.avg_cost_vnd) }).toEqual({ onHand: 1, avgCost: 40000 });
   });
 });
 

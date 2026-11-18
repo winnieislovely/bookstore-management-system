@@ -47,8 +47,6 @@
   "setup.phone": "Số điện thoại",
   "setup.ownerName": "Họ tên chủ cửa hàng",
   "setup.submit": "Hoàn tất thiết lập",
-  "setup.step1": "Cửa hàng",
-  "setup.step2": "Tài khoản chủ",
   "shell.offline": "Ngoại tuyến",
   "shell.offlineBanner": "Mất kết nối. Vẫn bán được bình thường; hóa đơn điện tử và xác nhận chuyển khoản sẽ thực hiện khi có mạng.",
   "shell.notifications": "Thông báo",

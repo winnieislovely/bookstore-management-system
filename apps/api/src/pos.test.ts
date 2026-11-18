@@ -26,7 +26,7 @@ beforeAll(async () => {
   const supplier = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Fahasa', phone: '0900000000' } })).body.id;
   const consignor = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Kim Đồng', phone: '0900000000', isConsignor: true } })).body.id;
   const mk = async (sku: string, title: string, price: number, vatBp: number, qty: number) => {
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
+    const r = await h.newProduct({
       cookie: owner,
       body: {
         supplierId: supplier,
@@ -46,7 +46,7 @@ beforeAll(async () => {
   book = await mk('SACH-0001', 'Cho toi xin mot ve', 98000, 0, 10);
   pen = await mk('VPP-0012', 'Blue pen', 6000, 1000, 100);
   // Consignment units of the book (sold first, FIFO by lot).
-  const c = await h.call('POST', '/api/v1/purchasing/stock-in/existing', {
+  const c = await h.stockInOne({
     cookie: owner,
     body: { supplierId: consignor, consignment: true, consignmentDiscountBp: 3000, line: { variantId: book, costVnd: 68600, sellingPriceVnd: 98000, qty: 2 } },
   });

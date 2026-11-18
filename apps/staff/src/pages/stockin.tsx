@@ -1,18 +1,21 @@
-import { useQuery } from '@tanstack/react-query';
-import { ScanBarcode, Trash2 } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { clsx } from 'clsx';
+import { ArrowLeft, BookOpen, ChevronDown, Minus, Package, Plus, ScanBarcode } from 'lucide-react';
 import { useRef, useState } from 'react';
-import { SelectField, TextArea, toast } from '../components/data';
+import { Link, useNavigate, useSearchParams } from 'react-router';
+import { ConfirmDialog, SelectField, toast } from '../components/data';
 import { hitTitle, ProductSearch, type ProductHit } from '../components/product-search';
 import { ScanSession, type ScanOutcome } from '../components/scanSession';
-import { Button, Field, InlineAlert } from '../components/ui';
+import { Button, ErrorState, Field, InlineAlert, PageHeader, Skeleton } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
-import { formatNumber, formatVnd } from '../lib/format';
-import { Dialog } from '../pos/widgets';
+import { formatNumber } from '../lib/format';
+import { can, useMe } from '../lib/session';
 
 /**
- * Stock-in (FR-PUR-01..06, FR-PUR-09, Design §12.4 “Quick stock-in”): existing products only, each
- * needing cost, selling price and quantity; new products are created on “Thêm sản phẩm mới”, and a
- * scanned code that matches no product is refused (FR-PUR-03). Several lines post as one entry.
+ * Stock-in (FR-PUR-01..06, FR-PUR-09, Design §12.4 “Quick stock-in”): existing products only; each
+ * line has its quantity, and its cost and selling price can be opened and changed (prefilled with the
+ * current values). New products are created on “Thêm sản phẩm mới”, and a scanned code that matches
+ * no product is refused (FR-PUR-03). Several lines post as one entry.
  */
 
 interface Supplier {
@@ -22,66 +25,128 @@ interface Supplier {
 }
 export const useSuppliers = () => useQuery({ queryKey: ['suppliers'], queryFn: () => get<{ items: (Supplier & { phone: string | null; email: string | null; taxCode: string | null; note: string | null; status: string; version: number })[] }>('/api/v1/purchasing/suppliers') });
 
+/**
+ * One product on the entry (FR-PUR-03, Design §12.4): the quantity, and the cost and selling price
+ * prefilled with the current values – only values staff change are sent.
+ */
 interface Line {
   key: string;
   variantId: string;
   title: string;
   sku: string;
-  costVnd: string;
-  sellingPriceVnd: string;
+  kind: string;
+  imageFileId: string | null;
   qty: string;
+  /** Current average cost, or null when not known or not visible to this user. */
+  costNow: number | null;
+  priceNow: number;
+  cost: string;
+  price: string;
 }
 
 const digits = (s: string) => Number(s.replace(/\D/g, '') || 0);
 const money = (s: string) => (s ? formatNumber(digits(s)) : '');
 
-/** Products ticked on the Stock page, prefilled as lines. */
-export interface StockInPick {
+/** A product as a new line, from a search hit or the product's stock page. */
+interface LineSource {
   variantId: string;
   title: string;
   sku: string;
+  kind: string;
+  imageFileId: string | null;
   priceVnd: number;
+  avgCostVnd?: number | null;
+}
+
+const lineOf = (p: LineSource, key: string): Line => ({
+  key,
+  variantId: p.variantId,
+  title: p.title,
+  sku: p.sku,
+  kind: p.kind,
+  imageFileId: p.imageFileId,
+  qty: '1',
+  costNow: p.avgCostVnd ?? null,
+  priceNow: p.priceVnd,
+  cost: p.avgCostVnd != null ? String(p.avgCostVnd) : '',
+  price: String(p.priceVnd),
+});
+
+interface ItemForPick {
+  kind: string;
+  i18n: { vi?: { title?: string }; en: { title: string } };
+  images: { fileId: string }[];
+  variants: { id: string; sku: string; priceVnd: number; avgCostVnd?: number }[];
 }
 
 /**
- * Stock-in form, opened from the Stock page (“Nhập thêm hàng”, FR-PUR-01..06, Design §12.1, §12.4).
- * With ticked products the lines are fixed; opened from the page header it starts empty and products
- * are scanned (camera or handheld scanner) or searched one at a time. Posts one stock-in entry.
+ * “Nhập thêm hàng” page, `/stock/in` (FR-PUR-01..06, Design §12.1, §12.4). From the Tồn kho header it
+ * starts empty; from a product's stock page (`?item=&v=`) it starts with that product. Either way
+ * products are scanned (camera or handheld scanner) or searched one at a time. Posts one stock-in entry.
  */
-export function StockInForm({ initial = [], onClose, onPosted }: { initial?: StockInPick[]; onClose: () => void; onPosted: () => void }) {
+export function StockInPage() {
+  const [params] = useSearchParams();
+  const itemId = params.get('item');
+  const variantId = params.get('v');
+  const item = useQuery({ queryKey: ['item', itemId], enabled: !!itemId, queryFn: () => get<ItemForPick>(`/api/v1/catalog/items/${itemId}`) });
+  if (itemId && item.isError) return <ErrorState error={item.error} onRetry={() => void item.refetch()} />;
+  if (itemId && !item.data) return <Skeleton className="h-64" />;
+  const v = item.data?.variants.find((x) => x.id === variantId) ?? item.data?.variants[0];
+  const title = item.data ? item.data.i18n.vi?.title || item.data.i18n.en.title : null;
+  const initial: LineSource[] =
+    item.data && v ? [{ variantId: v.id, title: title!, sku: v.sku, kind: item.data.kind, imageFileId: item.data.images[0]?.fileId ?? null, priceVnd: v.priceVnd, avgCostVnd: v.avgCostVnd ?? null }] : [];
+  // Back to where the page was opened from.
+  const back = itemId ? { to: `/stock/${itemId}${v ? `?v=${v.id}` : ''}`, label: title! } : { to: '/stock', label: 'Tồn kho' };
+  return <StockInForm key={`${itemId ?? ''}:${v?.id ?? ''}`} initial={initial} back={back} />;
+}
+
+function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: string; label: string } }) {
   const suppliers = useSuppliers();
+  const { data: me } = useMe();
+  // The cost shows only to users who may see costs (TDD §10.3).
+  const showCost = can(me, 'catalog.view_cost');
+  const navigate = useNavigate();
+  const qc = useQueryClient();
   const [supplierId, setSupplierId] = useState('');
-  const [invoiceNo, setInvoiceNo] = useState('');
-  const [note, setNote] = useState('');
   const [consignment, setConsignment] = useState(false);
   const [discount, setDiscount] = useState('');
   const [deadline, setDeadline] = useState('');
-  const [lines, setLines] = useState<Line[]>(() => initial.map((p) => ({ key: p.variantId, variantId: p.variantId, title: p.title, sku: p.sku, costVnd: '', sellingPriceVnd: String(p.priceVnd), qty: '1' })));
+  const [lines, setLines] = useState<Line[]>(() => initial.map((p) => lineOf(p, p.variantId)));
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  // A row whose quantity was stepped below 1: asked before it is removed.
+  const [removing, setRemoving] = useState<Line | null>(null);
   // The last scanned code that matches no product: a new product, refused (FR-PUR-03).
   const [unknown, setUnknown] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ entryNo: string; totalCostVnd: number; lines: { marginFlag: boolean; priceChanged: boolean }[] } | null>(null);
+  const [result, setResult] = useState<{ entryNo: string; lines: { marginFlag: boolean; priceChanged: boolean }[] } | null>(null);
   // The latest lines, for scans handled while the camera is open.
   const linesRef = useRef(lines);
   linesRef.current = lines;
   const supplier = suppliers.data?.items.find((s) => s.id === supplierId);
   // Only a consignor's goods can be consignment: switching to another supplier drops the tick, which is hidden then.
   const isConsignment = consignment && !!supplier?.isConsignor;
-  const locked = initial.length > 0;
 
   const update = (key: string, patch: Partial<Line>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
-  const total = lines.reduce((a, l) => a + digits(l.costVnd) * digits(l.qty), 0);
+  const toggle = (key: string) =>
+    setOpen((o) => {
+      const next = new Set(o);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   /** A product picked or scanned: a new line, or 1 more of a line already there. Returns the quantity now on the entry. */
   const addHit = (h: ProductHit) => {
     setUnknown(null);
     const same = linesRef.current.find((l) => l.variantId === h.variantId);
     const qty = same ? digits(same.qty) + 1 : 1;
+    // The search answers with the average cost when this user may see costs.
+    const avg = (h as ProductHit & { avgCostVnd?: number | null }).avgCostVnd;
     const next = same
       ? linesRef.current.map((l) => (l === same ? { ...l, qty: String(qty) } : l))
-      : [...linesRef.current, { key: crypto.randomUUID(), variantId: h.variantId, title: hitTitle(h), sku: h.sku, costVnd: '', sellingPriceVnd: String(h.priceVnd), qty: '1' }];
+      : [...linesRef.current, lineOf({ variantId: h.variantId, title: hitTitle(h), sku: h.sku, kind: h.kind, imageFileId: h.imageFileId, priceVnd: h.priceVnd, avgCostVnd: avg ?? null }, crypto.randomUUID())];
     linesRef.current = next;
     setLines(next);
     return qty;
@@ -111,16 +176,20 @@ export function StockInForm({ initial = [], onClose, onPosted }: { initial?: Sto
     try {
       const body = {
         ...(supplierId && { supplierId }),
-        ...(invoiceNo.trim() && { supplierInvoiceNo: invoiceNo.trim() }),
-        ...(note.trim() && { note: note.trim() }),
         consignment: isConsignment,
         ...(isConsignment && discount && { consignmentDiscountBp: Math.round(Number(discount.replace(',', '.')) * 100) }),
         ...(isConsignment && deadline && { consignmentDeadline: new Date(deadline).toISOString() }),
-        lines: lines.map((l) => ({ kind: 'existing', variantId: l.variantId, costVnd: digits(l.costVnd), sellingPriceVnd: digits(l.sellingPriceVnd), qty: digits(l.qty) })),
+        // Only values staff changed are sent: otherwise the stock enters at the current average cost and the price stays (FR-PUR-03).
+        lines: lines.map((l) => {
+          const costChanged = showCost && l.cost.trim() !== '' && digits(l.cost) !== l.costNow;
+          const priceChanged = l.price.trim() !== '' && digits(l.price) !== l.priceNow;
+          return { kind: 'existing', variantId: l.variantId, qty: Math.max(1, digits(l.qty)), ...(costChanged && { costVnd: digits(l.cost) }), ...(priceChanged && { sellingPriceVnd: digits(l.price) }) };
+        }),
       };
-      const r = await post<{ entryNo: string; totalCostVnd: number; lines: { marginFlag: boolean; priceChanged: boolean }[] }>('/api/v1/purchasing/stock-in', body);
+      const r = await post<{ entryNo: string; lines: { marginFlag: boolean; priceChanged: boolean }[] }>('/api/v1/purchasing/stock-in', body);
       setResult(r);
-      onPosted();
+      // The Stock list, a product's stock page and the stock value read these.
+      for (const key of ['stock-list', 'item', 'movements', 'valuation']) void qc.invalidateQueries({ queryKey: [key] });
       toast.success(`Đã nhập kho phiếu ${r.entryNo}.`);
     } catch (e) {
       setError((e as Error).message);
@@ -129,118 +198,244 @@ export function StockInForm({ initial = [], onClose, onPosted }: { initial?: Sto
     }
   };
 
+  /** “Nhập tiếp”: an empty form for the next entry. */
+  const restart = () => {
+    setResult(null);
+    setLines([]);
+    linesRef.current = [];
+    setOpen(new Set());
+    setUnknown(null);
+    setError(null);
+    if (window.location.search) navigate('/stock/in', { replace: true });
+  };
+
+  const header = (
+    <PageHeader
+      breadcrumb={
+        <Link to={back.to} className="inline-flex items-center gap-1 hover:underline">
+          <ArrowLeft size={16} aria-hidden /> {back.label}
+        </Link>
+      }
+      title="Nhập thêm hàng"
+    />
+  );
+
   if (result)
     return (
-      <Dialog title={`Đã nhập ${result.entryNo}`} size="sm" onClose={onClose}>
-        <div className="flex flex-col gap-3">
-          <p className="text-ink-700 num">
-            {result.lines.length} dòng · tổng giá nhập {formatVnd(result.totalCostVnd)}
-          </p>
+      <div className="max-w-[720px]">
+        {header}
+        <section className="flex flex-col gap-3" aria-labelledby="stockin-done">
+          <h2 id="stockin-done" className="text-base font-semibold text-ink-900">
+            Đã nhập {result.entryNo}
+          </h2>
+          <p className="text-ink-700 num">Đã nhập {formatNumber(result.lines.length)} sản phẩm.</p>
           {result.lines.some((l) => l.marginFlag) && <InlineAlert tone="warning">{result.lines.filter((l) => l.marginFlag).length} dòng có lãi dưới mức tối thiểu. Kiểm tra giá bán.</InlineAlert>}
           {result.lines.some((l) => l.priceChanged) && <InlineAlert tone="info">Giá bán đã được cập nhật cho {result.lines.filter((l) => l.priceChanged).length} sản phẩm.</InlineAlert>}
-          <Button variant="primary" full onClick={onClose}>
-            Xong
-          </Button>
-        </div>
-      </Dialog>
+          <div className="mt-2 flex gap-2 max-sm:[&>*]:flex-1">
+            <Button variant="secondary" className="sm:w-48" onClick={restart}>
+              Nhập tiếp
+            </Button>
+            <Button variant="primary" className="sm:w-48" onClick={() => navigate(back.to)}>
+              Xong
+            </Button>
+          </div>
+        </section>
+      </div>
     );
 
   return (
-    <Dialog
-      title="Nhập thêm hàng"
-      size="lg"
-      onClose={onClose}
-      footer={
-        <>
-          <span className="mr-auto self-center text-sm num">
-            {lines.length} dòng · {formatVnd(total)}
-          </span>
-          <Button variant="secondary" onClick={onClose}>
-            Hủy
-          </Button>
-          <Button variant="primary" loading={busy} disabled={!lines.length} onClick={submit}>
-            Xác nhận nhập hàng
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-5">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <SelectField label="Nhà cung cấp" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-            <option value="">— Chọn —</option>
-            {suppliers.data?.items.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </SelectField>
-          <Field label="Số hóa đơn NCC" value={invoiceNo} onChange={(e) => setInvoiceNo(e.target.value)} />
-          {supplier?.isConsignor && (
-            <label className="inline-flex items-center gap-2 text-sm sm:col-span-2">
-              <input type="checkbox" className="size-5" checked={consignment} onChange={(e) => setConsignment(e.target.checked)} />
-              Hàng ký gửi
-            </label>
-          )}
-          {isConsignment && (
-            <>
-              <Field label="Chiết khấu thỏa thuận" suffix="%" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} />
-              <Field label="Hạn đối soát / trả hàng" type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
-            </>
-          )}
-        </div>
-
-        {/* With ticked products the lines are fixed. From the page header, products are scanned or
-            searched one at a time; only existing products – new ones are created on “Thêm sản phẩm mới” (Design §12.4). */}
-        {!locked && (
-          <div className="flex flex-col gap-2">
-            <div className="flex items-start gap-2">
-              <div className="min-w-0 flex-1">
-                <ProductSearch autoFocus placeholder="Quét mã hoặc tìm SKU, tên sản phẩm" onPick={(h) => void addHit(h)} onUnknownCode={setUnknown} />
-              </div>
-              <button
-                type="button"
-                className="inline-flex size-12 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50"
-                aria-label="Quét mã"
-                title="Quét mã"
-                onClick={() => setScanning(true)}
-              >
-                <ScanBarcode size={24} aria-hidden />
-              </button>
-            </div>
-            {unknown && <InlineAlert tone="warning">Mã {unknown} chưa có trong danh mục. Đây là sản phẩm mới – hãy để riêng và tạo ở trang Thêm sản phẩm mới.</InlineAlert>}
+    <div className="max-w-[720px] pb-20">
+      {header}
+      {/* No card borders (Design §12.4): sections are set apart by space; each product row has its own border. */}
+      <div className="flex flex-col gap-8">
+        <section>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <SelectField label="Nhà cung cấp" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+              <option value="">— Chọn —</option>
+              {suppliers.data?.items.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </SelectField>
+            {supplier?.isConsignor && (
+              <label className="inline-flex items-center gap-2 text-sm sm:col-span-2">
+                <input type="checkbox" className="size-5" checked={consignment} onChange={(e) => setConsignment(e.target.checked)} />
+                Hàng ký gửi
+              </label>
+            )}
+            {isConsignment && (
+              <>
+                <Field label="Chiết khấu thỏa thuận" suffix="%" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+                <Field label="Hạn đối soát / trả hàng" type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+              </>
+            )}
           </div>
-        )}
-        {scanning && <ScanSession label="Quét mã nhập hàng" prompt="Đưa mã vạch hoặc ISBN vào khung" progress={`${lines.length} dòng`} onScan={onScan} onClose={() => setScanning(false)} />}
+        </section>
 
-        {!locked && !lines.length && <p className="text-sm text-ink-500">Chưa có sản phẩm. Quét mã hoặc tìm sản phẩm để thêm vào phiếu nhập.</p>}
-        <ul className="flex flex-col gap-3">
-          {lines.map((l) => (
-            <li key={l.key} className="rounded-lg border border-paper-300 p-4">
-              <div className="mb-3 flex items-start gap-2">
+        <section aria-labelledby="stockin-lines">
+          <h2 id="stockin-lines" className="mb-3 text-base font-semibold text-ink-900">
+            Sản phẩm
+          </h2>
+          <div className="flex flex-col gap-4">
+            {/* Products are scanned or searched one at a time; only existing products – new ones are created
+                on “Thêm sản phẩm mới” (Design §12.4). */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium">{l.title}</p>
-                  <p className="code text-[13px] text-ink-500">{l.sku}</p>
+                  <ProductSearch autoFocus placeholder="Quét mã hoặc tìm SKU, tên sản phẩm" onPick={(h) => void addHit(h)} onUnknownCode={setUnknown} />
                 </div>
-                <button type="button" className="inline-flex size-10 items-center justify-center rounded-full hover:bg-danger-50" aria-label="Bỏ dòng" onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>
-                  <Trash2 size={18} aria-hidden />
+                <button
+                  type="button"
+                  className="inline-flex size-12 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50"
+                  aria-label="Quét mã"
+                  title="Quét mã"
+                  onClick={() => setScanning(true)}
+                >
+                  <ScanBarcode size={24} aria-hidden />
                 </button>
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <Field label="Giá nhập" required suffix="₫" inputMode="numeric" value={money(l.costVnd)} onChange={(e) => update(l.key, { costVnd: e.target.value })} />
-                <Field label="Giá bán" required suffix="₫" inputMode="numeric" value={money(l.sellingPriceVnd)} onChange={(e) => update(l.key, { sellingPriceVnd: e.target.value })} />
-                <Field label="Số lượng" required inputMode="numeric" value={l.qty} onChange={(e) => update(l.key, { qty: e.target.value.replace(/\D/g, '') })} />
-              </div>
-              {digits(l.sellingPriceVnd) > 0 && digits(l.costVnd) >= digits(l.sellingPriceVnd) && (
-                <div className="mt-3">
-                  <InlineAlert tone="warning">Giá nhập không thấp hơn giá bán.</InlineAlert>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-        <TextArea label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} />
+              {unknown && <InlineAlert tone="warning">Mã {unknown} chưa có trong danh mục. Đây là sản phẩm mới – hãy để riêng và tạo ở trang Thêm sản phẩm mới.</InlineAlert>}
+            </div>
+
+            {!lines.length && <p className="text-sm text-ink-500">Chưa có sản phẩm. Quét mã hoặc tìm sản phẩm để thêm vào phiếu nhập.</p>}
+            {lines.length > 0 && (
+              // Rows follow the POS cart line, nothing cut off; tapping a row opens its prices (Design §12.4).
+              <ul className="flex flex-col gap-2">
+                {lines.map((l) => (
+                  <StockInRow
+                    key={l.key}
+                    line={l}
+                    open={open.has(l.key)}
+                    showCost={showCost}
+                    onToggle={() => toggle(l.key)}
+                    onChange={(patch) => update(l.key, patch)}
+                    onRemoveAsk={() => setRemoving(l)}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       </div>
-    </Dialog>
+      {scanning && <ScanSession label="Quét mã nhập hàng" prompt="Đưa mã vạch hoặc ISBN vào khung" progress={`${lines.length} dòng`} onScan={onScan} onClose={() => setScanning(false)} />}
+      {removing && (
+        <ConfirmDialog
+          title={`Bỏ ${removing.title} khỏi phiếu?`}
+          confirm="Bỏ"
+          cancel="Không"
+          destructive
+          onConfirm={async () => setLines((ls) => ls.filter((x) => x.key !== removing.key))}
+          onClose={() => setRemoving(null)}
+        />
+      )}
+
+      {/* Sticky action bar (Design §12.4): Hủy and Xác nhận the same size – half each on phones, 192 px from sm. */}
+      <div className="fixed inset-x-0 bottom-0 z-30 flex h-16 items-center justify-end gap-2 border-t border-paper-300 bg-white px-4 shadow-sm max-sm:[&>*]:flex-1 sm:px-6 md:left-[72px] lg:left-[264px]">
+        <Button variant="secondary" className="sm:w-48" onClick={() => navigate(back.to)}>
+          Hủy
+        </Button>
+        <Button variant="primary" className="sm:w-48" loading={busy} disabled={!lines.length} onClick={submit}>
+          Xác nhận nhập hàng
+        </Button>
+      </div>
+    </div>
   );
+}
+
+/**
+ * One product row (Design §12.4), like the POS cart line: cover at the left; the name in full; the SKU
+ * and the quantity stepper on the row under it. Tapping the row (not the stepper) opens Giá nhập and
+ * Giá bán; Minus at 1 asks to remove the row.
+ */
+function StockInRow({
+  line: l,
+  open,
+  showCost,
+  onToggle,
+  onChange,
+  onRemoveAsk,
+}: {
+  line: Line;
+  open: boolean;
+  showCost: boolean;
+  onToggle: () => void;
+  onChange: (patch: Partial<Line>) => void;
+  onRemoveAsk: () => void;
+}) {
+  const qty = digits(l.qty);
+  const pricesId = `prices-${l.key}`;
+  const lowMargin = showCost && digits(l.price) > 0 && l.cost.trim() !== '' && digits(l.cost) >= digits(l.price);
+  return (
+    <li className="rounded-md border border-paper-300 p-3">
+      <div className="flex items-start gap-3">
+        <button type="button" className="shrink-0" onClick={onToggle} aria-expanded={open} aria-controls={pricesId} aria-label={`Giá của ${l.title}`}>
+          <LineThumb line={l} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <button type="button" className="flex w-full items-start gap-2 text-left" onClick={onToggle} aria-expanded={open} aria-controls={pricesId}>
+            <span className="min-w-0 flex-1 font-semibold break-words text-ink-900">{l.title}</span>
+            <ChevronDown size={18} className={clsx('mt-0.5 shrink-0 text-ink-500 transition-transform', open && 'rotate-180')} aria-hidden />
+          </button>
+          <div className="mt-1 flex items-center justify-between gap-3">
+            <button type="button" className="code min-w-0 text-left text-[13px] break-all text-ink-500" onClick={onToggle} tabIndex={-1}>
+              {l.sku}
+            </button>
+            {/* The POS cart stepper: bare icons around the quantity field (Design §13.2). */}
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                className="inline-flex size-8 items-center justify-center rounded-full text-ink-700 hover:bg-paper-200"
+                aria-label={qty <= 1 ? `Bỏ ${l.title}` : `Bớt 1 ${l.title}`}
+                onClick={() => (qty <= 1 ? onRemoveAsk() : onChange({ qty: String(qty - 1) }))}
+              >
+                <Minus size={16} aria-hidden />
+              </button>
+              <input
+                className="h-8 w-10 rounded-md border border-paper-500 text-center text-sm num focus:border-navy-700"
+                inputMode="numeric"
+                aria-label={`Số lượng ${l.title}`}
+                value={l.qty}
+                onChange={(e) => onChange({ qty: e.target.value.replace(/\D/g, '') })}
+                onBlur={() => qty < 1 && onChange({ qty: '1' })}
+              />
+              <button
+                type="button"
+                className="inline-flex size-8 items-center justify-center rounded-full text-ink-700 hover:bg-paper-200"
+                aria-label={`Thêm 1 ${l.title}`}
+                onClick={() => onChange({ qty: String(qty + 1) })}
+              >
+                <Plus size={16} aria-hidden />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      {open && (
+        <div id={pricesId} className="mt-3 flex flex-col gap-3">
+          <div className={clsx('grid gap-3', showCost ? 'grid-cols-2' : 'grid-cols-1')}>
+            {showCost && <Field label="Giá nhập" suffix="₫" inputMode="numeric" value={money(l.cost)} onChange={(e) => onChange({ cost: e.target.value })} />}
+            <Field label="Giá bán" suffix="₫" inputMode="numeric" value={money(l.price)} onChange={(e) => onChange({ price: e.target.value })} />
+          </div>
+          {lowMargin && <InlineAlert tone="warning">Giá nhập không thấp hơn giá bán.</InlineAlert>}
+        </div>
+      )}
+    </li>
+  );
+}
+
+/** The row's photo: a 32 × 48 cover for a book, 32 px square otherwise, a grey placeholder when none (Design §12.4). */
+function LineThumb({ line }: { line: Pick<Line, 'kind' | 'imageFileId'> }) {
+  const book = line.kind === 'book';
+  const box = book ? 'h-12 w-8' : 'size-8';
+  if (!line.imageFileId) {
+    const Icon = book ? BookOpen : Package;
+    return (
+      <div className={clsx(box, 'flex items-center justify-center rounded-sm bg-paper-200')}>
+        <Icon size={16} className="text-ink-300" aria-hidden />
+      </div>
+    );
+  }
+  return <img src={`/api/v1/files/${line.imageFileId}`} alt="" loading="lazy" className={clsx(box, 'block rounded-sm bg-white', book ? 'object-cover' : 'object-contain')} />;
 }

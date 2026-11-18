@@ -31,6 +31,22 @@ export interface Harness {
   setupOwner: () => Promise<{ owner: string; roles: Record<string, string> }>;
   /** Create a user with a role, change the temporary password and set a PIN; returns the cookie. */
   staff: (owner: string, username: string, roleId: string, pin?: string) => Promise<string>;
+  /**
+   * Test setup: a product with its first stock-in, the way Thêm sản phẩm mới makes it (`POST /catalog/items`
+   * with `opening`, FR-PUR-02). The body is `{ supplierId, consignment?, line: { item, variant, costVnd, sellingPriceVnd, qty } }`;
+   * the reply adds `lines[i].variantId` like a stock-in reply.
+   */
+  newProduct: (opts: { body: NewProductBody; cookie?: string | null }) => Promise<Res>;
+  /** One existing product stocked through `POST /purchasing/stock-in`: the header plus `line`. */
+  stockInOne: (opts: { body: Record<string, unknown> & { line: Record<string, unknown> }; cookie?: string | null }) => Promise<Res>;
+}
+
+export interface NewProductBody {
+  supplierId?: string;
+  consignment?: boolean;
+  consignmentDiscountBp?: number;
+  consignmentDeadline?: string;
+  line: { item: Record<string, unknown>; variant: Record<string, unknown>; imageFileIds?: string[]; costVnd: number; sellingPriceVnd: number; qty: number };
 }
 
 // Bodies are arbitrary JSON in tests.
@@ -66,6 +82,27 @@ export async function startHarness(): Promise<Harness> {
     return r.cookie!;
   };
 
+  const newProduct: Harness['newProduct'] = async ({ body, cookie }) => {
+    const { line, supplierId, consignment, consignmentDiscountBp, consignmentDeadline } = body;
+    const r = await call('POST', '/api/v1/catalog/items', {
+      cookie: cookie ?? null,
+      body: {
+        ...line.item,
+        variants: [{ ...line.variant, priceVnd: line.sellingPriceVnd }],
+        opening: { costVnd: line.costVnd, qty: line.qty, ...(supplierId && { supplierId }), ...(consignment && { consignment, consignmentDiscountBp, consignmentDeadline }) },
+      },
+    });
+    if (r.status !== 201) return r;
+    // Photos are attached as the page does after saving; tests use placeholder file ids.
+    for (const [sort, fileId] of (line.imageFileIds ?? []).entries()) await t.sql`insert into catalog.item_image (item_id, file_id, sort) values (${r.body.itemId}, ${fileId}, ${sort})`;
+    return { ...r, body: { ...r.body, lines: (r.body.variantIds as string[]).map((variantId) => ({ variantId })) } };
+  };
+
+  const stockInOne: Harness['stockInOne'] = async ({ body, cookie }) => {
+    const { line, ...header } = body;
+    return call('POST', '/api/v1/purchasing/stock-in', { cookie: cookie ?? null, body: { ...header, lines: [{ kind: 'existing', ...line }] } });
+  };
+
   return {
     t,
     app,
@@ -75,6 +112,8 @@ export async function startHarness(): Promise<Harness> {
     ctx: () => ({ db: t.db, clock, crypto, actor: null, requestId: randomUUID(), ip: null }),
     call,
     login,
+    newProduct,
+    stockInOne,
     async setupOwner() {
       const r = await call('POST', '/api/v1/setup', {
         body: { owner: { username: 'lan', displayName: 'Lan', password: OWNER_PW }, store: { name: 'The Bookshelf Hanoi' } },

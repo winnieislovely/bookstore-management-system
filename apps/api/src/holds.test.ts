@@ -19,7 +19,7 @@ async function level(variantId: string) {
 }
 
 async function stockIn(variantId: string, qty: number) {
-  const r = await h.call('POST', '/api/v1/purchasing/stock-in/existing', { cookie: owner, body: { supplierId, line: { variantId, costVnd: 60000, sellingPriceVnd: 120000, qty } } });
+  const r = await h.stockInOne({ cookie: owner, body: { supplierId, line: { variantId, costVnd: 60000, sellingPriceVnd: 120000, qty } } });
   expect(r.status, JSON.stringify(r.body)).toBe(201);
 }
 
@@ -34,7 +34,7 @@ beforeAll(async () => {
   const cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Books' } } } })).body.id;
   supplierId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Nhã Nam', phone: '0900000000' } })).body.id;
   const mk = async (sku: string, title: string) => {
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
+    const r = await h.newProduct({
       cookie: owner,
       body: { supplierId, line: { item: { kind: 'book', i18n: { en: { title, description: title } }, categoryIds: [cat] }, variant: { sku, weightG: 300, vatBp: 0 }, imageFileIds: ['00000000-0000-7000-8000-00000000000a'], costVnd: 60000, sellingPriceVnd: 120000, qty: 1 } },
     });

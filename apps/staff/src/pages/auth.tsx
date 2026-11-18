@@ -104,14 +104,8 @@ function SetupForm() {
 
   return (
     <AuthLayout title={t('setup.title')}>
-      <p className="mb-4 text-ink-700">{t('setup.intro')}</p>
-      <ol className="mb-6 flex gap-4 text-sm" aria-label="Các bước">
-        {(['setup.step1', 'setup.step2'] as const).map((k, i) => (
-          <li key={k} className={i + 1 === step ? 'font-semibold text-navy-700' : 'text-ink-500'} aria-current={i + 1 === step ? 'step' : undefined}>
-            {i + 1}. {t(k)}
-          </li>
-        ))}
-      </ol>
+      {/* No step indicator (Design §10.14): each step shows only its own fields. */}
+      <p className="mb-6 text-ink-700">{t('setup.intro')}</p>
       {error && (
         <div className="mb-4">
           <InlineAlert tone="danger">{error}</InlineAlert>

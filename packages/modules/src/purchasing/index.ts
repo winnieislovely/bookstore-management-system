@@ -110,8 +110,10 @@ export async function listSuppliers(ctx: Ctx, q?: string) {
 export const ExistingLineSchema = z.object({
   kind: z.literal('existing'),
   variantId: z.uuid(),
-  costVnd: money,
-  sellingPriceVnd: money,
+  /** Optional: the Nhập thêm hàng form sends none – the line is recorded at the current average cost, which stays as it is (FR-PUR-03). */
+  costVnd: money.optional(),
+  /** Optional: without it the selling price is left alone (FR-PUR-03). */
+  sellingPriceVnd: money.optional(),
   qty: z.number().int().positive(),
   location: z.enum(['floor', 'back']).default('floor'),
 });
@@ -153,6 +155,12 @@ export const StockInSchema = StockInBaseSchema.refine((s) => !s.lines.some((l) =
   });
 export type StockInInput = z.input<typeof StockInSchema>;
 
+/**
+ * The stock-in form and API (FR-PUR-03, TDD §6.2): existing products only. New products are created on
+ * Thêm sản phẩm mới (FR-PUR-02); only the Phiếu nhập hàng import posts new-product lines, inside the server.
+ */
+export const ExistingStockInSchema = StockInBaseSchema.extend({ lines: z.array(ExistingLineSchema).min(1) });
+
 export interface StockInLineResult {
   variantId: string;
   createdProduct: boolean;
@@ -184,7 +192,21 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
 
   const now = ctx.clock.now();
   const entryNo = await nextDocNo(tx, 'SI', now);
-  const totalCost = data.lines.reduce((a, l) => a + l.costVnd * l.qty, 0);
+  // A line without a cost is recorded at the product's current average cost (0 when it has none) and leaves it unchanged (FR-PUR-03).
+  const costs: number[] = [];
+  for (const l of data.lines) {
+    if (l.kind === 'new' || l.costVnd !== undefined) costs.push(l.costVnd!);
+    else {
+      const [lvl] = await tx
+        .select({ avg: schema.stockLevel.avgCostVnd })
+        .from(schema.stockLevel)
+        .where(eq(schema.stockLevel.variantId, l.variantId))
+        .orderBy(desc(schema.stockLevel.onHand))
+        .limit(1);
+      costs.push(Number(lvl?.avg ?? 0));
+    }
+  }
+  const totalCost = data.lines.reduce((a, l, i) => a + costs[i]! * l.qty, 0);
   const [entry] = await tx
     .insert(schema.stockInEntry)
     .values({
@@ -203,7 +225,10 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
     .returning({ id: schema.stockInEntry.id });
 
   const results: StockInLineResult[] = [];
-  for (const line of data.lines) {
+  for (const [i, line] of data.lines.entries()) {
+    const costVnd = costs[i]!;
+    const costGiven = line.costVnd !== undefined;
+    let sellingPriceVnd: number;
     let variantId: string;
     let createdProduct = false;
     let priceChanged = false;
@@ -213,6 +238,7 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
         ...line.item,
         variants: [{ ...line.variant, priceVnd: line.sellingPriceVnd }],
       });
+      sellingPriceVnd = line.sellingPriceVnd;
       variantId = created.variantIds[0]!;
       createdProduct = true;
       vatBp = line.variant.vatBp;
@@ -221,7 +247,7 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
       }
     } else {
       const [v] = await tx
-        .select({ id: schema.itemVariant.id, vatBp: schema.itemVariant.vatBp, kind: schema.item.kind })
+        .select({ id: schema.itemVariant.id, vatBp: schema.itemVariant.vatBp, priceVnd: schema.itemVariant.priceVnd, kind: schema.item.kind })
         .from(schema.itemVariant)
         .innerJoin(schema.item, eq(schema.item.id, schema.itemVariant.itemId))
         .where(eq(schema.itemVariant.id, line.variantId));
@@ -230,8 +256,9 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
       if (v.kind === 'bundle') throw new AppError(400, 'bundle_has_no_stock', 'Combo không có tồn kho riêng. Hãy nhập hàng cho từng sản phẩm trong combo.');
       variantId = v.id;
       vatBp = v.vatBp;
-      // A changed selling price is saved in the price history (FR-PUR-03).
-      priceChanged = await catalog.setPriceTx(tx, ctx, v.id, { priceVnd: line.sellingPriceVnd, reason: `stock_in ${entryNo}` });
+      // A changed selling price is saved in the price history; without one the price is left alone (FR-PUR-03).
+      sellingPriceVnd = line.sellingPriceVnd ?? v.priceVnd;
+      if (line.sellingPriceVnd !== undefined) priceChanged = await catalog.setPriceTx(tx, ctx, v.id, { priceVnd: line.sellingPriceVnd, reason: `stock_in ${entryNo}` });
     }
 
     const applied = await inventory.apply(tx, ctx, {
@@ -239,22 +266,23 @@ export async function postStockInTx(tx: Tx, ctx: Ctx, input: StockInInput, opts:
       location: line.location,
       type: data.consignment ? 'consignment_receipt' : 'stock_in',
       qtyDelta: line.qty,
-      unitCostVnd: line.costVnd,
-      // Consignment stock carries no cost until settled (TDD §4.2).
-      affectsCost: !data.consignment,
+      unitCostVnd: costVnd,
+      // Consignment stock carries no cost until settled (TDD §4.2); a line without a cost keeps the average (FR-PUR-03).
+      affectsCost: !data.consignment && costGiven,
       refType: 'stock_in',
       refId: entry!.id,
       note: entryNo,
     });
-    const marginFlag = isMarginTooLow(netOfVat(vnd(line.sellingPriceVnd), vatBp), vnd(line.costVnd), cfg['purchasing.min_margin_bp']);
+    // Only a cost given on the stock-in is checked against the margin (FR-PUR-05).
+    const marginFlag = costGiven && isMarginTooLow(netOfVat(vnd(sellingPriceVnd), vatBp), vnd(costVnd), cfg['purchasing.min_margin_bp']);
     const [sil] = await tx
       .insert(schema.stockInLine)
       .values({
         entryId: entry!.id,
         variantId,
         qty: line.qty,
-        unitCostVnd: line.costVnd,
-        newPriceVnd: priceChanged || createdProduct ? line.sellingPriceVnd : null,
+        unitCostVnd: costVnd,
+        newPriceVnd: priceChanged || createdProduct ? sellingPriceVnd : null,
         createdProduct,
         marginFlag,
       })

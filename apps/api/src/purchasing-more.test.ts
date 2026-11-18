@@ -24,7 +24,7 @@ beforeAll(async () => {
   cat = (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { i18n: { en: { name: 'Stationery' } } } })).body.id;
   supplierId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Thiên Long', phone: '0900000000' } })).body.id;
   const mk = async (sku: string, price: number, qty: number, minStock: number | null = null) => {
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
+    const r = await h.newProduct({
       cookie: owner,
       body: {
         supplierId,
@@ -73,7 +73,7 @@ describe('bundles (FR-CAT-12)', () => {
     expect(set.body).toMatchObject({ available: 30 });
     const list = (await h.call('GET', '/api/v1/catalog/items?q=combo', { cookie: cashier })).body.items[0];
     expect(list).toMatchObject({ sku: 'COMBO-01', available: 30 });
-    const stockIn = await h.call('POST', '/api/v1/purchasing/stock-in/existing', { cookie: warehouse, body: { line: { variantId: bundle, costVnd: 1, sellingPriceVnd: 28000, qty: 1 } } });
+    const stockIn = await h.stockInOne({ cookie: warehouse, body: { line: { variantId: bundle, costVnd: 1, sellingPriceVnd: 28000, qty: 1 } } });
     expect(stockIn.body.error.code).toBe('bundle_has_no_stock');
   });
 
@@ -88,7 +88,7 @@ describe('bundles (FR-CAT-12)', () => {
 describe('stock-in without supplier orders (FR-PUR-07 removed)', () => {
   it('adds stock directly; the supplier-order endpoints are gone', async () => {
     for (const qty of [8, 12]) {
-      const r = await h.call('POST', '/api/v1/purchasing/stock-in/existing', { cookie: warehouse, body: { line: { variantId: notebook, costVnd: 10000, sellingPriceVnd: 20000, qty } } });
+      const r = await h.stockInOne({ cookie: warehouse, body: { line: { variantId: notebook, costVnd: 10000, sellingPriceVnd: 20000, qty } } });
       expect(r.status, JSON.stringify(r.body)).toBe(201);
     }
     expect((await h.call('GET', '/api/v1/purchasing/orders', { cookie: warehouse })).status).toBe(404);
@@ -152,12 +152,12 @@ describe('consignment deadline alerts (FR-PUR-13)', () => {
   it('notifies payables holders once per lot near its deadline', async () => {
     const consignor = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Kim Đồng', phone: '0900000000', isConsignor: true } })).body.id;
     const deadline = new Date(h.clock.now().getTime() + 3 * 86_400_000).toISOString();
-    await h.call('POST', '/api/v1/purchasing/stock-in/existing', {
+    await h.stockInOne({
       cookie: owner,
       body: { supplierId: consignor, consignment: true, consignmentDeadline: deadline, line: { variantId: pen, costVnd: 3000, sellingPriceVnd: 6000, qty: 10 } },
     });
     const far = new Date(h.clock.now().getTime() + 30 * 86_400_000).toISOString();
-    await h.call('POST', '/api/v1/purchasing/stock-in/existing', {
+    await h.stockInOne({
       cookie: owner,
       body: { supplierId: consignor, consignment: true, consignmentDeadline: far, line: { variantId: notebook, costVnd: 10000, sellingPriceVnd: 20000, qty: 10 } },
     });

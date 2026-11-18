@@ -23,7 +23,7 @@ beforeAll(async () => {
   await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'Phương Nam', phone: '0900000000' } });
   await h.call('POST', '/api/v1/catalog/publishers', { cookie: owner, body: { i18n: { en: { name: 'NXB Trẻ' } } } });
   const img = await upload(owner, PNG, 'image/png');
-  const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
+  const r = await h.newProduct({
     cookie: owner,
     body: {
       supplierId: (await h.call('GET', '/api/v1/purchasing/suppliers', { cookie: owner })).body.items[0].id,
@@ -164,17 +164,21 @@ describe('files (TDD §4.12)', () => {
     expect((await raw('POST', '/api/v1/files?purpose=image', warehouse, new Uint8Array([1, 2, 3, 4]), 'image/png')).status).toBe(400);
   });
 
-  it('the manual stock-in form still requires an image (FR-PUR-02)', async () => {
+  it('the stock-in API takes existing products only: new products come from Thêm sản phẩm mới (FR-PUR-02, FR-PUR-03)', async () => {
     const cat = (await h.call('GET', '/api/v1/catalog/categories', { cookie: owner })).body.items[0].id;
     const supplierId = (await h.call('GET', '/api/v1/purchasing/suppliers', { cookie: owner })).body.items[0].id;
-    const r = await h.call('POST', '/api/v1/purchasing/stock-in/new-product', {
+    const r = await h.call('POST', '/api/v1/purchasing/stock-in', {
       cookie: warehouse,
       body: {
         supplierId,
-        line: { item: { kind: 'book', i18n: { en: { title: 'No image', description: 'x' } }, categoryIds: [cat] }, variant: { sku: 'NOIMG-1', weightG: 1, vatBp: 0 }, costVnd: 1, sellingPriceVnd: 2, qty: 1 },
+        lines: [{ kind: 'new', item: { kind: 'book', i18n: { en: { title: 'New book', description: 'x' } }, categoryIds: [cat] }, variant: { sku: 'NEW-1', weightG: 1, vatBp: 0 }, costVnd: 1, sellingPriceVnd: 2, qty: 1 }],
       },
     });
-    expect(r.body.error.code).toBe('image_required');
+    expect(r.status).toBe(400);
+    expect((await h.t.sql`select count(*)::int as n from catalog.item_variant where sku = 'NEW-1'`)[0]!.n).toBe(0);
+    // The old one-line endpoints are gone.
+    expect((await h.call('POST', '/api/v1/purchasing/stock-in/new-product', { cookie: warehouse, body: {} })).status).toBe(404);
+    expect((await h.call('POST', '/api/v1/purchasing/stock-in/existing', { cookie: warehouse, body: {} })).status).toBe(404);
   });
 });
 
