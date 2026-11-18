@@ -1,7 +1,7 @@
 import { ORDER_SOURCES, type ManualDiscount } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { ArrowLeft, Calculator, CheckCircle, Minus, MoreHorizontal, Package, PackageCheck, Plus, Truck, Undo2, X, XCircle } from 'lucide-react';
+import { Calculator, CheckCircle, Minus, MoreHorizontal, Package, PackageCheck, Plus, Truck, Undo2, X, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useDebounced, useListParam, useParam, type Column } from '../components/data';
@@ -374,11 +374,7 @@ export function OrderNewPage() {
   return (
     <div className="pb-20">
       <PageHeader
-        breadcrumb={
-          <Link to="/orders" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Giao hàng
-          </Link>
-        }
+        back={{ to: '/orders', label: 'Giao hàng' }}
         title="Tạo đơn giao"
       />
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -754,11 +750,7 @@ export function OrderDetailPage() {
   return (
     <>
       <PageHeader
-        breadcrumb={
-          <Link to={onOrders ? '/sales' : '/orders'} className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> {onOrders ? 'Đơn hàng' : 'Giao hàng'}
-          </Link>
-        }
+        back={{ to: onOrders ? '/sales' : '/orders', label: onOrders ? 'Đơn hàng' : 'Giao hàng' }}
         title={o.docNo}
         actions={primary}
         menu={works && (cancellable || returnable || o.status === 'return_requested') && <Button variant="ghost" icon={MoreHorizontal} aria-label="Thao tác khác" onClick={() => setDialog('menu')} />}

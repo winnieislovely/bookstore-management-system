@@ -1,7 +1,7 @@
 import { barcodeSvg, BORROW_BLOCK_TEXT, cutterNumber, deweyCategory, discountedLoanFees, dueAfter, escapeXml, normalizeDewey, vietnameseNaturalOrder, type BorrowBlock, type LoanDiscount } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeft, ArrowLeftRight, BookmarkCheck, CheckCircle2, ChevronRight, Library, Pencil, Phone, Plus, Printer, ScanBarcode, Search, User, X } from 'lucide-react';
+import { AlertOctagon, ArrowLeftRight, BookmarkCheck, CheckCircle2, ChevronRight, Library, Pencil, Phone, Plus, Printer, ScanBarcode, Search, X } from 'lucide-react';
 import { useId, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, SearchBox, SelectField, TextArea, TimeFilter, errText, timeDays, timeLabel, toast, useDebounced, useParam, type Column } from '../components/data';
@@ -1024,11 +1024,7 @@ export function LibrarySlipPage() {
     <>
       <PageHeader
         title={s.docNo ? `Phiếu mượn ${s.docNo}` : 'Phiếu mượn'}
-        breadcrumb={
-          <Link to="/library" className="hover:underline">
-            Mượn / trả
-          </Link>
-        }
+        back={{ to: '/library', label: 'Mượn / trả' }}
       />
         <div className="flex flex-col gap-4 text-sm">
           <Card title="Thông tin phiếu">
@@ -1717,11 +1713,7 @@ export function LibraryTitlePage() {
     <>
       <PageHeader
         title={d.title}
-        breadcrumb={
-          <Link to="/library/catalog" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Quản lý thư viện
-          </Link>
-        }
+        back={{ to: '/library/catalog', label: 'Quản lý thư viện' }}
         // Icon-only “Sửa” on the title row, like the other record pages (Design §12.3, §13.8).
         menu={manage && <Button variant="ghost" icon={Pencil} aria-label="Sửa" title="Sửa" onClick={() => setDialog('edit')} />}
         subtitle={

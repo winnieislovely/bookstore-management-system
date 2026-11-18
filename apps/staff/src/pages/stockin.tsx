@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ArrowLeft, BookOpen, ChevronDown, Minus, Package, Plus, ScanBarcode } from 'lucide-react';
+import { BookOpen, ChevronDown, Minus, Package, PackageOpen, Plus, ScanBarcode } from 'lucide-react';
 import { useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { ConfirmDialog, toast } from '../components/data';
 import { hitTitle, ProductSearch, type ProductHit } from '../components/product-search';
 import { ScanSession, type ScanOutcome } from '../components/scanSession';
-import { Button, ErrorState, Field, InlineAlert, Skeleton } from '../components/ui';
+import { Dialog } from '../pos/widgets';
+import { Button, ErrorState, Field, InlineAlert, PageHeader, Skeleton } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
 import { formatNumber } from '../lib/format';
 import { can, useMe } from '../lib/session';
@@ -113,6 +114,8 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
   const [deadline, setDeadline] = useState('');
   const [lines, setLines] = useState<Line[]>(() => initial.map((p) => lineOf(p, p.variantId)));
   const [open, setOpen] = useState<Set<string>>(new Set());
+  // Phones choose the supplier in a dialog when confirming (Design §12.4).
+  const [askSupplier, setAskSupplier] = useState(false);
   // A row whose quantity was stepped below 1: asked before it is removed.
   const [removing, setRemoving] = useState<Line | null>(null);
   // The last scanned code that matches no product: a new product, refused (FR-PUR-03).
@@ -188,6 +191,7 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
       };
       const r = await post<{ entryNo: string; lines: { marginFlag: boolean; priceChanged: boolean }[] }>('/api/v1/purchasing/stock-in', body);
       setResult(r);
+      setAskSupplier(false);
       // The Stock list, a product's stock page and the stock value read these.
       for (const key of ['stock-list', 'item', 'movements', 'valuation']) void qc.invalidateQueries({ queryKey: [key] });
       toast.success(`Đã nhập kho phiếu ${r.entryNo}.`);
@@ -209,26 +213,12 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
     if (window.location.search) navigate('/stock/in', { replace: true });
   };
 
-  // One-row header (Design §12.4): a back arrow in the title colour and a heading-size title, centred on
-  // each other; the arrow's left edge is level with the content below.
-  const header = (
-    // The 40 px arrow target sits 8 px (6 px from sm) below the title line, so the title is 16 px above the supplier.
-    <div className="mb-2 flex items-center gap-1 sm:mb-2.5">
-      <Link
-        to={back.to}
-        aria-label="Quay lại"
-        title={`Quay lại ${back.label}`}
-        className="-ml-2.5 inline-flex size-10 shrink-0 items-center justify-center rounded-full text-navy-700 hover:bg-navy-50"
-      >
-        <ArrowLeft size={20} aria-hidden />
-      </Link>
-      <h1 className="min-w-0 text-base leading-6 font-semibold text-navy-700 sm:text-xl sm:leading-7">Nhập thêm hàng</h1>
-    </div>
-  );
+  // The shared header of a page opened from another page: back arrow and title on one line (Design §6.3).
+  const header = <PageHeader back={back} title="Nhập thêm hàng" />;
 
   if (result)
     return (
-      <div className="max-w-[720px]">
+      <div>
         {header}
         <section className="flex flex-col gap-3" aria-labelledby="stockin-done">
           <h2 id="stockin-done" className="text-base font-semibold text-ink-900">
@@ -249,42 +239,46 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
       </div>
     );
 
-  return (
-    <div className="max-w-[720px] pb-20">
-      {header}
-      {/* Lean layout (Design §12.4): 16 px under the title, 12 px between the supplier, the search and the rows. */}
-      <div className="flex flex-col gap-3">
-        {/* No label above: the select reads “Nhà cung cấp” until one is chosen; the name stays for screen readers. */}
-        <select
-          aria-label="Nhà cung cấp"
-          className={clsx('h-12 w-full rounded-md border border-paper-500 bg-white px-3 text-base focus:border-navy-700', supplierId ? 'text-ink-900' : 'text-ink-500')}
-          value={supplierId}
-          onChange={(e) => setSupplierId(e.target.value)}
-        >
-          <option value="">Nhà cung cấp</option>
-          {suppliers.data?.items.map((s) => (
-            <option key={s.id} value={s.id} className="text-ink-900">
-              {s.name}
-            </option>
-          ))}
-        </select>
-        {supplier?.isConsignor && (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="inline-flex items-center gap-2 text-sm sm:col-span-2">
-              <input type="checkbox" className="size-5" checked={consignment} onChange={(e) => setConsignment(e.target.checked)} />
-              Hàng ký gửi
-            </label>
-            {isConsignment && (
-              <>
-                <Field label="Chiết khấu thỏa thuận" suffix="%" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} />
-                <Field label="Hạn đối soát / trả hàng" type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
-              </>
-            )}
-          </div>
-        )}
+  // No label above: the select reads “Nhà cung cấp” until one is chosen; the name stays for screen readers.
+  const supplierSelect = (
+    <select
+      aria-label="Nhà cung cấp"
+      className={clsx('h-12 w-full rounded-md border border-paper-500 bg-white px-3 text-base focus:border-navy-700', supplierId ? 'text-ink-900' : 'text-ink-500')}
+      value={supplierId}
+      onChange={(e) => setSupplierId(e.target.value)}
+    >
+      <option value="">Nhà cung cấp</option>
+      {suppliers.data?.items.map((s) => (
+        <option key={s.id} value={s.id} className="text-ink-900">
+          {s.name}
+        </option>
+      ))}
+    </select>
+  );
+  const consignmentFields = supplier?.isConsignor && (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <label className="inline-flex items-center gap-2 text-sm sm:col-span-2">
+        <input type="checkbox" className="size-5" checked={consignment} onChange={(e) => setConsignment(e.target.checked)} />
+        Hàng ký gửi
+      </label>
+      {isConsignment && (
+        <>
+          <Field label="Chiết khấu thỏa thuận" suffix="%" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+          <Field label="Hạn đối soát / trả hàng" type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+        </>
+      )}
+    </div>
+  );
+  /** Phones pick the supplier in a dialog first; from sm it is already on the search row (Design §12.4). */
+  const confirm = () => (window.matchMedia('(min-width: 640px)').matches ? void submit() : setAskSupplier(true));
 
+  return (
+    <div className="pb-20">
+      {header}
+      {/* Lean layout (Design §12.4): the search row 16 px under the title, the rows 12 px under it. */}
+      <div className="flex flex-col gap-3">
         {/* Products are scanned or searched one at a time; only existing products – new ones are created
-            on “Thêm sản phẩm mới” (Design §12.4). */}
+            on “Thêm sản phẩm mới” (Design §12.4). From sm the supplier sits at the right of this row. */}
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
             <ProductSearch autoFocus placeholder="Nhập SKU/tên sản phẩm" onPick={(h) => void addHit(h)} onUnknownCode={setUnknown} />
@@ -298,25 +292,38 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
           >
             <ScanBarcode size={24} aria-hidden />
           </button>
+          <div className="hidden w-60 shrink-0 sm:block">{supplierSelect}</div>
         </div>
+        {consignmentFields && <div className="hidden sm:block">{consignmentFields}</div>}
         {unknown && <InlineAlert tone="warning">Mã {unknown} chưa có trong danh mục. Đây là sản phẩm mới – hãy để riêng và tạo ở trang Thêm sản phẩm mới.</InlineAlert>}
 
-        {!lines.length && <p className="text-sm text-ink-500">Chưa có sản phẩm. Quét mã hoặc tìm sản phẩm để thêm vào phiếu nhập.</p>}
+        {/* Empty state (Design §12.4): icon and one line only, centred on the screen. */}
+        {!lines.length && (
+          <div className="flex min-h-[calc(100dvh-22.5rem)] flex-col items-center justify-center gap-3 text-center" role="status">
+            <PackageOpen size={48} className="text-ink-300" aria-hidden />
+            <p className="text-ink-500">Chưa có sản phẩm nào được chọn</p>
+          </div>
+        )}
         {lines.length > 0 && (
-          // Rows follow the POS cart line, nothing cut off; tapping a row opens its prices (Design §12.4).
-          <ul className="flex flex-col gap-2" aria-label="Sản phẩm">
-            {lines.map((l) => (
-              <StockInRow
-                key={l.key}
-                line={l}
-                open={open.has(l.key)}
-                showCost={showCost}
-                onToggle={() => toggle(l.key)}
-                onChange={(patch) => update(l.key, patch)}
-                onRemoveAsk={() => setRemoving(l)}
-              />
-            ))}
-          </ul>
+          // One box “Sản phẩm đã chọn”, one column on every screen; rows follow the POS cart line, split by dividers (Design §12.4).
+          <section className="rounded-md border border-paper-300" aria-labelledby="stockin-selected">
+            <h2 id="stockin-selected" className="border-b border-paper-300 px-3 py-3 text-sm font-semibold text-ink-900">
+              Sản phẩm đã chọn
+            </h2>
+            <ul className="divide-y divide-paper-300">
+              {lines.map((l) => (
+                <StockInRow
+                  key={l.key}
+                  line={l}
+                  open={open.has(l.key)}
+                  showCost={showCost}
+                  onToggle={() => toggle(l.key)}
+                  onChange={(patch) => update(l.key, patch)}
+                  onRemoveAsk={() => setRemoving(l)}
+                />
+              ))}
+            </ul>
+          </section>
         )}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       </div>
@@ -337,10 +344,34 @@ function StockInForm({ initial, back }: { initial: LineSource[]; back: { to: str
         <Button variant="secondary" className="sm:w-48" onClick={() => navigate(back.to)}>
           Hủy
         </Button>
-        <Button variant="primary" className="sm:w-48" loading={busy} disabled={!lines.length} onClick={submit}>
+        <Button variant="primary" className="sm:w-48" loading={busy} disabled={!lines.length} onClick={confirm}>
           Xác nhận nhập hàng
         </Button>
       </div>
+      {/* Phones: the supplier is chosen here, when confirming; it stays optional (SRS FR-PUR-04). */}
+      {askSupplier && (
+        <Dialog
+          title="Chọn nhà cung cấp"
+          size="sm"
+          onClose={() => setAskSupplier(false)}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setAskSupplier(false)}>
+                Quay lại
+              </Button>
+              <Button variant="primary" loading={busy} onClick={() => void submit()}>
+                Xác nhận nhập hàng
+              </Button>
+            </>
+          }
+        >
+          <div className="flex flex-col gap-3">
+            {supplierSelect}
+            {consignmentFields}
+            {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+          </div>
+        </Dialog>
+      )}
     </div>
   );
 }
@@ -369,7 +400,7 @@ function StockInRow({
   const pricesId = `prices-${l.key}`;
   const lowMargin = showCost && digits(l.price) > 0 && l.cost.trim() !== '' && digits(l.cost) >= digits(l.price);
   return (
-    <li className="rounded-md border border-paper-300 p-3">
+    <li className="p-3">
       <div className="flex items-start gap-3">
         <button type="button" className="shrink-0" onClick={onToggle} aria-expanded={open} aria-controls={pricesId} aria-label={`Giá của ${l.title}`}>
           <LineThumb line={l} />

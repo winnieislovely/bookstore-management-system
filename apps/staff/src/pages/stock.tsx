@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, AlertTriangle, ArrowLeft, BookOpen, Boxes, FileSpreadsheet, Package, PackagePlus, Search, SlidersHorizontal } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, BookOpen, Boxes, FileSpreadsheet, Package, PackagePlus, Search, SlidersHorizontal } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ApprovalPrompt, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectionBar, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
@@ -291,11 +291,7 @@ export function StockItemPage() {
   return (
     <>
       <PageHeader
-        breadcrumb={
-          <Link to="/stock" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Tồn kho
-          </Link>
-        }
+        back={{ to: '/stock', label: 'Tồn kho' }}
         title={title}
         actions={
           <>

@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ArrowLeft, CheckCircle2, ChevronDown, ClipboardList, Download, MoreVertical, Plus, ScanBarcode, Send, Upload, XCircle } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ClipboardList, Download, MoreVertical, Plus, ScanBarcode, Send, Upload, XCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, FilterMenu, SearchBox, TimeFilter, errText, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Card, ErrorState, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
@@ -336,11 +336,7 @@ export function LibraryCountDetailPage() {
   return (
     <>
       <PageHeader
-        breadcrumb={
-          <Link to="/library/counts" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Kiểm kê thư viện
-          </Link>
-        }
+        back={{ to: '/library/counts', label: 'Kiểm kê thư viện' }}
         title={x.docNo}
         // Gửi duyệt, Duyệt and Hủy phiếu in a ⋮ menu on the title row (Design §13.8).
         menu={(open || x.status === 'submitted') && <Button variant="ghost" icon={MoreVertical} aria-label="Thao tác" title="Thao tác" onClick={() => setMenu(true)} />}

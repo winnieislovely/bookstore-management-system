@@ -1,12 +1,12 @@
 import { VAT_RATES_BP } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ArrowLeft, ImagePlus, Plus } from 'lucide-react';
+import { ImagePlus, Plus } from 'lucide-react';
 import { useCallback, useId, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { BookLookup, type BookResult } from '../components/bookLookup';
 import { SelectField, TextArea, toast } from '../components/data';
-import { Button, Card, Field, InlineAlert, PageHeader, StatusChip } from '../components/ui';
+import { Button, Card, Field, InlineAlert, PageHeader } from '../components/ui';
 import { get, post, upload } from '../lib/api';
 import { formatNumber, formatVnd } from '../lib/format';
 import { categoryOptions, nameOf, type Category, type Named } from './products';
@@ -179,11 +179,7 @@ export function ProductNewPage() {
   return (
     <div className="max-w-[720px] pb-20">
       <PageHeader
-        breadcrumb={
-          <Link to="/products" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Sản phẩm
-          </Link>
-        }
+        back={{ to: '/products', label: 'Sản phẩm' }}
         title="Thêm sản phẩm mới"
       />
       <div className="flex flex-col gap-6">

@@ -1,6 +1,7 @@
 import { clsx } from 'clsx';
-import { AlertOctagon, AlertTriangle, CheckCircle2, Info, Loader2, Lock, type LucideIcon } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, ArrowLeft, CheckCircle2, Info, Loader2, Lock, type LucideIcon } from 'lucide-react';
 import { forwardRef, useId, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react';
+import { Link } from 'react-router';
 import { ApiError } from '../lib/api';
 import { t } from '../lib/i18n';
 
@@ -197,15 +198,42 @@ export function CountBadge({ count, tone = 'default' }: { count: number; tone?: 
 // ---------------------------------------------------------------------------------------------
 // Page header, empty, error and loading states (§6.3, §10.12)
 
+/** Where a page opened from another page goes back to (Design §6.3 page header). */
+export interface BackTo {
+  to: string;
+  /** The page it goes back to, for the tooltip. */
+  label: string;
+}
+
 /** Page header (Design §6.3, §12.3). `menu` is the overflow ⋯ button: on the title row on phones, last of the actions on sm+. */
 /** `subtitle` is a short line under the title (e.g. a key figure). */
-export function PageHeader({ title, actions, breadcrumb, menu, subtitle }: { title: string; actions?: ReactNode; breadcrumb?: ReactNode; menu?: ReactNode; subtitle?: ReactNode }) {
+/**
+ * With `back` – a page opened from another page – the header is a back arrow and a heading-size title
+ * on one line, with no breadcrumb (Design §6.3); without it, the display-size title of a top-level page.
+ */
+export function PageHeader({ title, actions, breadcrumb, menu, subtitle, back }: { title: string; actions?: ReactNode; breadcrumb?: ReactNode; menu?: ReactNode; subtitle?: ReactNode; back?: BackTo }) {
   return (
-    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div>
-        {breadcrumb && <div className="mb-1 text-[13px] text-ink-500">{breadcrumb}</div>}
+    <div className={clsx('flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between', back ? 'mb-4' : 'mb-6')}>
+      <div className="min-w-0">
+        {breadcrumb && !back && <div className="mb-1 text-[13px] text-ink-500">{breadcrumb}</div>}
         <div className="flex items-center justify-between gap-2">
-          <h1 className="min-w-0 text-[22px] leading-[30px] font-semibold text-navy-700 sm:text-[28px] sm:leading-9">{title}</h1>
+          {back ? (
+            // The 40 px arrow target is centred on the title's first line (24 px, 28 px from sm); the arrow
+            // itself is level with the content below.
+            <div className="flex min-w-0 items-start gap-1">
+              <Link
+                to={back.to}
+                aria-label="Quay lại"
+                title={`Quay lại ${back.label}`}
+                className="-my-2 -ml-2.5 inline-flex size-10 shrink-0 items-center justify-center rounded-full text-navy-700 hover:bg-navy-50 sm:-my-1.5"
+              >
+                <ArrowLeft size={20} aria-hidden />
+              </Link>
+              <h1 className="min-w-0 text-base leading-6 font-semibold break-words text-navy-700 sm:text-xl sm:leading-7">{title}</h1>
+            </div>
+          ) : (
+            <h1 className="min-w-0 text-[22px] leading-[30px] font-semibold text-navy-700 sm:text-[28px] sm:leading-9">{title}</h1>
+          )}
           {menu && <div className="shrink-0 sm:hidden">{menu}</div>}
         </div>
         {subtitle && <div className="mt-1 text-sm text-ink-500">{subtitle}</div>}

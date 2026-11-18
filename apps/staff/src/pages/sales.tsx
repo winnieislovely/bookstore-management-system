@@ -1,7 +1,7 @@
 import { ORDER_SOURCES } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { AlertOctagon, ArrowLeft, Clock, FileCheck, FileText, MoreHorizontal, Printer, Receipt, RotateCcw, Send, XCircle } from 'lucide-react';
+import { AlertOctagon, Clock, FileCheck, FileText, MoreHorizontal, Printer, Receipt, RotateCcw, Send, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ApprovalPrompt, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
@@ -224,11 +224,7 @@ export function SaleDetailPage() {
   return (
     <>
       <PageHeader
-        breadcrumb={
-          <Link to="/sales" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Đơn bán
-          </Link>
-        }
+        back={{ to: '/sales', label: 'Đơn bán' }}
         title={s.docNo}
         // All sale actions live in the ⋯ menu on every screen size (Design §12.3).
         menu={(canPrint || canReturn || canVoid) && <Button variant="ghost" icon={MoreHorizontal} aria-label="Thao tác khác" onClick={() => setDialog('menu')} />}

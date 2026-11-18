@@ -1,6 +1,6 @@
 import { ORDER_SOURCE } from '../components/order-ui';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Download, GitMerge, MoreHorizontal, Pencil, Plus, Trash2, Users } from 'lucide-react';
+import { Download, GitMerge, MoreHorizontal, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, SearchBox, TextArea, toast, useListParam, useParam, type Column } from '../components/data';
@@ -260,11 +260,7 @@ export function CustomerDetailPage() {
   return (
     <>
       <PageHeader
-        breadcrumb={
-          <Link to="/customers" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Khách hàng
-          </Link>
-        }
+        back={{ to: '/customers', label: 'Khách hàng' }}
         title={x.name}
         // Icon-only “Sửa” directly beside ⋯ on the title row (Design §12.3).
         menu={

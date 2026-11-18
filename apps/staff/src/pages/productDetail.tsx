@@ -1,9 +1,9 @@
 import { VAT_RATES_BP } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ArrowLeft, Globe, History, ImageOff, ImagePlus, Package, Pencil, Printer, Share2, Trash2 } from 'lucide-react';
+import { Globe, History, ImageOff, ImagePlus, Package, Pencil, Printer, Share2, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { useParams } from 'react-router';
 import { ConfirmDialog, Facts, SelectField, TextArea, toast } from '../components/data';
 import { hitTitle, ProductSearch } from '../components/product-search';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip } from '../components/ui';
@@ -76,11 +76,7 @@ export function ProductDetailPage() {
   return (
     <>
       <PageHeader
-        breadcrumb={
-          <Link to="/products" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Sản phẩm
-          </Link>
-        }
+        back={{ to: '/products', label: 'Sản phẩm' }}
         title={title}
         actions={
           <>

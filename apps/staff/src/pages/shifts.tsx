@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { AlertOctagon, ArrowLeft, Wallet } from 'lucide-react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { AlertOctagon, Wallet } from 'lucide-react';
+import { useNavigate, useParams } from 'react-router';
 import { DataTable, Facts, FilterMenu, SearchBox, TimeFilter, timeLabel, timeRange, useListParam, useParam, type Column } from '../components/data';
 import { Card, ErrorState, PageHeader, Skeleton, StatusChip } from '../components/ui';
 import { get } from '../lib/api';
@@ -97,11 +97,7 @@ export function ShiftDetailPage() {
   return (
     <>
       <PageHeader
-        breadcrumb={
-          <Link to="/shifts" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Ca làm
-          </Link>
-        }
+        back={{ to: '/shifts', label: 'Ca làm' }}
         title={`Ca #${s.shiftNo}`}
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">

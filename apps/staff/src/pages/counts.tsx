@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ArrowLeft, CheckCircle2, ClipboardList, Download, Plus, Send, Upload, XCircle } from 'lucide-react';
+import { CheckCircle2, ClipboardList, Download, Plus, Send, Upload, XCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, FilterMenu, SearchBox, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
 import { Button, Card, ErrorState, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
@@ -230,11 +230,7 @@ export function CountDetailPage() {
   return (
     <>
       <PageHeader
-        breadcrumb={
-          <Link to="/counts" className="inline-flex items-center gap-1 hover:underline">
-            <ArrowLeft size={16} aria-hidden /> Kiểm kho
-          </Link>
-        }
+        back={{ to: '/counts', label: 'Kiểm kho' }}
         title={x.docNo}
         actions={
           <>
