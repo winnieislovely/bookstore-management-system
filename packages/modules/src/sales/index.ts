@@ -580,8 +580,11 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
     const approvedBy = await useApprovals(tx, ctx, priced, data.approvals);
     const totalVnd = priced.totalVnd;
 
-    // Payments: sum equals the total, unless this is a deposit sale (TDD §4.4). A pre-order deposit counts as paid.
-    const paid = data.payments.reduce((a, p) => a + p.amountVnd, 0) + (pre?.depositVnd ?? 0);
+    // Payments: sum equals the total, unless this is a deposit sale (TDD §4.4). A pre-order deposit counts as paid;
+    // a deposit above the price at collection is handed back in cash for the difference (FR-POS-09).
+    const depositRefundVnd = pre && data.payments.length === 0 && pre.depositVnd > totalVnd ? pre.depositVnd - totalVnd : 0;
+    const depositUsedVnd = (pre?.depositVnd ?? 0) - depositRefundVnd;
+    const paid = data.payments.reduce((a, p) => a + p.amountVnd, 0) + depositUsedVnd;
     if (data.isDeposit ? paid <= 0 || paid > totalVnd : paid !== totalVnd) {
       throw new AppError(422, 'payment_mismatch', `Tổng thanh toán ${paid} ₫ chưa khớp với số phải trả ${totalVnd} ₫.`, { paidVnd: paid, totalVnd });
     }
@@ -661,7 +664,10 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
     }
 
     if (pre) {
-      if (pre.depositVnd > 0) await tx.insert(schema.salePayment).values({ saleId, method: 'deposit', amountVnd: pre.depositVnd, ref: pre.docNo });
+      if (depositUsedVnd > 0) await tx.insert(schema.salePayment).values({ saleId, method: 'deposit', amountVnd: depositUsedVnd, ref: pre.docNo });
+      if (depositRefundVnd > 0) {
+        await tx.insert(schema.cashMovement).values({ shiftId: data.shiftId, direction: 'out', amountVnd: depositRefundVnd, reason: `Hoàn chênh cọc ${pre.docNo}`, createdBy: actor.userId, at: now });
+      }
       await tx.update(schema.preorder).set({ status: 'collected', saleId }).where(eq(schema.preorder.id, pre.id));
     }
 
@@ -709,6 +715,7 @@ export async function completeSale(ctx: Ctx, input: CompleteSaleInput, idempoten
       discountVnd: priced.discountVnd,
       vatVnd: priced.vatVnd,
       changeVnd: tendered,
+      depositRefundVnd,
       pointsEarned,
       pointsRedeemed: priced.redeemPoints,
       einvoiceStatus,

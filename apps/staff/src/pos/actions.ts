@@ -151,6 +151,8 @@ export interface SaleOutcome {
   saleId: string | null;
   totalVnd: number;
   changeVnd: number;
+  /** A pre-order deposit above the price, handed back in cash (FR-POS-09). */
+  depositRefundVnd?: number;
   pointsEarned: number | null;
   offline: boolean;
   printSlip: boolean;
@@ -159,9 +161,9 @@ export interface SaleOutcome {
 export async function completeSale(input: SaleInput, idempotencyKey: string): Promise<SaleOutcome> {
   const changeVnd = input.payments.reduce((a, p) => a + (p.method === 'cash' ? p.tenderedVnd - p.amountVnd : 0), 0);
   const cashVnd = input.payments.reduce((a, p) => a + (p.method === 'cash' ? p.amountVnd : 0), 0);
-  const tallyCash = async () => {
+  const tallyCash = async (refundVnd = 0) => {
     const s = await getShift();
-    if (s) await saveShift({ ...s, cashSalesVnd: s.cashSalesVnd + cashVnd });
+    if (s) await saveShift({ ...s, cashSalesVnd: s.cashSalesVnd + cashVnd - refundVnd });
   };
   if (input.preorderId && !input.shift.serverId) throw new ApiError(0, 'network_error', 'Cần kết nối mạng để nhận hàng đặt trước.');
   if (input.shift.serverId) {
@@ -184,10 +186,10 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
       }).catch(() => {
         throw new ApiError(0, 'network_error', '');
       });
-      const body = (await r.json()) as { docNo: string; id: string; totalVnd: number; pointsEarned: number; printSlip: boolean; error?: { code: string; message: string; details?: unknown } };
+      const body = (await r.json()) as { docNo: string; id: string; totalVnd: number; depositRefundVnd?: number; pointsEarned: number; printSlip: boolean; error?: { code: string; message: string; details?: unknown } };
       if (!r.ok) throw new ApiError(r.status, body.error?.code ?? 'http_error', body.error?.message ?? '', body.error?.details);
-      await tallyCash();
-      return { docNo: body.docNo, saleId: body.id, totalVnd: body.totalVnd, changeVnd, pointsEarned: body.pointsEarned, offline: false, printSlip: body.printSlip };
+      await tallyCash(body.depositRefundVnd ?? 0);
+      return { docNo: body.docNo, saleId: body.id, totalVnd: body.totalVnd, changeVnd, depositRefundVnd: body.depositRefundVnd ?? 0, pointsEarned: body.pointsEarned, offline: false, printSlip: body.printSlip };
     } catch (e) {
       if (input.preorderId && isNetworkError(e)) throw new ApiError(0, 'network_error', 'Cần kết nối mạng để nhận hàng đặt trước.');
       if (!isNetworkError(e) || !(await deviceInfo())) throw e;

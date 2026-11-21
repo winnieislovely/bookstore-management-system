@@ -164,6 +164,34 @@ describe('pre-orders (FR-POS-09, FR-ORD-14, FR-ORD-16, BR-10)', () => {
     await h.call('POST', `/api/v1/promotions/${promo.body.id}/pause`, { cookie: owner });
   });
 
+  it('collects a slip paid in full by its deposit, and hands back the difference when the price fell below it', async () => {
+    await stockIn(other, 2);
+    const hold = async (name: string, phone: string) => {
+      const r = await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name, phone }, lines: [{ variantId: other, qty: 1 }], deposit: { method: 'transfer', amountVnd: 120000 } } });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+      return r.body as { id: string; docNo: string };
+    };
+    const collect = async (slip: { id: string }, phone: string) =>
+      h.call('POST', '/api/v1/pos/sales', { cookie: cashier, body: { shiftId, preorderId: slip.id, customerId: await customerId(phone), lines: [{ lineId: 'a', variantId: other, qty: 1 }], payments: [] } });
+    // Deposit equals the price: nothing more to pay.
+    const full = await hold('Hà', '0911000011');
+    const paidUp = await collect(full, '+84911000011');
+    expect(paidUp.status, JSON.stringify(paidUp.body)).toBe(201);
+    expect(paidUp.body).toMatchObject({ totalVnd: 120000, depositRefundVnd: 0 });
+    // Today's promotion makes it cheaper than the deposit: the difference goes back in cash (FR-POS-09).
+    const over = await hold('Minh', '0911000012');
+    const promo = await h.call('POST', '/api/v1/promotions', { cookie: owner, body: { name: 'Giảm 25% backlist', rule: { type: 'percent', percentBp: 2500, scope: { kind: 'product', variantIds: [other] } }, startsAt: '2026-01-01T00:00:00.000Z' } });
+    expect(promo.status, JSON.stringify(promo.body)).toBe(201);
+    const refunded = await collect(over, '+84911000012');
+    expect(refunded.status, JSON.stringify(refunded.body)).toBe(201);
+    expect(refunded.body).toMatchObject({ totalVnd: 90000, depositRefundVnd: 30000 });
+    const rec = (await h.call('GET', `/api/v1/pos/sales/${refunded.body.id}`, { cookie: cashier })).body;
+    expect(rec.payments).toEqual([expect.objectContaining({ method: 'deposit', amountVnd: 90000, ref: over.docNo })]);
+    const [m] = await h.t.sql`select direction, amount_vnd::int as amount from sales.cash_movement where reason = ${`Hoàn chênh cọc ${over.docNo}`}`;
+    expect(m).toMatchObject({ direction: 'out', amount: 30000 });
+    await h.call('POST', `/api/v1/promotions/${promo.body.id}/pause`, { cookie: owner });
+  });
+
   it('never mixes books on the shelf and books to order on one slip; an order is cancelled with its deposit refunded', async () => {
     const mixed = await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Quang', phone: '0911000004' }, lines: [{ variantId: other, qty: 1 }, { variantId: rare, qty: 1 }] } });
     expect(mixed.body.error.code).toBe('mixed_slip');

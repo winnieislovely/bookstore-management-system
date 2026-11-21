@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Minus, Plus, X } from 'lucide-react';
+import { ChevronDown, Minus, Plus, X } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { ConfirmDialog, Facts, SelectField, TextArea, toast } from '../components/data';
@@ -165,7 +165,8 @@ function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: Ca
   const [cust, setCust] = useState<CustomerChoice>(initialCustomer ? { kind: 'existing', customer: { ...initialCustomer, tierName: null } as never } : null);
   const [items, setItems] = useState<Draft[]>([]);
   const [note, setNote] = useState('');
-  const [withDeposit, setWithDeposit] = useState(false);
+  // Thu cọc box: open or closed; its state reads Có once an amount is entered (Design §12.8).
+  const [depOpen, setDepOpen] = useState<boolean | null>(null);
   const [dep, setDep] = useState<DepositState>({ method: 'cash', amountVnd: null, ref: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -177,7 +178,9 @@ function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: Ca
   const value = items.reduce((a, d) => a + (d.kind === 'product' ? d.hit.priceVnd * d.qty : 0), 0);
   // An order: at least 30 % of its catalogue books, free-text books add nothing (BR-10).
   const minDeposit = hold ? 0 : Math.round((value * 30) / 100);
-  const takeDeposit = hold ? withDeposit : true;
+  // A required deposit (an order) starts open; an optional one (a hold) starts closed.
+  const depositOpen = depOpen ?? !hold;
+  const hasDeposit = (dep.amountVnd ?? 0) > 0;
   const add = (h: ProductHit) =>
     setItems((xs) => (xs.some((x) => x.kind === 'product' && x.hit.variantId === h.variantId) ? xs.map((x) => (x.kind === 'product' && x.hit.variantId === h.variantId ? { ...x, qty: x.qty + 1 } : x)) : [...xs, { kind: 'product', hit: h, qty: 1 }]));
   const setQty = (i: number, qty: number) => setItems((xs) => (qty < 1 ? xs.filter((_, j) => j !== i) : xs.map((x, j) => (j === i ? { ...x, qty } : x))));
@@ -186,13 +189,13 @@ function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: Ca
     if (!cust) return setError('Chọn khách hoặc nhập khách mới.');
     if (!items.length) return setError('Thêm sách khách muốn giữ hoặc đặt.');
     if (!hold && minDeposit > 0 && (dep.amountVnd ?? 0) < minDeposit) return setError(`Tiền cọc tối thiểu ${formatVnd(minDeposit)} (30%).`);
-    if (takeDeposit && dep.amountVnd && dep.method === 'cash' && !shift.data) return setError('Cần một ca đang mở để nhận cọc tiền mặt.');
+    if (dep.amountVnd && dep.method === 'cash' && !shift.data) return setError('Cần một ca đang mở để nhận cọc tiền mặt.');
     setBusy(true);
     try {
       const r = await post<{ docNo: string; status: string; expiresAt: string | null }>('/api/v1/preorders', {
         customer: cust.kind === 'existing' ? { customerId: cust.customer.id } : { name: cust.name.trim(), phone: cust.phone.trim() },
         lines: items.map((d) => (d.kind === 'product' ? { variantId: d.hit.variantId, qty: d.qty } : { title: d.title, qty: d.qty })),
-        ...(takeDeposit && dep.amountVnd ? { deposit: depositBody(dep, shift.data?.id ?? null) } : {}),
+        ...(dep.amountVnd ? { deposit: depositBody(dep, shift.data?.id ?? null) } : {}),
         ...(note.trim() && { note: note.trim() }),
       });
       toast.success(r.status === 'contacted' ? `Đã giữ sách – ${r.docNo}, giữ đến ${formatDateTime(r.expiresAt!)}.` : `Đã lưu ${r.docNo} – Chờ xác nhận.`);
@@ -239,24 +242,37 @@ function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: Ca
           </ul>
         )}
       </div>
-      <TextArea label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} />
       {mixed ? (
         <InlineAlert tone="warning">Một phiếu chỉ gồm sách có sẵn (giữ sách) hoặc sách cần đặt. Bỏ bớt sách rồi tạo từng phiếu riêng.</InlineAlert>
-      ) : items.length > 0 &&
-        (hold ? (
-          <div className="flex flex-col gap-3 rounded-md border border-paper-300 p-3">
-            <label className="flex items-center gap-2 text-sm font-medium">
-              <input type="checkbox" className="size-5" checked={withDeposit} onChange={(e) => setWithDeposit(e.target.checked)} />
-              Thu cọc (không bắt buộc – có cọc thì giữ lâu hơn)
-            </label>
-            {withDeposit && <DepositFields value={dep} onChange={setDep} hint={`Tối đa ${formatVnd(value)}`} />}
+      ) : (
+        items.length > 0 && (
+          <div className="rounded-md border border-paper-300">
+            <button type="button" className="flex min-h-12 w-full items-center gap-2 px-3 text-left text-sm" aria-expanded={depositOpen} onClick={() => setDepOpen(!depositOpen)}>
+              <span className="flex-1 font-medium">
+                Thu cọc{!hold && minDeposit > 0 && <span className="font-normal text-ink-500"> · bắt buộc</span>}
+              </span>
+              <span className={hasDeposit ? 'font-semibold text-success-700' : 'text-ink-500'}>{hasDeposit ? 'Có' : 'Không'}</span>
+              <ChevronDown size={16} className={clsx('text-ink-500 transition-transform', depositOpen && 'rotate-180')} aria-hidden />
+            </button>
+            {depositOpen && (
+              <div className="border-t border-paper-300 p-3">
+                <DepositFields
+                  value={dep}
+                  onChange={setDep}
+                  hint={
+                    hold
+                      ? `Không bắt buộc – có cọc thì giữ lâu hơn. Tối đa ${formatVnd(value)}`
+                      : minDeposit > 0
+                        ? `Tối thiểu ${formatVnd(minDeposit)} (30%)${items.some((d) => d.kind === 'text') ? ' – sách chưa có trong danh mục chưa tính' : ` · trả đủ ${formatVnd(value)}`}`
+                        : 'Sách chưa có trong danh mục: không bắt buộc cọc tối thiểu.'
+                  }
+                />
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="flex flex-col gap-3 rounded-md border border-paper-300 p-3">
-            <p className="text-sm font-medium">Thu cọc</p>
-            <DepositFields value={dep} onChange={setDep} hint={minDeposit > 0 ? `Tối thiểu ${formatVnd(minDeposit)} (30%)${items.some((d) => d.kind === 'text') ? ' – sách chưa có trong danh mục chưa tính' : ` · trả đủ ${formatVnd(value)}`}` : 'Sách chưa có trong danh mục: không bắt buộc cọc tối thiểu.'} />
-          </div>
-        ))}
+        )
+      )}
+      <TextArea label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} />
       {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       <Button variant="primary" size="lg" full loading={busy} disabled={mixed} onClick={save}>
         {hold ? 'Giữ sách' : 'Lưu phiếu'}

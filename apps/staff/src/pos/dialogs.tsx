@@ -113,6 +113,8 @@ export function PaymentSheet({
   const [busy, setBusy] = useState(false);
   const tenderedVnd = Number(tendered || 0);
 
+  // The deposit covers the price: nothing more to pay; above it, the difference goes back in cash (FR-POS-09).
+  const covered = depositVnd > 0 && amount <= 0;
   /** The tender; null while it is not complete (cash short of the amount). */
   const current = (): Payment | null => {
     if (amount <= 0) return null;
@@ -123,11 +125,11 @@ export function PaymentSheet({
 
   const pay = async () => {
     const p = current();
-    if (!p) return;
+    if (!p && !covered) return;
     setBusy(true);
     setError(null);
     try {
-      await onPay([p]);
+      await onPay(p ? [p] : []);
     } catch (e) {
       setError(errText(e));
     } finally {
@@ -140,13 +142,15 @@ export function PaymentSheet({
   return (
     <Dialog title="Phương thức thanh toán" size="lg" onClose={busy ? undefined : onClose}>
       <div className="flex flex-col gap-4">
-        <div>
-          <PaymentMethodPicker value={method} onChange={(m) => { setMethod(m); setError(null); }} disabled={busy} />
-        </div>
+        {!covered && (
+          <div>
+            <PaymentMethodPicker value={method} onChange={(m) => { setMethod(m); setError(null); }} disabled={busy} />
+          </div>
+        )}
         <div>
           <div className="flex items-baseline justify-between gap-3">
             <p className="text-ink-700">Tổng giá trị đơn</p>
-            <p className="text-xl leading-7 font-bold whitespace-nowrap num">{formatVnd(amount)}</p>
+            <p className="text-xl leading-7 font-bold whitespace-nowrap num">{formatVnd(Math.max(0, amount))}</p>
           </div>
           {depositVnd > 0 && (
             <p className="text-right text-[13px] text-ink-500 num">
@@ -154,7 +158,12 @@ export function PaymentSheet({
             </p>
           )}
         </div>
-        {method === 'cash' && (
+        {covered && (
+          <p className={clsx('text-sm font-semibold', amount < 0 ? 'text-warning-700' : 'text-success-700')} role="status">
+            {amount < 0 ? `Trả lại khách ${formatVnd(-amount)} tiền mặt.` : 'Đã trả đủ bằng tiền cọc.'}
+          </p>
+        )}
+        {!covered && method === 'cash' && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-2">
             <p className="text-[13px] font-medium text-ink-700">Khách đưa</p>
@@ -167,10 +176,10 @@ export function PaymentSheet({
           <Keypad onKey={(k) => setTendered((v) => (k === 'del' ? v.slice(0, -1) : (v + k).replace(/^0+/, '').slice(0, 10)))} />
         </div>
         )}
-        {method === 'transfer' && !online && <InlineAlert tone="warning">Ngoại tuyến: khoản chuyển khoản sẽ ở trạng thái “Chưa xác minh” cho đến khi quản lý xác nhận.</InlineAlert>}
+        {!covered && method === 'transfer' && !online && <InlineAlert tone="warning">Ngoại tuyến: khoản chuyển khoản sẽ ở trạng thái “Chưa xác minh” cho đến khi quản lý xác nhận.</InlineAlert>}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
         {/* One full-width “Xác nhận”, no icon; the dialog closes with its ✕ (Design §13.4). */}
-        <Button variant="primary" size="lg" full loading={busy} disabled={!current()} onClick={() => void pay()}>
+        <Button variant="primary" size="lg" full loading={busy} disabled={!current() && !covered} onClick={() => void pay()}>
           Xác nhận
         </Button>
       </div>
@@ -190,6 +199,12 @@ export function SaleDone({ outcome, onNew }: { outcome: SaleOutcome; onNew: () =
         <p className="text-2xl leading-8 font-semibold num" aria-live="polite">
           {outcome.docNo}
         </p>
+        {!!outcome.depositRefundVnd && (
+          <>
+            <p className="text-[13px] text-ink-500">Trả lại khách</p>
+            <p className="text-[28px] leading-9 font-bold whitespace-nowrap text-warning-700 num">{formatVnd(outcome.depositRefundVnd)}</p>
+          </>
+        )}
         {outcome.changeVnd > 0 && (
           <>
             <p className="text-[13px] text-ink-500">Tiền thừa</p>
@@ -338,13 +353,15 @@ export function CloseShiftDialog({ expectedVnd, source, onClose, onSubmit }: { e
 
 export function CustomerDialog({ online, canCreate, onPick, onClose }: { online: boolean; canCreate: boolean; onPick: (c: CartCustomer) => void; onClose: () => void }) {
   const [query, setQuery] = useState('');
-  const [name, setName] = useState('');
+  // A new customer, as in the pre-order form (Design §13.1, §12.8): phone and name.
+  const [fresh, setFresh] = useState<{ phone: string; name: string } | null>(null);
+  const [dupe, setDupe] = useState<CartCustomer | null>(null);
+  const [busy, setBusy] = useState(false);
   // undefined = not searched yet; [] = no match
   const [results, setResults] = useState<CartCustomer[] | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const digits = query.replace(/\D/g, '');
   const byPhone = /^[\d\s+().-]+$/.test(query.trim());
-  const phone = byPhone ? query : '';
   const canSearch = byPhone ? digits.length >= 9 : query.trim().length >= 2;
   // Search as you type (Design §13.1): the matches drop down under the field.
   useEffect(() => {
@@ -367,14 +384,63 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
       clearTimeout(id);
     };
   }, [query, canSearch, byPhone, online]);
+  // The phone typed for a new customer may belong to a known one (BR-16).
+  const freshDigits = fresh ? fresh.phone.replace(/D/g, '') : '';
+  useEffect(() => {
+    setDupe(null);
+    if (freshDigits.length < 9) return;
+    let live = true;
+    const id = setTimeout(() => {
+      findCustomerByPhone(freshDigits, online)
+        .then((c) => live && setDupe(c))
+        .catch(() => undefined);
+    }, 400);
+    return () => {
+      live = false;
+      clearTimeout(id);
+    };
+  }, [freshDigits, online]);
   const create = async () => {
+    if (!fresh) return;
+    const name = fresh.name.trim();
+    setBusy(true);
+    setError(null);
     try {
-      const r = await post<{ id: string }>('/api/v1/customers', { name, phone });
+      const r = await post<{ id: string }>('/api/v1/customers', { name, phone: fresh.phone.trim() });
       onPick({ id: r.id, name, phoneE164: null, tierCode: 'standard', pointsBalance: 0 });
     } catch (e) {
       setError(errText(e));
+    } finally {
+      setBusy(false);
     }
   };
+  const mayCreate = canCreate && online;
+  const open = results !== undefined;
+
+  if (fresh) {
+    return (
+      <Dialog title="Thông tin khách hàng" size="sm" onClose={onClose}>
+        <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Số điện thoại" required inputMode="tel" autoFocus={!fresh.phone} value={fresh.phone} onChange={(e) => setFresh({ ...fresh, phone: e.target.value })} />
+            <Field label="Tên khách" required autoFocus={!!fresh.phone} value={fresh.name} onChange={(e) => setFresh({ ...fresh, name: e.target.value })} />
+          </div>
+          {dupe && (
+            <p className="text-sm text-ink-700">
+              SĐT này thuộc khách <span className="font-semibold">{dupe.name}</span> –{' '}
+              <button type="button" className="font-medium text-navy-700 underline" onClick={() => onPick(dupe)}>
+                Chọn khách này
+              </button>
+            </p>
+          )}
+          {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+          <Button variant="primary" size="lg" full loading={busy} disabled={freshDigits.length < 9 || !fresh.name.trim() || !!dupe} onClick={() => void create()}>
+            Xác nhận
+          </Button>
+        </div>
+      </Dialog>
+    );
+  }
   return (
     <Dialog title="Thông tin khách hàng" size="sm" onClose={onClose}>
       <div className="flex flex-col gap-4">
@@ -385,13 +451,13 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
               autoFocus
               aria-label="Số điện thoại hoặc tên khách hàng"
               placeholder="Nhập SĐT/tên"
-              className={clsx('h-11 w-full border border-paper-500 bg-white pr-3 pl-10 text-base sm:text-sm', results?.length ? 'rounded-t-md' : 'rounded-md')}
+              className={clsx('h-11 w-full border border-paper-500 bg-white pr-3 pl-10 text-base sm:text-sm', open ? 'rounded-t-md' : 'rounded-md')}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && results?.length === 1 && onPick(results[0]!)}
             />
           </div>
-          {!!results?.length && (
+          {open && (
             <ul role="listbox" aria-label="Khách hàng phù hợp" className="flex max-h-72 flex-col divide-y divide-paper-300 overflow-y-auto rounded-b-md border border-t-0 border-paper-500 bg-white shadow-md">
               {results.map((c) => (
                 <li key={c.id} role="option" aria-selected={false}>
@@ -404,23 +470,25 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
                   </button>
                 </li>
               ))}
+              {/* No match: a new customer from the dropdown, no notice box (Design §13.1). */}
+              {results.length === 0 && (
+                <li>
+                  {mayCreate ? (
+                    <button
+                      type="button"
+                      className="flex min-h-12 w-full items-center gap-2 px-4 py-2 text-left text-sm font-medium text-navy-700 hover:bg-navy-50"
+                      onClick={() => setFresh(byPhone ? { phone: query.trim(), name: '' } : { phone: '', name: query.trim() })}
+                    >
+                      <Plus size={16} aria-hidden /> {byPhone ? `Khách mới với SĐT ${query.trim()}` : 'Khách mới'}
+                    </button>
+                  ) : (
+                    <p className="px-4 py-3 text-sm text-ink-500">Không tìm thấy khách hàng{online ? '' : ' trong dữ liệu trên máy'}</p>
+                  )}
+                </li>
+              )}
             </ul>
           )}
         </div>
-        {results?.length === 0 && !byPhone && <InlineAlert tone="warning">Không tìm thấy khách hàng tên “{query.trim()}”{online ? '' : ' trong dữ liệu trên máy'}.</InlineAlert>}
-        {results?.length === 0 &&
-          byPhone &&
-          (canCreate && online ? (
-            <div className="flex flex-col gap-3">
-              <InlineAlert tone="info">Chưa có khách hàng với số này. Tạo khách hàng mới:</InlineAlert>
-              <Field label="Họ tên" required value={name} onChange={(e) => setName(e.target.value)} />
-              <Button variant="secondary" full disabled={!name.trim()} onClick={create}>
-                Tạo khách hàng
-              </Button>
-            </div>
-          ) : (
-            <InlineAlert tone="warning">Không tìm thấy khách hàng{online ? '' : ' trong dữ liệu trên máy'}.</InlineAlert>
-          ))}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       </div>
     </Dialog>

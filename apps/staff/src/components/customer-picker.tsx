@@ -88,7 +88,8 @@ export function CustomerPicker({ value, onChange, newNameLabel = 'Tên khách' }
     onChange(v);
   };
   const items = found.data?.items ?? [];
-  const isPhone = digitsOf(q).length >= 6 && /^[\d\s+.-]+$/.test(q.trim());
+  // Only digits (and phone punctuation) typed: a phone, however short, so “Khách mới” puts it in Số điện thoại (Design §12.8).
+  const isPhone = digitsOf(q).length > 0 && /^[\d\s+().-]+$/.test(q.trim());
   const startNew = () => pick({ kind: 'new', phone: isPhone ? q.trim() : '', name: isPhone ? '' : q.trim() });
   const open = term.length >= 2 && !!found.data;
   return (
