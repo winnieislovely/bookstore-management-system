@@ -12,7 +12,7 @@ import {
   statesOf,
 } from '@bookstore/domain';
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, integer, jsonb, pgSchema, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, index, integer, jsonb, pgSchema, text, uniqueIndex, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { itemVariant } from './catalog.js';
 import { customer } from './crm.js';
 import { appUser } from './platform.js';
@@ -101,6 +101,10 @@ export const webOrder = orders.table(
     couponCode: text(),
     paidAt: ts(),
     paidConfirmedBy: uuid().references(() => appUser.id),
+    /** The pre-order slip this delivery order was created from (FR-ORD-14). */
+    preorderId: uuid().references((): AnyPgColumn => preorder.id),
+    /** That slip's deposit, counted as paid: COD and the transfer are total − deposit. */
+    depositVnd: vndCol().notNull().default(0),
     reviewReasons: text().array().notNull().default(sql`'{}'::text[]`),
     note: text(),
     readAt: ts(),
@@ -294,6 +298,8 @@ export const preorder = orders.table(
     deliveryNote: text(),
     /** The counter sale that collected it (FR-POS-09). */
     saleId: uuid().references(() => sale.id),
+    /** The delivery order created from it when the customer chose Giao hàng (FR-ORD-14). */
+    orderId: uuid().references((): AnyPgColumn => webOrder.id),
     note: text(),
     cancelReason: text(),
     overdueNotifiedAt: ts(),

@@ -111,6 +111,16 @@ describe('pre-orders (FR-POS-09, FR-ORD-14, FR-ORD-16, BR-10)', () => {
     expect((await h.call('POST', `/api/v1/preorders/${first.id}/status`, { cookie: cashier, body: { status: 'ordered' } })).body.status).toBe('ordered');
   });
 
+  it('gives the form the BR-10 settings; a 0 % minimum makes the deposit of an order optional', async () => {
+    expect((await h.call('GET', '/api/v1/preorders/config', { cookie: cashier })).body).toEqual({ depositPct: 30, holdDays: 7, holdDaysNoDeposit: 3 });
+    expect((await h.call('PUT', '/api/v1/admin/settings', { cookie: owner, body: { 'preorder.deposit_pct': 0 } })).status).toBe(204);
+    expect((await h.call('GET', '/api/v1/preorders/config', { cookie: cashier })).body.depositPct).toBe(0);
+    const noDeposit = await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Tú', phone: '0911000013' }, lines: [{ variantId: upcoming, qty: 1 }] } });
+    expect(noDeposit.status, JSON.stringify(noDeposit.body)).toBe(201);
+    expect((await h.call('POST', `/api/v1/preorders/${noDeposit.body.id}/cancel`, { cookie: cashier, body: { reason: 'Thử' } })).body.status).toBe('cancelled');
+    expect((await h.call('PUT', '/api/v1/admin/settings', { cookie: owner, body: { 'preorder.deposit_pct': 30 } })).status).toBe(204);
+  });
+
   it('sets Chờ nhận by hand once every free-text book is linked; nothing comes from stock', async () => {
     second = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Nam', phone: '0911000002' }, lines: [{ variantId: upcoming, qty: 1 }], deposit: { method: 'transfer', amountVnd: 36000 } } })).body;
     expect(second).toMatchObject({ status: 'quote' });
@@ -127,11 +137,6 @@ describe('pre-orders (FR-POS-09, FR-ORD-14, FR-ORD-16, BR-10)', () => {
     expect((await find(first.docNo)).lines[1]).toMatchObject({ variantId: rare, unitPriceVnd: 120000, freeText: false });
     expect((await find(first.docNo)).totalVnd).toBe(360000);
     expect((await h.call('POST', `/api/v1/preorders/${second.id}/status`, { cookie: cashier, body: { status: 'arrived' } })).body.status).toBe('arrived');
-    // Chờ nhận records Giao hàng with a note written by hand; back to Nhận tại quầy clears the note.
-    await h.call('POST', `/api/v1/preorders/${second.id}/status`, { cookie: cashier, body: { status: 'arrived', delivery: true, deliveryNote: 'Ship 12 Lý Thường Kiệt, khách trả phí' } });
-    expect(await find(second.docNo)).toMatchObject({ status: 'arrived', delivery: true, deliveryNote: 'Ship 12 Lý Thường Kiệt, khách trả phí' });
-    await h.call('POST', `/api/v1/preorders/${second.id}/status`, { cookie: cashier, body: { status: 'arrived', delivery: false, deliveryNote: 'x' } });
-    expect(await find(second.docNo)).toMatchObject({ delivery: false, deliveryNote: null });
     expect((await h.call('GET', '/api/v1/me/badges', { cookie: cashier })).body.preordersAction).toBe(2);
   });
 
@@ -192,13 +197,38 @@ describe('pre-orders (FR-POS-09, FR-ORD-14, FR-ORD-16, BR-10)', () => {
     await h.call('POST', `/api/v1/promotions/${promo.body.id}/pause`, { cookie: owner });
   });
 
+  it("hands an order slip at Chờ nhận to delivery: the slip's books and customer, the deposit counted as paid, the slip Đã nhận", async () => {
+    // The delivery order reserves its copy: one more so the shelf stays as the later cases expect.
+    await stockIn(other, 1);
+    const slip = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Phương', phone: '0911000014' }, lines: [{ title: 'Sách nhập riêng', qty: 1 }], deposit: { method: 'transfer', amountVnd: 50000 } } })).body;
+    expect(slip.status, JSON.stringify(slip)).toBe('quote');
+    const lineId = (await find(slip.docNo)).lines[0].lineId;
+    expect((await h.call('POST', `/api/v1/preorders/${slip.id}/status`, { cookie: cashier, body: { status: 'arrived', links: [{ lineId, variantId: other }] } })).body.status).toBe('arrived');
+    const order = (extra: Record<string, unknown> = {}) => ({ preorderId: slip.id, source: 'phone', recipient: { name: 'Phương', phone: '0911000014' }, delivery: 'ship', paymentMethod: 'cod', shippingVnd: 30000, lines: [{ variantId: other, qty: 1 }], ...extra });
+    // The quote shows the deposit; the agreed price is used (no promotion is running on it).
+    const q = await h.call('POST', '/api/v1/orders/quote', { cookie: owner, body: { preorderId: slip.id, source: 'phone', shippingVnd: 30000, lines: [{ variantId: other, qty: 1 }] } });
+    expect(q.body, JSON.stringify(q.body)).toMatchObject({ totalVnd: 150000, depositVnd: 50000 });
+    // Only the slip's books and quantities, without a manual discount.
+    expect((await h.call('POST', '/api/v1/orders', { cookie: owner, body: order({ lines: [{ variantId: other, qty: 2 }] }) })).body.error.code).toBe('preorder_line');
+    expect((await h.call('POST', '/api/v1/orders', { cookie: owner, body: order({ orderManualDiscount: { kind: 'percent', bp: 1000 } }) })).body.error.code).toBe('preorder_line');
+    const r = await h.call('POST', '/api/v1/orders', { cookie: owner, body: order() });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const rec = (await h.call('GET', `/api/v1/orders/${r.body.id}`, { cookie: owner })).body;
+    expect(rec).toMatchObject({ preorderId: slip.id, depositVnd: 50000, totalVnd: 150000, sourceRef: slip.docNo, customerId: await customerId('+84911000014') });
+    expect(await find(slip.docNo)).toMatchObject({ status: 'collected', orderId: r.body.id, orderDocNo: r.body.docNo });
+    // Handed over once only.
+    expect((await h.call('POST', '/api/v1/orders', { cookie: owner, body: order() })).body.error.code).toBe('preorder_not_ready');
+  });
+
   it('never mixes books on the shelf and books to order on one slip; an order is cancelled with its deposit refunded', async () => {
     const mixed = await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Quang', phone: '0911000004' }, lines: [{ variantId: other, qty: 1 }, { variantId: rare, qty: 1 }] } });
     expect(mixed.body.error.code).toBe('mixed_slip');
     quang = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Quang', phone: '0911000004' }, lines: [{ variantId: other, qty: 1 }] } })).body;
     expect((await find(quang.docNo)).status).toBe('contacted');
-    // A hold is Chờ nhận already: Giao hàng is recorded and it stays Contacted.
-    expect((await h.call('POST', `/api/v1/preorders/${quang.id}/status`, { cookie: cashier, body: { status: 'arrived', delivery: true, deliveryNote: 'Grab' } })).body).toMatchObject({ status: 'contacted', delivery: true });
+    // A hold is Chờ nhận already and is collected in store only: it cannot become a delivery order (FR-ORD-14).
+    expect((await h.call('POST', `/api/v1/preorders/${quang.id}/status`, { cookie: cashier, body: { status: 'arrived' } })).body).toMatchObject({ status: 'contacted' });
+    const holdToDelivery = await h.call('POST', '/api/v1/orders', { cookie: owner, body: { preorderId: quang.id, source: 'phone', recipient: { name: 'Quang', phone: '0911000004' }, paymentMethod: 'cod', lines: [{ variantId: other, qty: 1 }] } });
+    expect(holdToDelivery.body.error.code).toBe('preorder_not_ready');
     // Slips are never edited.
     expect((await h.call('PUT', `/api/v1/preorders/${quang.id}/lines`, { cookie: cashier, body: { lines: [{ variantId: other, qty: 2 }] } })).status).toBe(404);
     const order = (await h.call('POST', '/api/v1/preorders', { cookie: cashier, body: { customer: { name: 'Quang', phone: '0911000004' }, lines: [{ variantId: rare, qty: 1 }], deposit: { method: 'transfer', amountVnd: 120000 } } })).body;

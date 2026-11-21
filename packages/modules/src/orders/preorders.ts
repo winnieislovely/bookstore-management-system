@@ -262,10 +262,8 @@ export const PreorderStatusSchema = z.object({
   status: z.enum(['quote', 'ordered', 'arrived']),
   /** Free-text books linked to catalogue products; required for every one of them to reach `arrived`. */
   links: z.array(z.object({ lineId: z.uuid(), variantId: z.uuid() })).max(30).default([]),
-  /** With Chờ nhận: Giao hàng rather than Nhận tại quầy, and the note staff write by hand. */
-  delivery: z.boolean().optional(),
-  deliveryNote: z.string().trim().max(500).nullable().optional(),
 });
+// Giao hàng is no longer a flag on the slip: an order slip at Chờ nhận becomes a delivery order (FR-ORD-14, POST /orders with preorderId).
 
 /**
  * Staff set an order's status by hand (FR-ORD-14): nothing is read from stock or suppliers. Linking a
@@ -296,14 +294,12 @@ export async function updatePreorderStatus(ctx: Ctx, id: string, input: z.input<
     if (data.status === 'arrived' && lines.some((l) => !l.variantId && !linked.has(l.id))) {
       throw new AppError(422, 'link_required', 'Chọn sản phẩm cho mọi sách gõ tự do trước khi chuyển sang Chờ nhận. Sách chưa có thì thêm ở trang Sản phẩm.');
     }
-    const ready = data.status === 'arrived';
-    const delivery = ready && data.delivery !== undefined ? { delivery: data.delivery, deliveryNote: data.delivery ? (data.deliveryNote ?? null) : null } : {};
     await tx
       .update(schema.preorder)
-      .set({ status: to, ...(to === 'arrived' && row.status !== 'arrived' && { allocatedAt: ctx.clock.now() }), ...delivery })
+      .set({ status: to, ...(to === 'arrived' && row.status !== 'arrived' && { allocatedAt: ctx.clock.now() }) })
       .where(eq(schema.preorder.id, id));
-    await audit.record(tx, ctx, { action: 'preorder.status', entity: 'preorder', entityId: id, before: { status: row.status, delivery: row.delivery, deliveryNote: row.deliveryNote }, after: { status: to, links: data.links, ...delivery } });
-    return { id, status: to, ...delivery };
+    await audit.record(tx, ctx, { action: 'preorder.status', entity: 'preorder', entityId: id, before: { status: row.status }, after: { status: to, links: data.links } });
+    return { id, status: to };
   });
 }
 
@@ -442,10 +438,11 @@ export async function listPreorders(ctx: Ctx, input: z.input<typeof HoldsQuery>)
       contactedAt: p.contactedAt,
       expiresAt: p.expiresAt,
       extensions: p.extensions,
-      delivery: p.delivery,
-      deliveryNote: p.deliveryNote,
       note: p.note,
       saleId: p.saleId,
+      /** The delivery order created from the slip (FR-ORD-14). */
+      orderId: p.orderId,
+      orderDocNo: sql<string | null>`(select o.doc_no from orders.web_order o where o.id = ${p.orderId})`,
       customerId: p.customerId,
       customerName: schema.customer.name,
       customerPhone: schema.customer.phoneE164,
@@ -460,6 +457,13 @@ export async function listPreorders(ctx: Ctx, input: z.input<typeof HoldsQuery>)
 }
 
 /** “Theo sách”: books still to arrive on open slips – for ordering from suppliers (FR-POS-09). */
+/** The BR-10 rules the pre-order form shows and applies (FR-ADM-04, TDD §4.5). */
+export async function preorderConfig(ctx: Ctx) {
+  requirePermission(ctx, 'sale.create');
+  const cfg = await settings.snapshot(ctx);
+  return { depositPct: cfg['preorder.deposit_pct'], holdDays: cfg['preorder.hold_days'], holdDaysNoDeposit: cfg['preorder.hold_days_no_deposit'] };
+}
+
 export async function preordersByTitle(ctx: Ctx) {
   requirePermission(ctx, 'sale.create');
   return ctx.db.execute<{ variantId: string | null; sku: string | null; title: string; qty: number; slips: number }>(sql`

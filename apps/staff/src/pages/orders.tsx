@@ -3,12 +3,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Calculator, CheckCircle, Minus, MoreHorizontal, Package, PackageCheck, Plus, Truck, Undo2, X, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useDebounced, useListParam, useParam, type Column } from '../components/data';
 import type { PickedCustomer } from '../components/customer-picker';
 import { DiscountInput } from '../components/discount-input';
 import { Combobox, CopyCode, ORDER_SOURCE, OrderStatusChip, PaymentChip, REVIEW_REASON, StatusTimeline, type TimelineEntry } from '../components/order-ui';
 import { ProductSearch, hitTitle, type ProductHit } from '../components/product-search';
+import type { PreorderRow } from '../pos/preorders';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton } from '../components/ui';
 import { ApiError, api, get, post } from '../lib/api';
 import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
@@ -147,6 +148,8 @@ interface Quote {
   pointsToEarn: number;
   approvalsRequired: unknown[];
   issues: { code: string }[];
+  /** A pre-order's deposit, counted as paid (FR-ORD-14). */
+  depositVnd?: number;
 }
 interface Channel {
   id: string;
@@ -250,8 +253,16 @@ function useWards(provinceId: number | null) {
 export function OrderNewPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  // Opened from a pre-order slip chosen for Giao hàng (FR-ORD-14, Design §12.9).
+  const slipNo = useSearchParams()[0].get('preorder');
+  const slipQ = useQuery({
+    queryKey: ['preorder-for-delivery', slipNo],
+    enabled: !!slipNo,
+    queryFn: async () => (await get<{ items: PreorderRow[] }>('/api/v1/preorders', { q: slipNo! })).items.find((x) => x.docNo === slipNo) ?? null,
+  });
+  const slip = slipQ.data ?? null;
   const [f, setF] = useState({
-    source: 'facebook',
+    source: slipNo ? 'phone' : 'facebook',
     channelId: '',
     delivery: 'ship' as 'ship' | 'pickup',
     provinceId: null as number | null,
@@ -287,16 +298,31 @@ export function OrderNewPage() {
     }
   };
 
+  // The slip fills the customer and its books once (quantities fixed, priced by the server).
+  const [filled, setFilled] = useState(false);
+  useEffect(() => {
+    if (!slip || filled) return;
+    setFilled(true);
+    setLines(
+      slip.lines.map((l) => ({
+        hit: { variantId: l.variantId!, itemId: '', kind: 'book', title: l.title, titleVi: null, sku: l.sku ?? '', priceVnd: l.unitPriceVnd ?? 0, available: 1, imageFileId: null },
+        qty: l.qty,
+      })),
+    );
+    void pickCustomer({ id: slip.customerId, name: slip.customerName, phoneE164: slip.customerPhone, tierCode: slip.customerTierCode, pointsBalance: slip.customerPoints });
+  }, [slip, filled]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const body = useMemo(
     () => ({
       source: f.source,
+      ...(slip && { preorderId: slip.id }),
       ...(customerId && { customerId }),
       lines: lines.map((l) => ({ variantId: l.hit.variantId, qty: l.qty })),
       // A manual discount for the whole order; promotions apply by themselves (FR-ORD-02).
       orderManualDiscount: discount,
       shippingVnd: f.delivery === 'ship' ? (f.shippingVnd ?? 0) : 0,
     }),
-    [f.source, f.delivery, f.shippingVnd, discount, lines, customerId],
+    [f.source, f.delivery, f.shippingVnd, discount, lines, customerId, slip],
   );
   // GHN fee recalculated whenever the ward or the items change, unless staff typed a fee (FR-ORD-10).
   const [feeManual, setFeeManual] = useState(false);
@@ -357,6 +383,7 @@ export function OrderNewPage() {
       }
       void qc.invalidateQueries({ queryKey: ['orders'] });
       void qc.invalidateQueries({ queryKey: ['order-list'] });
+      if (slip) void qc.invalidateQueries({ queryKey: ['preorders'] });
       navigate(`/orders/${r.id}`);
     } catch (e) {
       setError(e instanceof ApiError && e.code === 'approval_required' ? 'Giảm giá vượt hạn mức của bạn. Hãy giảm bớt hoặc nhờ quản lý tạo đơn.' : (e as Error).message);
@@ -374,9 +401,19 @@ export function OrderNewPage() {
   return (
     <div className="pb-20">
       <PageHeader
-        back={{ to: '/orders', label: 'Giao hàng' }}
+        back={slip ? { to: '/preorders', label: 'Đặt trước' } : { to: '/orders', label: 'Giao hàng' }}
         title="Tạo đơn giao"
       />
+      {slipNo && slipQ.isFetched && !slip && (
+        <div className="mb-4">
+          <InlineAlert tone="danger">Không tìm thấy phiếu đặt trước {slipNo}.</InlineAlert>
+        </div>
+      )}
+      {slip && (
+        <div className="mb-4">
+          <InlineAlert tone="info">Tạo từ phiếu đặt trước {slip.docNo} – sách và giá theo phiếu.</InlineAlert>
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex min-w-0 flex-col gap-6">
           <Card title="Thông tin đơn hàng">
@@ -402,7 +439,7 @@ export function OrderNewPage() {
             <div className="h-5" aria-hidden />
             {/* Each line like the POS cart line: name, then price with the − qty + stepper at the right; − at 1 removes it (Design §12.9). */}
             <p className="mb-1 text-[13px] font-medium text-ink-700">Sản phẩm</p>
-            <ProductSearch onPick={add} hideSku placeholder="Nhập SKU / tên sản phẩm" />
+            {!slip && <ProductSearch onPick={add} hideSku placeholder="Nhập SKU / tên sản phẩm" />}
             {lines.length > 0 && (
               <ul className="mt-4 divide-y divide-paper-300">
                 {lines.map((l, i) => {
@@ -412,6 +449,10 @@ export function OrderNewPage() {
                       <p className="line-clamp-2 font-semibold">{hitTitle(l.hit)}</p>
                       <div className="flex items-center gap-2">
                         <p className="flex-1 text-sm whitespace-nowrap text-ink-700 num">{formatVnd(l.hit.priceVnd)}</p>
+                        {slip ? (
+                          // From a slip: its quantities, no stepper (FR-ORD-14).
+                          <span className="text-sm font-semibold num">× {l.qty}</span>
+                        ) : (
                         <span className="-my-2 -mr-1 inline-flex items-center">
                           <button type="button" className={stepBtn} aria-label={`Giảm số lượng ${hitTitle(l.hit)}`} onClick={() => (l.qty === 1 ? setLines(lines.filter((_, j) => j !== i)) : update({ qty: l.qty - 1 }))}>
                             <Minus size={16} aria-hidden />
@@ -423,6 +464,7 @@ export function OrderNewPage() {
                             <Plus size={16} aria-hidden />
                           </button>
                         </span>
+                        )}
                       </div>
                       {/* Stock is not shown; only an out-of-stock product is flagged (Design §12.9). */}
                       {l.hit.available <= 0 && <span className="mt-1 inline-block rounded-full bg-danger-50 px-2 text-xs leading-5 font-medium text-danger-700">Hết hàng</span>}
@@ -520,7 +562,7 @@ export function OrderNewPage() {
                   )}
                 </div>
               )}
-              {can(me, 'sale.discount') && (
+              {can(me, 'sale.discount') && !slip && (
                 <div className="flex flex-col gap-1">
                   <span className="text-[13px] font-medium text-ink-700">Giảm giá</span>
                   <DiscountInput size="md" value={discount} onChange={setDiscount} disabled={!lines.length} />
@@ -549,6 +591,13 @@ export function OrderNewPage() {
                   ...(manualVnd ? ([['Giảm giá', <span className="num text-success-700">−{formatVnd(manualVnd)}</span>]] as [string, React.ReactNode][]) : []),
                   ['Phí giao hàng', <span className="num">{formatVnd(q.shippingVnd - q.shippingDiscountVnd)}</span>],
                   ['Tổng', <span className="text-lg font-bold num">{formatVnd(q.totalVnd)}</span>],
+                  // A pre-order's deposit counts as paid: the order collects the rest (FR-ORD-14).
+                  ...(q.depositVnd
+                    ? ([
+                        ['Đã đặt cọc', <span className="num">−{formatVnd(q.depositVnd)}</span>],
+                        ['Còn phải thu', <span className="font-bold num">{formatVnd(Math.max(0, q.totalVnd - q.depositVnd))}</span>],
+                      ] as [string, React.ReactNode][])
+                    : []),
                 ]}
               />
             ) : (

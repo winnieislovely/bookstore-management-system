@@ -163,6 +163,8 @@ const OrderPricingSchema = z.object({
   /** Manual discount on the whole order, a percentage only, within the role limit (FR-ORD-02, BR-05). */
   orderManualDiscount: z.object({ kind: z.literal('percent'), bp: z.number().int().min(0).max(10000) }).nullable().optional(),
   redeemPoints: z.number().int().min(0).optional(),
+  /** An order slip at Chờ nhận handed to delivery (FR-ORD-14): its lines, customer and agreed prices. */
+  preorderId: z.uuid().optional(),
 });
 
 export const CreateOrderSchema = OrderPricingSchema.extend({
@@ -224,8 +226,13 @@ async function loadVariants(tx: Tx, ids: string[]): Promise<Map<string, VariantI
  * Price an order like a counter sale, with the channel of its source (TDD §4.5): promotions for
  * that channel, tier discount, points, line discounts within the role limit, shipping.
  */
-async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSchema>) {
+async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSchema>, agreed?: ReadonlyMap<string, number>) {
   const variants = await loadVariants(tx, [...new Set(data.lines.map((l) => l.variantId))]);
+  // A slip's agreed prices, without promotions (FR-ORD-14, FR-POS-09).
+  for (const [variantId, priceVnd] of agreed ?? []) {
+    const v = variants.get(variantId);
+    if (v) v.priceVnd = priceVnd;
+  }
   const lines: CartLineInput[] = data.lines.map((l, i) => {
     const v = variants.get(l.variantId);
     if (!v) throw errors.notFound('Sản phẩm');
@@ -251,7 +258,7 @@ async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSch
     lines,
     channel,
     customer: customerId ? await customers.pricingProfile(tx, customerId) : null,
-    promotions: await promotions.activeSnapshot(tx, ctx.clock.now(), channel, customerId),
+    promotions: agreed ? [] : await promotions.activeSnapshot(tx, ctx.clock.now(), channel, customerId),
     orderManualDiscount: data.orderManualDiscount ?? null,
     redeemPoints: data.redeemPoints ?? 0,
     shippingVnd: vnd(data.shippingVnd),
@@ -267,14 +274,42 @@ async function priceOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSch
   return { result, variants, cfg };
 }
 
+/**
+ * An order slip handed to delivery (FR-ORD-14): Chờ nhận, every book linked and priced, the order for
+ * the slip's customer with exactly its books and quantities, and no manual discount.
+ */
+async function preorderForDelivery(tx: Tx, data: z.infer<typeof OrderPricingSchema>, lock: boolean) {
+  if (!data.preorderId) return null;
+  const q = tx.select().from(schema.preorder).where(eq(schema.preorder.id, data.preorderId));
+  const [p] = lock ? await q.for('update') : await q;
+  if (!p) throw errors.notFound('Phiếu đặt trước');
+  // A hold (Contacted) is collected in store only; an order must be Chờ nhận.
+  if (p.status !== 'arrived') throw errors.conflict('preorder_not_ready', `Phiếu ${p.docNo} chưa ở trạng thái Chờ nhận, là phiếu giữ sách hoặc đã xử lý xong.`);
+  const slipLines = await tx.select().from(schema.preorderLine).where(eq(schema.preorderLine.preorderId, p.id));
+  if (slipLines.some((l) => !l.variantId || l.unitPriceVnd == null)) throw errors.conflict('preorder_not_ready', `Phiếu ${p.docNo} còn sách chưa chọn sản phẩm.`);
+  if (data.customerId && data.customerId !== p.customerId) throw new AppError(422, 'preorder_customer', `Phiếu ${p.docNo} là của khách khác.`);
+  const same = slipLines.length === data.lines.length && slipLines.every((pl) => data.lines.filter((l) => l.variantId === pl.variantId && l.qty === pl.qty && !l.manualDiscount).length === 1);
+  if (!same || data.orderManualDiscount) throw new AppError(422, 'preorder_line', `Đơn giao cần đúng các sách và số lượng của phiếu ${p.docNo}, theo giá đã thỏa thuận, không giảm giá thêm.`);
+  return { ...p, agreed: new Map(slipLines.map((l) => [l.variantId!, l.unitPriceVnd!])) };
+}
+
+/** The cheaper of the slip's agreed prices without promotions and today's online prices with promotions (FR-ORD-14). */
+async function priceForOrder(tx: Tx, ctx: Ctx, data: z.infer<typeof OrderPricingSchema>, pre: Awaited<ReturnType<typeof preorderForDelivery>>) {
+  const today = await priceOrder(tx, ctx, data);
+  if (!pre) return today;
+  const agreed = await priceOrder(tx, ctx, data, pre.agreed);
+  return agreed.result.totalVnd <= today.result.totalVnd ? agreed : today;
+}
+
 export const QuoteSchema = OrderPricingSchema;
 
 /** Price preview for the order form (same engine as `createOrder`). */
 export async function quote(ctx: Ctx, input: z.input<typeof QuoteSchema>) {
   requirePermission(ctx, 'online.manage');
   const data = QuoteSchema.parse(input);
-  const { result, variants } = await priceOrder(ctx.db, ctx, data);
-  return { ...result, lines: result.lines.map((l) => ({ ...l, sku: variants.get(l.variantId)!.sku, title: variants.get(l.variantId)!.title })) };
+  const pre = await preorderForDelivery(ctx.db, data, false);
+  const { result, variants } = await priceForOrder(ctx.db, ctx, { ...data, customerId: pre?.customerId ?? data.customerId }, pre);
+  return { ...result, depositVnd: pre?.depositVnd ?? 0, lines: result.lines.map((l) => ({ ...l, sku: variants.get(l.variantId)!.sku, title: variants.get(l.variantId)!.title })) };
 }
 
 async function newPaymentRef(tx: Tx): Promise<string> {
@@ -356,8 +391,14 @@ export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof Creat
     const [ch] = await tx.select({ kind: schema.channel.kind }).from(schema.channel).where(eq(schema.channel.id, data.channelId));
     if (!ch) throw errors.notFound('Kênh bán');
   }
-  const customerId = await resolveCustomer(tx, ctx, data, phoneE164);
-  const { result: priced, variants, cfg } = await priceOrder(tx, ctx, { ...data, customerId });
+  const pre = await preorderForDelivery(tx, data, true);
+  // From a slip the order is the slip's customer, whatever recipient name and phone staff enter (FR-ORD-14).
+  const customerId = pre ? pre.customerId : await resolveCustomer(tx, ctx, data, phoneE164);
+  const { result: priced, variants, cfg } = await priceForOrder(tx, ctx, { ...data, customerId }, pre);
+  const depositVnd = pre?.depositVnd ?? 0;
+  if (depositVnd > priced.totalVnd) {
+    throw new AppError(422, 'deposit_exceeds_total', `Tiền cọc ${depositVnd} ₫ lớn hơn tổng đơn ${priced.totalVnd} ₫. Hãy để khách nhận tại quầy.`, { depositVnd, totalVnd: priced.totalVnd });
+  }
   if (priced.issues.length) throw new AppError(422, 'pricing_issue', 'Không áp dụng được mã giảm giá hoặc điểm. Hãy kiểm tra lại rồi thử lại.', priced.issues);
   if (priced.approvalsRequired.length) {
     const token = data.approvals.discount_over_limit;
@@ -372,10 +413,12 @@ export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof Creat
     .values({
       docNo,
       source: data.source,
-      sourceRef: data.sourceRef ?? null,
+      sourceRef: data.sourceRef ?? (pre ? pre.docNo : null),
       externalId: data.externalId ?? null,
       channelId: data.channelId ?? null,
       customerId,
+      preorderId: pre?.id ?? null,
+      depositVnd,
       recipient: { name: data.recipient.name, phone: phoneE164 },
       delivery: data.delivery,
       // An unresolvable address is still kept, so staff can complete it (incomplete_address).
@@ -413,6 +456,12 @@ export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof Creat
       vatVnd: l.vatVnd,
       promotionVersionIds: l.promotionVersionIds,
     });
+  }
+  // The slip is settled by this order (FR-ORD-14): Đã nhận, linked; anything it held passes to the order.
+  if (pre) {
+    await inventory.endReservations(tx, ctx, 'preorder', pre.id, 'converted');
+    await tx.update(schema.preorder).set({ status: 'collected', orderId }).where(eq(schema.preorder.id, pre.id));
+    await audit.record(tx, ctx, { action: 'preorder.to_delivery', entity: 'preorder', entityId: pre.id, before: { status: pre.status }, after: { status: 'collected', orderId, docNo } });
   }
   // Hold what is available now (BR-29); confirming reserves the rest.
   const allReserved = await reserveMissing(tx, ctx, orderId);
@@ -732,8 +781,10 @@ export async function confirmPayment(ctx: Ctx, id: string, input: z.input<typeof
     if (o.paymentMethod !== 'transfer') throw errors.conflict('not_transfer', `Đơn ${o.docNo} thanh toán khi nhận hàng (COD), không cần xác nhận chuyển khoản.`);
     if (o.paidAt) throw errors.conflict('already_paid', `Đơn ${o.docNo} đã được xác nhận chuyển khoản.`);
     if (o.status === 'cancelled') throw errors.conflict('order_cancelled', `Đơn ${o.docNo} đã hủy. Hãy hoàn tiền cho khách ngoài hệ thống.`);
-    if (data.amountVnd !== o.totalVnd) {
-      throw new AppError(422, 'amount_mismatch', `Số tiền nhận ${data.amountVnd} ₫ chưa khớp với tổng đơn ${o.totalVnd} ₫.`, { amountVnd: data.amountVnd, totalVnd: o.totalVnd });
+    // A pre-order's deposit counts as paid (FR-ORD-14).
+    const dueVnd = o.totalVnd - o.depositVnd;
+    if (data.amountVnd !== dueVnd) {
+      throw new AppError(422, 'amount_mismatch', `Số tiền nhận ${data.amountVnd} ₫ chưa khớp với số còn phải thu ${dueVnd} ₫.`, { amountVnd: data.amountVnd, totalVnd: o.totalVnd, depositVnd: o.depositVnd });
     }
     const now = ctx.clock.now();
     const reasons = (o.reviewReasons as ReviewReason[]).filter((r) => r !== 'unpaid_transfer');
@@ -827,7 +878,7 @@ export async function handToCarrierTx(tx: Tx, ctx: Ctx, o: OrderRow, s: { carrie
       carrier: s.carrier,
       trackingNo: s.trackingNo,
       feeVnd: s.feeVnd,
-      codVnd: o.paymentMethod === 'cod' ? o.totalVnd : 0,
+      codVnd: o.paymentMethod === 'cod' ? o.totalVnd - o.depositVnd : 0,
       status: 'created',
       carrierStatus: s.carrierStatus ?? null,
       statusAt: now,

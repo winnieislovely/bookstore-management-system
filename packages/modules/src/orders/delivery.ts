@@ -106,7 +106,7 @@ export async function createGhnShipment(ctx: Ctx, carrier: CarrierAdapter, id: s
     created = await carrier.createShipment({
       clientOrderCode: o.docNo,
       to: { name: o.recipient.name, phone: o.recipient.phone.replace(/^\+84/, '0'), address: [o.address.line, o.address.wardName, o.address.provinceName].filter(Boolean).join(', '), wardCode: o.address.wardCode, districtId },
-      codVnd: o.paymentMethod === 'cod' ? o.totalVnd : 0,
+      codVnd: o.paymentMethod === 'cod' ? o.totalVnd - o.depositVnd : 0,
       insuranceVnd: 0,
       weightG: lines.reduce((a, r) => a + r.weightG * r.l.qty, 0),
       items: lines.map((r) => ({ name: r.l.description, code: r.sku, qty: r.l.qty, priceVnd: r.l.unitPriceVnd, weightG: r.weightG })),

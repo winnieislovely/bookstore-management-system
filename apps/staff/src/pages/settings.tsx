@@ -46,6 +46,15 @@ const GROUPS: [string, Def[]][] = [
     ],
   ],
   [
+    // Pre-order rules (BR-10).
+    'Đặt trước',
+    [
+      { key: 'preorder.deposit_pct', label: 'Cọc tối thiểu khi đặt sách', kind: 'int', helper: '%; 0 là không bắt buộc cọc' },
+      { key: 'preorder.hold_days', label: 'Giữ sách khi có cọc', kind: 'int', helper: 'ngày' },
+      { key: 'preorder.hold_days_no_deposit', label: 'Giữ sách khi không cọc', kind: 'int', helper: 'ngày' },
+    ],
+  ],
+  [
     'Kho và nhập hàng',
     [
       { key: 'inventory.allow_negative_pos', label: 'Cho phép bán khi hết hàng (tồn âm)', kind: 'bool' },

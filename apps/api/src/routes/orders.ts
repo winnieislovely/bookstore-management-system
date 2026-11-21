@@ -94,6 +94,7 @@ export function orderRoutes(app: OpenAPIHono<AppEnv>, carrier: CarrierAdapter, w
 
   // --- Pre-orders (FR-ORD-14, FR-ORD-16, FR-POS-09); collecting is POST /api/v1/pos/sales with preorderId ---
   defineRoute(app, { method: 'get', path: '/api/v1/preorders', access: 'sale.create', summary: 'Pre-orders', query: orders.HoldsQuery }, async ({ ctx, query }) => ({ items: await orders.listPreorders(ctx, query) }));
+  defineRoute(app, { method: 'get', path: '/api/v1/preorders/config', access: 'sale.create', summary: 'Pre-order rules for the form: minimum deposit, holding days (BR-10)' }, async ({ ctx }) => orders.preorderConfig(ctx));
   defineRoute(app, { method: 'get', path: '/api/v1/preorders/by-title', access: 'sale.create', summary: 'Books still to arrive, by title' }, async ({ ctx }) => ({ items: await orders.preordersByTitle(ctx) }));
   defineRoute(app, { method: 'get', path: '/api/v1/preorders/holds', access: 'sale.create', summary: 'Who copies are held for (POS search)', query: orders.HoldLookupQuery }, async ({ ctx, query }) => ({ items: await orders.holdsOf(ctx, query) }));
   defineRoute(app, { method: 'post', path: '/api/v1/preorders', access: 'sale.create', summary: 'Take a pre-order with its deposit: holds copies on the shelf, books to order start Chờ xác nhận', status: 201, body: orders.CreatePreorderSchema }, async ({ ctx, body }) =>

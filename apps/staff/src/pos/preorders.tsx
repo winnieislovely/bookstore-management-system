@@ -1,13 +1,13 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { ChevronDown, Minus, Plus, X } from 'lucide-react';
 import { useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { ConfirmDialog, Facts, SelectField, TextArea, toast } from '../components/data';
 import { CustomerPicker, type CustomerChoice } from '../components/customer-picker';
 import { ProductSearch, hitTitle, type ProductHit } from '../components/product-search';
 import { Button, Field, InlineAlert, StatusChip, type Tone } from '../components/ui';
-import { post } from '../lib/api';
+import { get, post } from '../lib/api';
 import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { can, useMe } from '../lib/session';
 import { useOpenShift } from '../lib/shift';
@@ -65,8 +65,9 @@ export interface PreorderRow {
   expiresAt: string | null;
   extensions: number;
   /** Chờ nhận: Giao hàng rather than Nhận tại quầy, with the note staff wrote. */
-  delivery: boolean;
-  deliveryNote: string | null;
+  /** The delivery order created from the slip (FR-ORD-14). */
+  orderId: string | null;
+  orderDocNo: string | null;
   note: string | null;
   saleId: string | null;
   customerId: string;
@@ -177,9 +178,12 @@ function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: Ca
   const mixed = items.some(onShelf) && !items.every(onShelf);
   const value = items.reduce((a, d) => a + (d.kind === 'product' ? d.hit.priceVnd * d.qty : 0), 0);
   // An order: at least 30 % of its catalogue books, free-text books add nothing (BR-10).
-  const minDeposit = hold ? 0 : Math.round((value * 30) / 100);
+  // Minimum deposit from Cấu hình › Đặt trước (BR-10); 0 makes it optional.
+  const config = useQuery({ queryKey: ['preorder-config'], queryFn: () => get<{ depositPct: number }>('/api/v1/preorders/config') });
+  const pct = config.data?.depositPct ?? 30;
+  const minDeposit = hold ? 0 : Math.round((value * pct) / 100);
   // A required deposit (an order) starts open; an optional one (a hold) starts closed.
-  const depositOpen = depOpen ?? !hold;
+  const depositOpen = depOpen ?? (!hold && minDeposit > 0);
   const hasDeposit = (dep.amountVnd ?? 0) > 0;
   const add = (h: ProductHit) =>
     setItems((xs) => (xs.some((x) => x.kind === 'product' && x.hit.variantId === h.variantId) ? xs.map((x) => (x.kind === 'product' && x.hit.variantId === h.variantId ? { ...x, qty: x.qty + 1 } : x)) : [...xs, { kind: 'product', hit: h, qty: 1 }]));
@@ -188,7 +192,7 @@ function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: Ca
     setError(null);
     if (!cust) return setError('Chọn khách hoặc nhập khách mới.');
     if (!items.length) return setError('Thêm sách khách muốn giữ hoặc đặt.');
-    if (!hold && minDeposit > 0 && (dep.amountVnd ?? 0) < minDeposit) return setError(`Tiền cọc tối thiểu ${formatVnd(minDeposit)} (30%).`);
+    if (!hold && minDeposit > 0 && (dep.amountVnd ?? 0) < minDeposit) return setError(`Tiền cọc tối thiểu ${formatVnd(minDeposit)} (${pct}%).`);
     if (dep.amountVnd && dep.method === 'cash' && !shift.data) return setError('Cần một ca đang mở để nhận cọc tiền mặt.');
     setBusy(true);
     try {
@@ -262,9 +266,11 @@ function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: Ca
                   hint={
                     hold
                       ? `Không bắt buộc – có cọc thì giữ lâu hơn. Tối đa ${formatVnd(value)}`
-                      : minDeposit > 0
-                        ? `Tối thiểu ${formatVnd(minDeposit)} (30%)${items.some((d) => d.kind === 'text') ? ' – sách chưa có trong danh mục chưa tính' : ` · trả đủ ${formatVnd(value)}`}`
-                        : 'Sách chưa có trong danh mục: không bắt buộc cọc tối thiểu.'
+                      : pct === 0
+                        ? `Không bắt buộc. Tối đa ${formatVnd(value)}`
+                        : minDeposit > 0
+                          ? `Tối thiểu ${formatVnd(minDeposit)} (${pct}%)${items.some((d) => d.kind === 'text') ? ' – sách chưa có trong danh mục chưa tính' : ` · trả đủ ${formatVnd(value)}`}`
+                          : 'Sách chưa có trong danh mục: không bắt buộc cọc tối thiểu.'
                   }
                 />
               </div>
@@ -320,14 +326,14 @@ export function PreorderRecord({ p, onClose }: { p: PreorderRow; onClose: () => 
               ),
             ],
             ['Thời gian', <span className="num">{formatDateTime(p.createdAt)}</span>],
-            ...(isReady(p)
+            // Handed to delivery: the order it became (FR-ORD-14, Design §12.8).
+            ...(p.orderId
               ? ([
                   [
-                    'Nhận hàng',
-                    <span className="inline-flex flex-col items-end">
-                      <span>{p.delivery ? 'Giao hàng' : 'Tại quầy'}</span>
-                      {p.delivery && p.deliveryNote && <span className="text-[13px] text-ink-500">{p.deliveryNote}</span>}
-                    </span>,
+                    'Đơn giao',
+                    <Link to={`/orders/${p.orderId}`} className="font-semibold text-navy-700 underline code">
+                      {p.orderDocNo}
+                    </Link>,
                   ],
                 ] as [string, React.ReactNode][])
               : []),
@@ -381,8 +387,10 @@ function UpdateStatusDialog({ p, onClose, onDone }: { p: PreorderRow; onClose: (
   const hold = p.status === 'contacted';
   const current: Target = p.status === 'confirmed' ? 'quote' : p.status === 'contacted' ? 'arrived' : (p.status as Target);
   const [target, setTarget] = useState<Target>(current);
-  const [delivery, setDelivery] = useState(p.delivery);
-  const [deliveryNote, setDeliveryNote] = useState(p.deliveryNote ?? '');
+  // Giao hàng only for an order slip, and only for staff who manage online orders; a hold is collected in store (FR-ORD-14).
+  const { data: me } = useMe();
+  const canDeliver = !hold && can(me, 'online.manage');
+  const [delivery, setDelivery] = useState(false);
   const [links, setLinks] = useState<Record<string, ProductHit>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -402,9 +410,15 @@ function UpdateStatusDialog({ p, onClose, onDone }: { p: PreorderRow; onClose: (
         navigate(`/pos?preorder=${encodeURIComponent(p.docNo)}`);
         return;
       }
-      if (target === 'arrived') await post(`/api/v1/preorders/${p.id}/status`, { status: 'arrived', ...body, delivery, deliveryNote: delivery ? deliveryNote.trim() || null : null });
+      if (target === 'arrived' && delivery && canDeliver) {
+        // Giao hàng: Chờ nhận first, then Tạo đơn giao filled from the slip (Design §12.8, §12.9).
+        if (p.status !== 'arrived' || body.links.length) await post(`/api/v1/preorders/${p.id}/status`, { status: 'arrived', ...body });
+        navigate(`/orders/new?preorder=${encodeURIComponent(p.docNo)}`);
+        return;
+      }
+      if (target === 'arrived') await post(`/api/v1/preorders/${p.id}/status`, { status: 'arrived', ...body });
       else if (target !== current || body.links.length) await post(`/api/v1/preorders/${p.id}/status`, { status: target, ...body });
-      toast.success(`Đã cập nhật ${p.docNo}: ${TARGETS.find((t) => t.key === target)!.label}${target === 'arrived' ? (delivery ? ' · Giao hàng' : ' · Nhận tại quầy') : ''}.`);
+      toast.success(`Đã cập nhật ${p.docNo}: ${TARGETS.find((t) => t.key === target)!.label}.`);
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -419,7 +433,7 @@ function UpdateStatusDialog({ p, onClose, onDone }: { p: PreorderRow; onClose: (
       onClose={onClose}
       footer={
         <Button variant="primary" full loading={busy} onClick={save}>
-          {target === 'collected' ? 'Nhận hàng tại quầy' : 'Lưu'}
+          {target === 'collected' ? 'Nhận hàng tại quầy' : 'Xác nhận'}
         </Button>
       }
     >
@@ -431,9 +445,9 @@ function UpdateStatusDialog({ p, onClose, onDone }: { p: PreorderRow; onClose: (
             </option>
           ))}
         </SelectField>
-        {target === 'arrived' && (
+        {target === 'arrived' && canDeliver && (
           <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap gap-x-6 gap-y-2" role="group" aria-label="Cách nhận hàng">
+            <div className="flex flex-wrap gap-x-6 gap-y-2" role="radiogroup" aria-label="Cách nhận hàng">
               {(
                 [
                   [false, 'Nhận tại quầy'],
@@ -441,12 +455,11 @@ function UpdateStatusDialog({ p, onClose, onDone }: { p: PreorderRow; onClose: (
                 ] as const
               ).map(([v, label]) => (
                 <label key={label} className="flex min-h-11 items-center gap-2 font-medium">
-                  <input type="checkbox" className="size-5 accent-navy-700" checked={delivery === v} onChange={() => setDelivery(v)} />
+                  <input type="radio" name="preorder-delivery" className="size-[18px] accent-navy-700" checked={delivery === v} onChange={() => setDelivery(v)} />
                   {label}
                 </label>
               ))}
             </div>
-            {delivery && <TextArea label="Ghi chú giao hàng" value={deliveryNote} maxLength={500} onChange={(e) => setDeliveryNote(e.target.value)} />}
           </div>
         )}
         {needsLinks &&
