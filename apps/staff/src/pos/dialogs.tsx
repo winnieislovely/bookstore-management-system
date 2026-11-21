@@ -1,7 +1,7 @@
 import { DENOMINATIONS_VND, type PriceCartResult } from '@bookstore/domain';
 import { clsx } from 'clsx';
-import { Banknote, CheckCircle2, CreditCard, Printer, QrCode, Search, ShieldCheck, Plus, User, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { CheckCircle2, Printer, Search, ShieldCheck, Plus, User, X } from 'lucide-react';
+import { useEffect, useId, useState } from 'react';
 import { Button, Field, InlineAlert } from '../components/ui';
 import { ApiError, post } from '../lib/api';
 import { formatNumber, formatPhone, formatVnd } from '../lib/format';
@@ -64,13 +64,33 @@ export function ApprovalDialog({ action, reason, online, onApproved, onClose }: 
 // ---------------------------------------------------------------------------------------------
 // Payment (FR-POS-06, Design §13.4)
 
-type Method = Payment['method'];
-const TILES: { method: Method; label: string; icon: typeof Banknote }[] = [
-  { method: 'cash', label: 'Tiền mặt', icon: Banknote },
-  { method: 'transfer', label: 'Chuyển khoản', icon: QrCode },
-  { method: 'card', label: 'Thẻ', icon: CreditCard },
+export type PaymentMethod = Payment['method'];
+// “CK” keeps the three equal boxes on one line on a 360 px phone; screen readers hear the full name (Design §13.4).
+const METHODS: { method: PaymentMethod; label: string; spoken?: string }[] = [
+  { method: 'cash', label: 'Tiền mặt' },
+  { method: 'transfer', label: 'CK', spoken: 'Chuyển khoản' },
+  { method: 'card', label: 'Thẻ' },
 ];
 
+/** Payment method in the payment dialog: round radio ticks, text only, always on one row (Design §13.4). */
+export function PaymentMethodPicker({ value, onChange, disabled }: { value: PaymentMethod; onChange: (m: PaymentMethod) => void; disabled?: boolean }) {
+  // Own group per render: the cart footer can be mounted twice (wide and narrow layouts).
+  const name = useId();
+  return (
+    // Three equal boxes, each option centred in its box (Design §13.4).
+    <fieldset className="grid grid-cols-3 gap-x-2" disabled={disabled}>
+      <legend className="sr-only">Phương thức thanh toán</legend>
+      {METHODS.map((m) => (
+        <label key={m.method} className="flex h-11 min-w-0 cursor-pointer items-center justify-center gap-2 text-sm whitespace-nowrap">
+          <input type="radio" name={name} className="size-[18px] shrink-0 accent-navy-700" checked={value === m.method} onChange={() => onChange(m.method)} aria-label={m.spoken} />
+          {m.label}
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+/** Payment dialog: the method, then the amount given and change for cash (FR-POS-06, Design §13.4). */
 export function PaymentSheet({
   priced,
   depositVnd = 0,
@@ -87,34 +107,27 @@ export function PaymentSheet({
 }) {
   // One method pays the whole amount (FR-POS-06): no per-method amount field, no split payment.
   const amount = priced.totalVnd - depositVnd;
-  const [method, setMethod] = useState<Method>('cash');
+  const [method, setMethod] = useState<PaymentMethod>('cash');
   const [tendered, setTendered] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const tiles = TILES;
   const tenderedVnd = Number(tendered || 0);
 
-  const pick = (m: Method) => {
-    setMethod(m);
-    setError(null);
-  };
-
-  /** Build the current tender; returns null when it is not complete yet. */
+  /** The tender; null while it is not complete (cash short of the amount). */
   const current = (): Payment | null => {
-    const amt = amount;
-    if (amt <= 0) return null;
-    if (method === 'cash') return tenderedVnd && tenderedVnd < amt ? null : { method, amountVnd: amt, tenderedVnd: tenderedVnd || amt };
-    // Card: no approval code (FR-POS-06).
-    if (method === 'card') return { method, amountVnd: amt };
-    // Transfer: pressing Xác nhận means the money was seen in the account (FR-POS-06).
-    return { method, amountVnd: amt };
+    if (amount <= 0) return null;
+    if (method === 'cash') return tenderedVnd && tenderedVnd < amount ? null : { method, amountVnd: amount, tenderedVnd: tenderedVnd || amount };
+    // Transfer: pressing Xác nhận means the money was seen in the account. Card: no approval code (FR-POS-06).
+    return { method, amountVnd: amount };
   };
 
-  const finish = async (list: Payment[]) => {
+  const pay = async () => {
+    const p = current();
+    if (!p) return;
     setBusy(true);
     setError(null);
     try {
-      await onPay(list);
+      await onPay([p]);
     } catch (e) {
       setError(errText(e));
     } finally {
@@ -122,33 +135,13 @@ export function PaymentSheet({
     }
   };
 
-  const pay = () => {
-    const p = current();
-    if (p) void finish([p]);
-  };
-
   const change = method === 'cash' && tenderedVnd > amount ? tenderedVnd - amount : 0;
 
   return (
-    <Dialog title="Thanh toán" size="lg" onClose={busy ? undefined : onClose}>
+    <Dialog title="Phương thức thanh toán" size="lg" onClose={busy ? undefined : onClose}>
       <div className="flex flex-col gap-4">
-        {/* Method tiles first, text only, always on one row (Design §13.4). */}
-        <div className="flex flex-col gap-2">
-        <p className="text-[13px] font-medium text-ink-700">Phương thức thanh toán</p>
-        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }} role="radiogroup" aria-label="Phương thức thanh toán">
-          {tiles.map((tl) => (
-            <button
-              key={tl.method}
-              type="button"
-              role="radio"
-              aria-checked={method === tl.method}
-              onClick={() => pick(tl.method)}
-              className={clsx('flex h-11 items-center justify-center rounded-xl border-2 px-1 text-center text-sm leading-tight font-medium', method === tl.method ? 'border-navy-700 bg-navy-50 text-navy-700' : 'border-paper-300 bg-white')}
-            >
-              {tl.label}
-            </button>
-          ))}
-        </div>
+        <div>
+          <PaymentMethodPicker value={method} onChange={(m) => { setMethod(m); setError(null); }} disabled={busy} />
         </div>
         <div>
           <div className="flex items-baseline justify-between gap-3">
@@ -162,22 +155,22 @@ export function PaymentSheet({
           )}
         </div>
         {method === 'cash' && (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <p className="text-[13px] font-medium text-ink-700">Khách đưa</p>
-              <p className="h-12 rounded-md border border-paper-500 px-3 text-right text-lg leading-[46px] num">{tendered ? formatNumber(Number(tendered)) : '—'} ₫</p>
-              <div className="mt-1 flex items-baseline justify-between gap-3">
-                <p className="text-ink-700">Tiền thừa</p>
-                <p className="text-xl leading-7 font-bold whitespace-nowrap text-success-700 num">{formatVnd(change)}</p>
-              </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-2">
+            <p className="text-[13px] font-medium text-ink-700">Khách đưa</p>
+            <p className="h-12 rounded-md border border-paper-500 px-3 text-right text-lg leading-[46px] num">{tendered ? formatNumber(Number(tendered)) : '—'} ₫</p>
+            <div className="mt-1 flex items-baseline justify-between gap-3">
+              <p className="text-ink-700">Tiền thừa</p>
+              <p className="text-xl leading-7 font-bold whitespace-nowrap text-success-700 num">{formatVnd(change)}</p>
             </div>
-            <Keypad onKey={(k) => setTendered((v) => (k === 'del' ? v.slice(0, -1) : (v + k).replace(/^0+/, '').slice(0, 10)))} />
           </div>
+          <Keypad onKey={(k) => setTendered((v) => (k === 'del' ? v.slice(0, -1) : (v + k).replace(/^0+/, '').slice(0, 10)))} />
+        </div>
         )}
         {method === 'transfer' && !online && <InlineAlert tone="warning">Ngoại tuyến: khoản chuyển khoản sẽ ở trạng thái “Chưa xác minh” cho đến khi quản lý xác nhận.</InlineAlert>}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
         {/* One full-width “Xác nhận”, no icon; the dialog closes with its ✕ (Design §13.4). */}
-        <Button variant="primary" size="lg" full loading={busy} disabled={!current()} onClick={pay}>
+        <Button variant="primary" size="lg" full loading={busy} disabled={!current()} onClick={() => void pay()}>
           Xác nhận
         </Button>
       </div>

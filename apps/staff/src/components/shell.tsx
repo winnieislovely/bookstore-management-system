@@ -202,7 +202,8 @@ function NotificationBell() {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 z-30 mt-2 w-[400px] max-w-[calc(100vw-2rem)] rounded-lg border border-paper-300 bg-white shadow-md">
+        // Phones: full width less 16 px each side under the top bar; from sm: 400 px under the bell (Design §10.11).
+        <div className="fixed inset-x-4 top-16 z-30 rounded-lg border border-paper-300 bg-white shadow-md sm:absolute sm:inset-x-auto sm:top-auto sm:right-0 sm:mt-2 sm:w-[400px]">
           <div className="flex items-center justify-between border-b border-paper-300 px-4 py-3">
             <h2 className="font-semibold">{t('shell.notifications')}</h2>
           </div>

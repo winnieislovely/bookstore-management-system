@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, BookOpen, CalendarClock, ChevronRight, Coins, Gift, Info, LogOut, Menu, Minus, Package, Plus, RefreshCw, ScanBarcode, Search, ShoppingBasket, ShoppingCart, User, Wallet, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, BookOpen, CalendarClock, ChevronDown, Coins, Gift, Info, LogOut, Menu, Minus, Package, Plus, RefreshCw, ScanBarcode, Search, ShoppingBasket, ShoppingCart, User, Wallet, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Button, Field, InlineAlert, Skeleton } from '../components/ui';
@@ -319,7 +319,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
   const lines = priced?.result.lines ?? [];
   const total = priced?.result.totalVnd ?? 0;
 
-  /** Xác nhận: approvals first, then the payment sheet. */
+  /** Xác nhận: approvals first, then the payment dialog (Design §13.4). */
   const confirm = () => {
     if (!priced) return;
     const issue = priced.result.issues[0];
@@ -529,7 +529,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
     </div>
   );
 
-  const cartPanel = (
+  const productPanel = (
     <div className="flex h-full flex-col">
       {/* Card title, like the other cards (Design §13.1). */}
       <div className="flex items-center justify-between gap-2 px-4 pt-2 pb-1">
@@ -555,74 +555,103 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         )}
         {cartLines}
       </ul>
-      <div className="border-t border-paper-300 p-4">
-        <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 text-sm num">
-          <dt className="text-ink-700">Tạm tính</dt>
-          <dd className="text-right">{formatVnd(priced?.result.subtotalVnd ?? 0)}</dd>
-          {autoPromoVnd > 0 && (
-            <>
-              <dt className="text-ink-700">Khuyến mãi</dt>
-              <dd className="text-right text-success-700">−{formatVnd(autoPromoVnd)}</dd>
-              {promoNames.length > 0 && <dd className="col-span-2 -mt-1 text-xs text-ink-500">{promoNames.join(' · ')}</dd>}
-            </>
-          )}
-          {/* Manual discount on the whole order (FR-POS-02, BR-05): “Giảm giá ›” opens the field below the row (Design §13.1). */}
-          {can(me, 'sale.discount') && (
-            <>
-              <dt>
-                <button type="button" className="-mx-1 inline-flex min-h-8 items-center gap-0.5 rounded-sm px-1 text-ink-700 hover:text-navy-700" aria-expanded={discountOpen} onClick={() => setDiscountOpen((o) => !o)}>
-                  Giảm giá
-                  <ChevronRight size={16} className={clsx('transition-transform', discountOpen && 'rotate-90')} aria-hidden />
-                </button>
-              </dt>
-              <dd className="text-right whitespace-nowrap text-success-700">{manualDiscountVnd > 0 ? `−${formatVnd(manualDiscountVnd)}` : ''}</dd>
-              {discountOpen && (
-                <dd className="col-span-2 pb-1 text-right">
-                  <DiscountInput value={cart.orderDiscount} onChange={cart.setOrderDiscount} disabled={readOnly || !cart.lines.length} />
-                </dd>
-              )}
-            </>
-          )}
-          {cart.customer && pointsReady && (
-            <>
-              <dt className="text-ink-700">Điểm</dt>
-              <dd className="flex items-center justify-end gap-1">
-                {cart.redeemPoints ? (
-                  <>
-                    <span>{formatNumber(cart.redeemPoints)} điểm</span>
-                    {!!priced?.result.redeemValueVnd && <span className="text-success-700">−{formatVnd(priced.result.redeemValueVnd)}</span>}
-                    <Button variant="ghost" size="sm" icon={X} className="size-8 px-0!" aria-label="Bỏ dùng điểm" title="Bỏ dùng điểm" onClick={() => cart.setRedeem(0)} disabled={readOnly} />
-                  </>
-                ) : (
-                  <Button variant="tonal" size="sm" icon={Coins} onClick={() => setDialog({ kind: 'points' })} disabled={readOnly || !cart.customer.pointsBalance}>
-                    Dùng điểm
-                  </Button>
-                )}
-              </dd>
-            </>
-          )}
-          <dt className="mt-1 text-base font-semibold">TỔNG</dt>
-          <dd className="mt-1 text-right text-[22px] leading-7 font-bold whitespace-nowrap">{formatVnd(total)}</dd>
-          {!!cart.preorder?.depositVnd && (
-            <>
-              <dt className="text-ink-700">Đã đặt cọc</dt>
-              <dd className="text-right">−{formatVnd(cart.preorder.depositVnd)}</dd>
-              <dt className="font-semibold">Còn phải trả</dt>
-              <dd className="text-right font-semibold">{formatVnd(Math.max(0, total - cart.preorder.depositVnd))}</dd>
-            </>
-          )}
-        </dl>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <Button variant="secondary" size="lg" className="px-2!" onClick={holdCart} disabled={!cart.lines.length || readOnly || !!cart.preorder}>
-            Giữ giỏ
-          </Button>
-          <Button variant="primary" size="lg" full disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
-            Xác nhận
-          </Button>
-        </div>
-      </div>
     </div>
   );
+
+  // Its own card under the cart lines (Design §13.1).
+  const dueVnd = Math.max(0, total - (cart.preorder?.depositVnd ?? 0));
+  const savedVnd = priced?.result.discountVnd ?? 0;
+
+  /** Thành tiền, Giảm giá (dropdown with every discount), Tổng tiền, then the buttons (Design §13.1). */
+  const totals = (
+    <>
+      <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 text-sm num">
+        <dt className="text-ink-700">Thành tiền</dt>
+        <dd className="text-right">{formatVnd(priced?.result.subtotalVnd ?? 0)}</dd>
+        <dt>
+          <button type="button" className="-mx-1 inline-flex min-h-8 items-center gap-0.5 rounded-sm px-1 text-ink-700 hover:text-navy-700" aria-expanded={discountOpen} onClick={() => setDiscountOpen((o) => !o)}>
+            Giảm giá
+            <ChevronDown size={16} className={clsx('transition-transform', discountOpen && 'rotate-180')} aria-hidden />
+          </button>
+        </dt>
+        <dd className="text-right whitespace-nowrap text-success-700">{savedVnd > 0 ? `−${formatVnd(savedVnd)}` : ''}</dd>
+        {discountOpen && (
+          <dd className="col-span-2 mb-1 grid max-h-[40dvh] grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 overflow-y-auto rounded-md bg-paper-50 px-3 py-2">
+            {autoPromoVnd > 0 && (
+              <>
+                <span className="text-ink-700">Khuyến mãi</span>
+                <span className="text-right text-success-700">−{formatVnd(autoPromoVnd)}</span>
+                {promoNames.length > 0 && <span className="col-span-2 -mt-1 text-xs text-ink-500">{promoNames.join(' · ')}</span>}
+              </>
+            )}
+            {/* Manual discount on the whole order, percent only (FR-POS-02, BR-05). */}
+            {can(me, 'sale.discount') && (
+              <>
+                <span className="text-ink-700">Giảm thêm</span>
+                <span className="text-right">
+                  <DiscountInput value={cart.orderDiscount} onChange={cart.setOrderDiscount} disabled={readOnly || !cart.lines.length} />
+                </span>
+              </>
+            )}
+            {cart.customer && pointsReady && (
+              <>
+                <span className="text-ink-700">Điểm (có {formatNumber(cart.customer.pointsBalance)})</span>
+                <span className="flex items-center justify-end gap-1">
+                  {cart.redeemPoints ? (
+                    <>
+                      <span>{formatNumber(cart.redeemPoints)} điểm</span>
+                      {pointsDiscountVnd > 0 && <span className="text-success-700">−{formatVnd(pointsDiscountVnd)}</span>}
+                      <Button variant="ghost" size="sm" icon={X} className="size-8 px-0!" aria-label="Bỏ dùng điểm" title="Bỏ dùng điểm" onClick={() => cart.setRedeem(0)} disabled={readOnly} />
+                    </>
+                  ) : (
+                    <Button variant="tonal" size="sm" icon={Coins} onClick={() => setDialog({ kind: 'points' })} disabled={readOnly || !cart.customer.pointsBalance}>
+                      Dùng điểm
+                    </Button>
+                  )}
+                </span>
+              </>
+            )}
+            {autoPromoVnd <= 0 && !can(me, 'sale.discount') && !(cart.customer && pointsReady) && <span className="col-span-2 text-ink-500">Không có giảm giá.</span>}
+          </dd>
+        )}
+        <dt className="font-bold">Tổng tiền</dt>
+        <dd className="text-right font-bold whitespace-nowrap">{formatVnd(total)}</dd>
+        {!!cart.preorder?.depositVnd && (
+          <>
+            <dt className="text-ink-700">Đã đặt cọc</dt>
+            <dd className="text-right">−{formatVnd(cart.preorder.depositVnd)}</dd>
+            <dt className="font-bold">Còn phải trả</dt>
+            <dd className="text-right font-bold whitespace-nowrap">{formatVnd(dueVnd)}</dd>
+          </>
+        )}
+      </dl>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Button variant="secondary" size="lg" className="px-2!" onClick={holdCart} disabled={!cart.lines.length || readOnly || !!cart.preorder}>
+          Giữ giỏ
+        </Button>
+        <Button variant="primary" size="lg" full disabled={!cart.lines.length || !priced || readOnly || lease === 'expired'} onClick={confirm}>
+          Xác nhận
+        </Button>
+      </div>
+    </>
+  );
+
+  // Wide screens: its own card under the cart lines (Design §13.1).
+  const orderPanel = (
+    <div className="px-4 pt-2 pb-4">
+      <h2 className="flex min-h-9 items-center text-sm font-semibold text-ink-900">Giá trị đơn hàng</h2>
+      {totals}
+    </div>
+  );
+
+  // Phones: fixed to the bottom, full width, no card frame (Design §13.1).
+  const orderBar = (
+    <div className="shrink-0 border-t border-paper-300 bg-white px-4 pt-2 pb-[max(12px,env(safe-area-inset-bottom))] shadow-[0_-4px_12px_rgba(20,32,51,0.08)] lg:hidden" aria-label="Giá trị đơn hàng">
+      {totals}
+    </div>
+  );
+
+  const card = 'rounded-lg border border-paper-300 bg-white shadow-sm';
 
 
   return (
@@ -762,12 +791,18 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
             </div>
           )}
           {/* Tablet portrait / phone: the whole cart on the selling screen, no bottom sheet (Design §13.1). */}
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-paper-300 bg-white shadow-sm lg:hidden" aria-label="Giỏ hàng">
-            {cartPanel}
+          <div className={clsx('flex min-h-0 flex-1 flex-col overflow-hidden lg:hidden', card)} aria-label="Giỏ hàng">
+            {productPanel}
           </div>
         </section>
-        <aside className="hidden w-[420px] shrink-0 border-l border-paper-300 bg-white lg:block">{cartPanel}</aside>
+        <aside className="hidden w-[420px] shrink-0 flex-col gap-3 border-l border-paper-300 bg-white p-4 lg:flex">
+          <div className={clsx('flex min-h-0 flex-1 flex-col overflow-hidden', card)} aria-label="Giỏ hàng">
+            {productPanel}
+          </div>
+          <div className={clsx('shrink-0', card)}>{orderPanel}</div>
+        </aside>
       </div>
+      {orderBar}
 
       {camera && (
         <CameraScanner
