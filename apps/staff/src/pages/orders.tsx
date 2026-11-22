@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, Pager, SearchBox, SelectField, TextArea, TimeFilter, timeLabel, timeRange, toast, useDebounced, useListParam, useParam, type Column } from '../components/data';
 import type { PickedCustomer } from '../components/customer-picker';
+import { CompactSelect } from '../components/compact-select';
 import { DiscountInput } from '../components/discount-input';
 import { Combobox, CopyCode, ORDER_SOURCE, OrderStatusChip, PaymentChip, REVIEW_REASON, StatusTimeline, type TimelineEntry } from '../components/order-ui';
 import { ProductSearch, hitTitle, type ProductHit } from '../components/product-search';
@@ -409,7 +410,7 @@ export function OrderNewPage() {
   const autoVnd = q ? Math.max(0, q.discountVnd - manualVnd) : 0;
   const promoNames = [...new Map((q?.lines ?? []).flatMap((l) => l.savings).map((x) => [x.promotionId, x.label])).values()];
   return (
-    <div className="pb-20">
+    <div>
       <PageHeader
         back={slip ? { to: '/preorders', label: 'Đặt trước' } : { to: '/orders', label: 'Giao hàng' }}
         title="Tạo đơn giao"
@@ -531,24 +532,18 @@ export function OrderNewPage() {
 
         <div className="flex flex-col gap-6">
           <Card title="Thanh toán">
-            <div className="mb-4 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Phương thức thanh toán">
-              {(
-                [
+            {/* Hình thức: a compact dropdown, Thu hộ (COD) by default (Design §12.9). */}
+            <div className="mb-4 flex items-center justify-between gap-3 text-sm">
+              <span className="text-ink-700">Hình thức</span>
+              <CompactSelect
+                label="Hình thức"
+                value={f.paymentMethod}
+                options={[
                   ['cod', 'Thu hộ (COD)'],
                   ['transfer', 'Chuyển khoản'],
-                ] as const
-              ).map(([k, label]) => (
-                <button
-                  key={k}
-                  type="button"
-                  role="radio"
-                  aria-checked={f.paymentMethod === k}
-                  onClick={() => setF({ ...f, paymentMethod: k })}
-                  className={clsx('h-12 rounded-xl border text-sm font-medium', f.paymentMethod === k ? 'border-2 border-navy-700 bg-navy-50 text-navy-700' : 'border-paper-500')}
-                >
-                  {label}
-                </button>
-              ))}
+                ]}
+                onChange={(v) => setF({ ...f, paymentMethod: v })}
+              />
             </div>
             <div className="flex flex-col gap-4">
               {f.delivery === 'ship' && (
@@ -575,10 +570,13 @@ export function OrderNewPage() {
                 </div>
               )}
               {can(me, 'sale.discount') && !slip && (
+                // A row like Hình thức: label left, the 36 px field right (Design §12.9).
                 <div className="flex flex-col gap-1">
-                  <span className="text-[13px] font-medium text-ink-700">Giảm giá</span>
-                  <DiscountInput size="md" value={discount} onChange={setDiscount} disabled={!lines.length} />
-                  {manualVnd > 0 && <p className="text-[13px] text-ink-500">= {formatVnd(manualVnd)}</p>}
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="text-ink-700">Giảm giá</span>
+                    <DiscountInput size="sm" value={discount} onChange={setDiscount} disabled={!lines.length} />
+                  </div>
+                  {manualVnd > 0 && <p className="text-right text-[13px] text-ink-500 num">= {formatVnd(manualVnd)}</p>}
                 </div>
               )}
               <TextArea label="Ghi chú" value={f.note} onChange={set('note')} />
@@ -620,18 +618,22 @@ export function OrderNewPage() {
                 <InlineAlert tone="danger">{(quote.error as Error).message}</InlineAlert>
               </div>
             )}
+            {error && (
+              <div className="mt-3">
+                <InlineAlert tone="danger">{error}</InlineAlert>
+              </div>
+            )}
+            {/* The form's buttons at equal widths in the Tổng cộng card, no bar fixed to the page bottom (Design §12.9). */}
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Button variant="secondary" size="lg" full onClick={() => navigate(slip ? '/preorders' : '/orders')}>
+                Hủy
+              </Button>
+              <Button variant="primary" size="lg" full loading={busy} onClick={save}>
+                Xác nhận
+              </Button>
+            </div>
           </Card>
-          {error && <InlineAlert tone="danger">{error}</InlineAlert>}
         </div>
-      </div>
-
-      <div className="fixed inset-x-0 bottom-0 z-30 flex h-16 items-center justify-end gap-2 border-t border-paper-300 bg-white px-4 shadow-sm sm:px-6 md:left-[72px] lg:left-[264px]">
-        <Button variant="secondary" onClick={() => navigate('/orders')}>
-          Hủy
-        </Button>
-        <Button variant="primary" loading={busy} onClick={save}>
-          Xác nhận
-        </Button>
       </div>
     </div>
   );
