@@ -22,6 +22,7 @@ import { LibraryCatalogPage, LibraryDeskPage, LibraryReportPage, LibrarySlipPage
 import { LibraryCountDetailPage, LibraryCountsPage } from './pages/libraryCounts';
 import { CodPage } from './pages/holds';
 import { PreordersPage } from './pages/preorders';
+import { PreorderNewPage } from './pos/preorders';
 import { OrderDetailPage, OrderNewPage, OrdersPage } from './pages/orders';
 import { ProductDetailPage } from './pages/productDetail';
 import { ProductNewPage } from './pages/productNew';
@@ -119,6 +120,7 @@ const BUILT: Record<string, ReactNode> = {
 const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   { path: 'sales/:id', anyOf: ['sale.create'], element: <SaleDetailPage /> },
   { path: 'orders/new', anyOf: ['online.manage'], element: <OrderNewPage /> },
+  { path: 'preorders/new', anyOf: ['sale.create'], element: <PreorderNewPage /> },
   { path: 'orders/:id', anyOf: ['online.manage'], element: <OrderDetailPage /> },
   { path: 'shifts/:id', anyOf: ['shift.view_all'], element: <ShiftDetailPage /> },
   { path: 'customers/:id', anyOf: ['customer.view'], element: <CustomerDetailPage /> },

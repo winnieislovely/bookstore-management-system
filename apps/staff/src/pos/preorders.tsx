@@ -1,18 +1,19 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { ChevronDown, Minus, Plus, X } from 'lucide-react';
-import { useState } from 'react';
+import { Check, ChevronDown, Minus, Plus, ShoppingCart, User, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ConfirmDialog, Facts, SelectField, TextArea, toast } from '../components/data';
-import { CustomerPicker, type CustomerChoice } from '../components/customer-picker';
+import type { CustomerChoice } from '../components/customer-picker';
 import { ProductSearch, hitTitle, type ProductHit } from '../components/product-search';
-import { Button, Field, InlineAlert, StatusChip, type Tone } from '../components/ui';
+import { Button, Field, InlineAlert, PageHeader, StatusChip, type Tone } from '../components/ui';
 import { get, post } from '../lib/api';
 import { formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { can, useMe } from '../lib/session';
 import { useOpenShift } from '../lib/shift';
 import type { CartCustomer, CartPreorder } from './cart';
-import { Dialog, MoneyInput } from './widgets';
+import { CustomerDialog, PaymentMethodPicker } from './dialogs';
+import { Dialog, Keypad } from './widgets';
 
 /**
  * Pre-orders (FR-ORD-14, FR-ORD-16, FR-POS-09; Design §12.8; revised 15 Nov 2026): one slip for books
@@ -102,31 +103,63 @@ interface DepositState {
   ref: string;
 }
 
-function DepositFields({ value, onChange, hint }: { value: DepositState; onChange: (d: DepositState) => void; hint?: string }) {
+/**
+ * A compact dropdown (Design §12.8): a 36 px button opening a small menu. Not a native select, so it
+ * stays at body size on phones without the iPhone zoom on focus.
+ */
+function CompactSelect<T extends string>({ label, value, options, onChange, disabled }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const current = options.find(([k]) => k === value)?.[1] ?? '';
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`${label}: ${current}`}
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        className="relative inline-flex h-9 min-w-32 items-center justify-between gap-2 rounded-md border border-paper-500 bg-white px-3 text-sm font-medium before:absolute before:inset-x-0 before:-inset-y-1 before:content-[''] disabled:bg-paper-100 disabled:text-ink-500"
+      >
+        {current}
+        {!disabled && <ChevronDown size={16} className={clsx('text-ink-500 transition-transform', open && 'rotate-180')} aria-hidden />}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
+          <ul role="listbox" aria-label={label} className="absolute right-0 z-20 mt-1 min-w-full overflow-hidden rounded-md border border-paper-300 bg-white py-1 shadow-md">
+            {options.map(([k, text]) => (
+              <li key={k} role="option" aria-selected={k === value}>
+                <button type="button" className="flex min-h-11 w-full items-center justify-between gap-3 px-3 text-left text-sm whitespace-nowrap hover:bg-navy-50" onClick={() => { onChange(k); setOpen(false); }}>
+                  {text}
+                  {k === value && <Check size={16} className="text-navy-700" aria-hidden />}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DepositFields({ value, onChange }: { value: DepositState; onChange: (d: DepositState) => void }) {
+  const digits = value.amountVnd ? String(value.amountVnd) : '';
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Hình thức nhận cọc">
-        {(
-          [
-            ['cash', 'Tiền mặt'],
-            ['transfer', 'Chuyển khoản'],
-            ['card', 'Thẻ'],
-          ] as const
-        ).map(([k, label]) => (
-          <button
-            key={k}
-            type="button"
-            role="radio"
-            aria-checked={value.method === k}
-            onClick={() => onChange({ ...value, method: k })}
-            className={clsx('h-11 rounded-xl border text-sm font-medium', value.method === k ? 'border-2 border-navy-700 bg-navy-50 text-navy-700' : 'border-paper-500')}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="flex flex-col gap-1">
+        <p className="text-[13px] font-medium text-ink-700">Phương thức thanh toán</p>
+        {/* Round radio ticks in three equal boxes, as on the payment dialog (Design §12.8, §13.4). */}
+        <PaymentMethodPicker value={value.method} onChange={(m) => onChange({ ...value, method: m })} />
       </div>
-      <MoneyInput label="Tiền cọc" value={value.amountVnd} onChange={(v) => onChange({ ...value, amountVnd: v })} />
-      {hint && <p className="-mt-2 text-[13px] text-ink-500 num">{hint}</p>}
+      {/* Every method: keyed on the keypad, as on the selling screen's cash payment (Design §12.8). */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-2">
+          <p className="text-[13px] font-medium text-ink-700">Tiền cọc</p>
+          <p className="h-12 rounded-md border border-paper-500 px-3 text-right text-lg leading-[46px] num">{digits ? formatNumber(Number(digits)) : '—'} ₫</p>
+        </div>
+        <Keypad onKey={(k) => { const next = k === 'del' ? digits.slice(0, -1) : (digits + k).replace(/^0+/, '').slice(0, 10); onChange({ ...value, amountVnd: next ? Number(next) : null }); }} />
+      </div>
     </div>
   );
 }
@@ -154,20 +187,48 @@ export function PreorderDialog({ online, customer, shiftId = null, onClose }: { 
   }
   return (
     <Dialog title="Phiếu đặt trước" size="lg" onClose={onClose}>
-      <NewPreorder initialCustomer={customer} shiftId={shiftId} onDone={onClose} />
+      <NewPreorder initialCustomer={customer} shiftId={shiftId} onDone={onClose} onCancel={onClose} />
     </Dialog>
   );
 }
 
-function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: CartCustomer | null; shiftId: string | null; onDone: () => void }) {
+/** “+ Tạo phiếu” on Đặt trước: the form as its own page, not a dialog (Design §12.8). */
+export function PreorderNewPage() {
+  const navigate = useNavigate();
+  return (
+    // Fills the screen height on phones like the selling screen: the product card stretches, the order bar sits at the bottom (Design §12.8).
+    <div className="flex max-w-[720px] flex-col max-sm:h-[calc(100dvh-104px)] lg:h-[calc(100dvh-136px)] lg:max-w-none">
+      <PageHeader back={{ to: '/preorders', label: 'Đặt trước' }} title="Phiếu đặt trước" />
+      <NewPreorder page initialCustomer={null} shiftId={null} onDone={() => navigate('/preorders')} onCancel={() => navigate('/preorders')} />
+    </div>
+  );
+}
+
+function NewPreorder({
+  initialCustomer,
+  shiftId,
+  onDone,
+  onCancel,
+  page = false,
+}: {
+  initialCustomer: CartCustomer | null;
+  shiftId: string | null;
+  onDone: () => void;
+  /** “Hủy”: drop the slip being written. */
+  onCancel?: () => void;
+  /** On its own page: the order bar sits at the bottom of the screen on phones. */
+  page?: boolean;
+}) {
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const qc = useQueryClient();
   const open = useOpenShift();
   const shift = { data: shiftId ? { id: shiftId } : open.data };
+  const [picking, setPicking] = useState(false);
   const [cust, setCust] = useState<CustomerChoice>(initialCustomer ? { kind: 'existing', customer: { ...initialCustomer, tierName: null } as never } : null);
   const [items, setItems] = useState<Draft[]>([]);
-  const [note, setNote] = useState('');
-  // Thu cọc box: open or closed; its state reads Có once an amount is entered (Design §12.8).
-  const [depOpen, setDepOpen] = useState<boolean | null>(null);
+  // Xác nhận opens the Thu cọc dialog (Design §12.8): Không cọc / Có cọc, then save.
+  const [depositDialog, setDepositDialog] = useState(false);
+  const [takeDeposit, setTakeDeposit] = useState(false);
   const [dep, setDep] = useState<DepositState>({ method: 'cash', amountVnd: null, ref: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -182,25 +243,33 @@ function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: Ca
   const config = useQuery({ queryKey: ['preorder-config'], queryFn: () => get<{ depositPct: number }>('/api/v1/preorders/config') });
   const pct = config.data?.depositPct ?? 30;
   const minDeposit = hold ? 0 : Math.round((value * pct) / 100);
-  // A required deposit (an order) starts open; an optional one (a hold) starts closed.
-  const depositOpen = depOpen ?? (!hold && minDeposit > 0);
-  const hasDeposit = (dep.amountVnd ?? 0) > 0;
+  // A required deposit (an order with a minimum) has no Không cọc choice (Design §12.8).
+  const required = !hold && minDeposit > 0;
+  const depositOpen = required || takeDeposit;
+  const depositVnd = depositOpen ? (dep.amountVnd ?? 0) : 0;
   const add = (h: ProductHit) =>
     setItems((xs) => (xs.some((x) => x.kind === 'product' && x.hit.variantId === h.variantId) ? xs.map((x) => (x.kind === 'product' && x.hit.variantId === h.variantId ? { ...x, qty: x.qty + 1 } : x)) : [...xs, { kind: 'product', hit: h, qty: 1 }]));
   const setQty = (i: number, qty: number) => setItems((xs) => (qty < 1 ? xs.filter((_, j) => j !== i) : xs.map((x, j) => (j === i ? { ...x, qty } : x))));
-  const save = async () => {
+  // A stale error goes as soon as the customer or the books change.
+  useEffect(() => setError(null), [cust, items]);
+  /** Xác nhận on the page: customer and books first, then the Thu cọc dialog. */
+  const confirm = () => {
     setError(null);
     if (!cust) return setError('Chọn khách hoặc nhập khách mới.');
     if (!items.length) return setError('Thêm sách khách muốn giữ hoặc đặt.');
-    if (!hold && minDeposit > 0 && (dep.amountVnd ?? 0) < minDeposit) return setError(`Tiền cọc tối thiểu ${formatVnd(minDeposit)} (${pct}%).`);
-    if (dep.amountVnd && dep.method === 'cash' && !shift.data) return setError('Cần một ca đang mở để nhận cọc tiền mặt.');
+    setDepositDialog(true);
+  };
+  const save = async () => {
+    setError(null);
+    if (!cust || !items.length) return;
+    if (required && depositVnd < minDeposit) return setError(`Tiền cọc tối thiểu ${formatVnd(minDeposit)} (${pct}%).`);
+    if (depositVnd && dep.method === 'cash' && !shift.data) return setError('Cần một ca đang mở để nhận cọc tiền mặt.');
     setBusy(true);
     try {
       const r = await post<{ docNo: string; status: string; expiresAt: string | null }>('/api/v1/preorders', {
         customer: cust.kind === 'existing' ? { customerId: cust.customer.id } : { name: cust.name.trim(), phone: cust.phone.trim() },
         lines: items.map((d) => (d.kind === 'product' ? { variantId: d.hit.variantId, qty: d.qty } : { title: d.title, qty: d.qty })),
-        ...(dep.amountVnd ? { deposit: depositBody(dep, shift.data?.id ?? null) } : {}),
-        ...(note.trim() && { note: note.trim() }),
+        ...(depositVnd ? { deposit: depositBody(dep, shift.data?.id ?? null) } : {}),
       });
       toast.success(r.status === 'contacted' ? `Đã giữ sách – ${r.docNo}, giữ đến ${formatDateTime(r.expiresAt!)}.` : `Đã lưu ${r.docNo} – Chờ xác nhận.`);
       void qc.invalidateQueries({ queryKey: ['preorders'] });
@@ -212,17 +281,64 @@ function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: Ca
       setBusy(false);
     }
   };
+  const dirty = items.length > 0 || !!cust;
+  const cancel = () => (dirty ? setConfirmCancel(true) : onCancel?.());
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h3 className="text-sm font-semibold text-ink-900">Khách hàng</h3>
-        <CustomerPicker value={cust} onChange={setCust} />
+    // Wide screens: the selling screen's two columns – search and customer left, products and buttons right (Design §12.8, §13.1).
+    <div className={clsx('flex min-h-0 flex-1 flex-col gap-4', page && 'lg:grid lg:grid-cols-[minmax(0,1fr)_420px] lg:grid-rows-1 lg:gap-6')}>
+      <div className="flex flex-col gap-4 lg:min-w-0">
+      {/* Laid out like the selling screen: product search, the Gắn khách row, the product card (Design §12.8, §13.1). */}
+      <ProductSearch onPick={add} hideSku placeholder="Nhập SKU / tên sách / ISBN" onFreeText={(title) => setItems((xs) => [...xs, { kind: 'text', title, qty: 1 }])} />
+      <div className="flex min-h-11 items-center gap-2">
+        {cust ? (
+          <>
+            <User size={18} className="shrink-0 text-ink-700" aria-hidden />
+            <div className="min-w-0">
+              <p className="truncate font-semibold">
+                {cust.kind === 'existing' ? cust.customer.name : cust.name}
+                {cust.kind === 'new' && <span className="ml-2 text-[13px] font-normal text-ink-500">Khách mới</span>}
+              </p>
+              {(cust.kind === 'existing' ? cust.customer.phoneE164 : cust.phone) && (
+                <p className="text-[13px] text-ink-500 num">{cust.kind === 'existing' ? formatPhone(cust.customer.phoneE164!) : cust.phone}</p>
+              )}
+            </div>
+            <button type="button" className="ml-auto inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-navy-50" aria-label="Đổi khách" title="Đổi khách" onClick={() => setCust(null)}>
+              <X size={18} aria-hidden />
+            </button>
+          </>
+        ) : (
+          <Button variant="primary" size="sm" icon={User} className="relative min-h-0! before:absolute before:inset-x-0 before:-inset-y-1.5 before:content-['']" onClick={() => setPicking(true)}>
+            Gắn khách
+          </Button>
+        )}
       </div>
-      <div className="flex flex-col gap-2">
-        <h3 className="text-sm font-semibold text-ink-900">Thông tin sản phẩm</h3>
-        <ProductSearch onPick={add} hideSku placeholder="Nhập SKU / tên sách / ISBN" onFreeText={(title) => setItems((xs) => [...xs, { kind: 'text', title, qty: 1 }])} />
+      </div>
+      {picking && (
+        <CustomerDialog
+          online
+          canCreate={false}
+          onClose={() => setPicking(false)}
+          onPick={(c) => {
+            setCust({ kind: 'existing', customer: { id: c.id, name: c.name, phoneE164: c.phoneE164, tierCode: c.tierCode, pointsBalance: c.pointsBalance } });
+            setPicking(false);
+          }}
+          onNew={(c) => {
+            setCust({ kind: 'new', phone: c.phone, name: c.name });
+            setPicking(false);
+          }}
+        />
+      )}
+      <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <div className="flex min-h-40 flex-1 flex-col overflow-hidden rounded-lg border border-paper-300 bg-white sm:min-h-56 lg:min-h-0">
+        <h3 className="px-4 pt-3 pb-1 text-sm font-semibold text-ink-900">Thông tin sản phẩm</h3>
+        {items.length === 0 && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-6 text-center text-sm text-ink-500">
+            <ShoppingCart size={32} className="text-ink-300" aria-hidden />
+            Chưa có sách nào
+          </div>
+        )}
         {items.length > 0 && (
-          <ul className="divide-y divide-paper-300 rounded-md border border-paper-300">
+          <ul className="min-h-0 flex-1 divide-y divide-paper-300 overflow-y-auto">
             {items.map((d, i) => (
               <li key={d.kind === 'product' ? d.hit.variantId : `t${i}`} className="flex items-center gap-2 px-3 py-2 text-sm">
                 <div className="min-w-0 flex-1">
@@ -246,43 +362,70 @@ function NewPreorder({ initialCustomer, shiftId, onDone }: { initialCustomer: Ca
           </ul>
         )}
       </div>
-      {mixed ? (
-        <InlineAlert tone="warning">Một phiếu chỉ gồm sách có sẵn (giữ sách) hoặc sách cần đặt. Bỏ bớt sách rồi tạo từng phiếu riêng.</InlineAlert>
-      ) : (
-        items.length > 0 && (
-          <div className="rounded-md border border-paper-300">
-            <button type="button" className="flex min-h-12 w-full items-center gap-2 px-3 text-left text-sm" aria-expanded={depositOpen} onClick={() => setDepOpen(!depositOpen)}>
-              <span className="flex-1 font-medium">
-                Thu cọc{!hold && minDeposit > 0 && <span className="font-normal text-ink-500"> · bắt buộc</span>}
-              </span>
-              <span className={hasDeposit ? 'font-semibold text-success-700' : 'text-ink-500'}>{hasDeposit ? 'Có' : 'Không'}</span>
-              <ChevronDown size={16} className={clsx('text-ink-500 transition-transform', depositOpen && 'rotate-180')} aria-hidden />
-            </button>
-            {depositOpen && (
-              <div className="border-t border-paper-300 p-3">
-                <DepositFields
-                  value={dep}
-                  onChange={setDep}
-                  hint={
-                    hold
-                      ? `Không bắt buộc – có cọc thì giữ lâu hơn. Tối đa ${formatVnd(value)}`
-                      : pct === 0
-                        ? `Không bắt buộc. Tối đa ${formatVnd(value)}`
-                        : minDeposit > 0
-                          ? `Tối thiểu ${formatVnd(minDeposit)} (${pct}%)${items.some((d) => d.kind === 'text') ? ' – sách chưa có trong danh mục chưa tính' : ` · trả đủ ${formatVnd(value)}`}`
-                          : 'Sách chưa có trong danh mục: không bắt buộc cọc tối thiểu.'
-                  }
-                />
+      {mixed && <InlineAlert tone="warning">Một phiếu chỉ gồm sách có sẵn (giữ sách) hoặc sách cần đặt. Bỏ bớt sách rồi tạo từng phiếu riêng.</InlineAlert>}
+      {/* Order bar like the selling screen: Hủy and Xác nhận (Design §12.8, §13.1), under the card that fills the screen height. */}
+      <div
+        className={clsx(
+          // No top border and no shadow: the lines scroll inside their card, nothing passes under the buttons (Design §12.8).
+          'flex shrink-0 flex-col gap-2 bg-white',
+          page && '-mt-1 pb-[env(safe-area-inset-bottom)] sm:pb-0',
+        )}
+      >
+        {error && !depositDialog && <InlineAlert tone="danger">{error}</InlineAlert>}
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="secondary" size="lg" full disabled={busy} onClick={cancel}>
+            Hủy
+          </Button>
+          <Button variant="primary" size="lg" full disabled={mixed || busy} onClick={confirm}>
+            Xác nhận
+          </Button>
+        </div>
+      </div>
+      {depositDialog && (
+        // Like the payment dialog on the selling screen (Design §12.8, §13.4).
+        <Dialog title="Thu cọc" size="sm" onClose={busy ? undefined : () => { setDepositDialog(false); setError(null); }}>
+          <div className="flex flex-col gap-4">
+            {/* Loại phiếu: a dropdown, Không cọc by default; fixed to Có cọc when a deposit is required (Design §12.8). */}
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <span className="text-ink-700">Loại phiếu</span>
+              <CompactSelect
+                label="Loại phiếu"
+                value={depositOpen ? 'deposit' : 'none'}
+                disabled={required}
+                options={[
+                  ['none', 'Không cọc'],
+                  ['deposit', 'Có cọc'],
+                ]}
+                onChange={(v) => setTakeDeposit(v === 'deposit')}
+              />
+            </div>
+            {depositOpen && <DepositFields value={dep} onChange={setDep} />}
+            <div>
+              <div className="flex items-baseline justify-between gap-3">
+                <p className="text-ink-700">Giá trị phiếu</p>
+                <p className="text-xl leading-7 font-bold whitespace-nowrap num">{value > 0 ? formatVnd(value) : '—'}</p>
               </div>
-            )}
+              {required && <p className="text-right text-sm text-ink-700 num">Tối thiểu {formatVnd(minDeposit)}</p>}
+            </div>
+            {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+            <Button variant="primary" size="lg" full loading={busy} onClick={() => void save()}>
+              Xác nhận
+            </Button>
           </div>
-        )
+        </Dialog>
       )}
-      <TextArea label="Ghi chú" value={note} onChange={(e) => setNote(e.target.value)} />
-      {error && <InlineAlert tone="danger">{error}</InlineAlert>}
-      <Button variant="primary" size="lg" full loading={busy} disabled={mixed} onClick={save}>
-        {hold ? 'Giữ sách' : 'Lưu phiếu'}
-      </Button>
+      </div>
+      {confirmCancel && (
+        <ConfirmDialog
+          title="Hủy phiếu đang tạo?"
+          body="Khách và sách vừa nhập sẽ không được lưu."
+          confirm="Hủy phiếu"
+          cancel="Tiếp tục nhập"
+          destructive
+          onConfirm={async () => onCancel?.()}
+          onClose={() => setConfirmCancel(false)}
+        />
+      )}
     </div>
   );
 }

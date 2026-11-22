@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router';
 import { CalendarClock, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { DataTable, FilterMenu, SearchBox, useDebounced, useListParam, useParam, type Column } from '../components/data';
 import { Button, PageHeader } from '../components/ui';
 import { get } from '../lib/api';
 import { formatPhone, formatVnd } from '../lib/format';
-import { PREORDER_GROUPS, PreorderChip, PreorderDialog, PreorderRecord, type PreorderGroup, type PreorderRow } from '../pos/preorders';
+import { PREORDER_GROUPS, PreorderChip, PreorderRecord, type PreorderGroup, type PreorderRow } from '../pos/preorders';
 
 /**
  * Pre-orders (“Đặt trước”, FR-POS-09, FR-ORD-14; Design §12.8): every slip for cashiers to see without
@@ -18,9 +19,9 @@ const GROUP_KEYS = Object.keys(PREORDER_GROUPS) as PreorderGroup[];
 const storedStatuses = (keys: string[]) => keys.flatMap((k) => PREORDER_GROUPS[k as PreorderGroup]?.statuses ?? []);
 
 export function PreordersPage() {
+  const navigate = useNavigate();
   const [q, setQ] = useParam('q');
   const [status, setStatus] = useListParam('status');
-  const [creating, setCreating] = useState(false);
   const [open, setOpen] = useState<PreorderRow | null>(null);
   const term = useDebounced(q.trim(), 250);
   const query = { q: term || undefined, ...(status.length ? { status: storedStatuses(status).join(',') } : { open: 'true' }) };
@@ -48,8 +49,8 @@ export function PreordersPage() {
       <PageHeader
         title="Đặt trước"
         actions={
-          <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>
-            Tạo phiếu
+          <Button variant="primary" icon={Plus} onClick={() => navigate('/preorders/new')}>
+            Thêm
           </Button>
         }
       />
@@ -70,10 +71,9 @@ export function PreordersPage() {
         empty={
           filtered
             ? { icon: CalendarClock, title: 'Không có phiếu phù hợp', help: 'Thử bỏ bớt bộ lọc hoặc đổi từ khóa.' }
-            : { icon: CalendarClock, title: 'Chưa có phiếu đang mở', help: 'Giữ sách cho khách hoặc nhận đặt sách chưa có bằng nút Tạo phiếu.' }
+            : { icon: CalendarClock, title: 'Chưa có phiếu đang mở', help: 'Giữ sách cho khách hoặc nhận đặt sách chưa có bằng nút Thêm.' }
         }
       />
-      {creating && <PreorderDialog online customer={null} onClose={() => setCreating(false)} />}
       {open && <PreorderRecord p={open} onClose={() => setOpen(null)} />}
     </>
   );

@@ -1,4 +1,4 @@
-import { ORDER_SOURCES, type ManualDiscount } from '@bookstore/domain';
+import { isVnMobile, normalizePhone, ORDER_SOURCES, RECIPIENT_MOBILE_MESSAGE, type ManualDiscount } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Calculator, CheckCircle, Minus, MoreHorizontal, Package, PackageCheck, Plus, Truck, Undo2, X, XCircle } from 'lucide-react';
@@ -168,12 +168,15 @@ function RecipientFields({
   onChange,
   onPick,
   onUnlink,
+  phoneError,
 }: {
   value: { phone: string; name: string };
   linked: PickedCustomer | null;
   onChange: (v: { phone: string; name: string }) => void;
   onPick: (c: PickedCustomer) => void;
   onUnlink: () => void;
+  /** Not a Vietnamese mobile number for a carrier delivery (Design §12.9). */
+  phoneError?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const digits = useDebounced(value.phone.replace(/\D/g, ''), 300);
@@ -192,6 +195,7 @@ function RecipientFields({
             required
             inputMode="tel"
             autoComplete="off"
+            error={phoneError ?? undefined}
             value={value.phone}
             onChange={(e) => {
               onChange({ ...value, phone: e.target.value });
@@ -284,6 +288,7 @@ export function OrderNewPage() {
   const { data: me } = useMe();
   const [discount, setDiscount] = useState<ManualDiscount | null>(null);
   const [rcpt, setRcpt] = useState({ phone: '', name: '' });
+  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [linked, setLinked] = useState<PickedCustomer | null>(null);
   const customerId = linked?.id ?? null;
   // A known customer fills the recipient and, when they have one, their latest delivery address (FR-SOC-03).
@@ -356,6 +361,11 @@ export function OrderNewPage() {
     if (!lines.length) return setError('Đơn chưa có sản phẩm.');
     const recipient = { name: rcpt.name.trim(), phone: rcpt.phone.trim() };
     if (!recipient.phone || !recipient.name) return setError('Cần nhập số điện thoại và tên người nhận.');
+    // The carrier takes only Vietnamese mobile numbers (FR-ORD-02, Design §12.9).
+    if (f.delivery === 'ship' && !isVnMobile(normalizePhone(recipient.phone))) {
+      setPhoneError(RECIPIENT_MOBILE_MESSAGE);
+      return setError(RECIPIENT_MOBILE_MESSAGE);
+    }
     setBusy(true);
     try {
       const r = await api<{ id: string; docNo: string; status: string }>('POST', '/api/v1/orders', {
@@ -479,7 +489,9 @@ export function OrderNewPage() {
             <RecipientFields
               value={rcpt}
               linked={linked}
+              phoneError={phoneError}
               onChange={(v) => {
+                if (v.phone !== rcpt.phone) setPhoneError(null);
                 // Changing the phone after a pick unlinks the customer; changing the name does not.
                 if (linked && v.phone !== rcpt.phone) setLinked(null);
                 setRcpt(v);

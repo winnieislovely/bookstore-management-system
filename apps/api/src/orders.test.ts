@@ -92,6 +92,14 @@ describe('address data and channels', () => {
 });
 
 describe('creating orders', () => {
+  it('refuses a carrier delivery to a phone that is not a Vietnamese mobile number (FR-ORD-02)', async () => {
+    const r = await create({ source: 'facebook', recipient: { name: 'Khách số cũ', phone: '0192345609' } });
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+    expect(r.body.error.code).toBe('invalid_recipient_phone');
+    // A landline is not a mobile either.
+    expect((await create({ source: 'facebook', recipient: { name: 'Khách bàn', phone: '028 3930 5243' } })).body.error.code).toBe('invalid_recipient_phone');
+  });
+
   it('creates a COD chat order confirmed at once, finds or creates the customer and stores the chat handle (FR-ORD-02, FR-SOC-03)', async () => {
     const before = await level(book);
     const r = await create({ source: 'facebook', contactHandle: 'fb.com/an.nguyen', sourceRef: 'https://m.me/an.nguyen', lines: [{ variantId: book, qty: 2 }], shippingVnd: 30000 });

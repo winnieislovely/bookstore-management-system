@@ -351,7 +351,20 @@ export function CloseShiftDialog({ expectedVnd, source, onClose, onSubmit }: { e
 // ---------------------------------------------------------------------------------------------
 // Customer attach (FR-POS-04)
 
-export function CustomerDialog({ online, canCreate, onPick, onClose }: { online: boolean; canCreate: boolean; onPick: (c: CartCustomer) => void; onClose: () => void }) {
+export function CustomerDialog({
+  online,
+  canCreate,
+  onPick,
+  onNew,
+  onClose,
+}: {
+  online: boolean;
+  canCreate: boolean;
+  onPick: (c: CartCustomer) => void;
+  /** Pre-orders: hand back the new customer's phone and name; it is created with the slip (Design §12.8). */
+  onNew?: (c: { phone: string; name: string }) => void;
+  onClose: () => void;
+}) {
   const [query, setQuery] = useState('');
   // A new customer, as in the pre-order form (Design §13.1, §12.8): phone and name.
   const [fresh, setFresh] = useState<{ phone: string; name: string } | null>(null);
@@ -403,6 +416,7 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
   const create = async () => {
     if (!fresh) return;
     const name = fresh.name.trim();
+    if (onNew) return onNew({ phone: fresh.phone.trim(), name });
     setBusy(true);
     setError(null);
     try {
@@ -414,7 +428,7 @@ export function CustomerDialog({ online, canCreate, onPick, onClose }: { online:
       setBusy(false);
     }
   };
-  const mayCreate = canCreate && online;
+  const mayCreate = (canCreate || !!onNew) && online;
   const open = results !== undefined;
 
   if (fresh) {

@@ -1,5 +1,5 @@
 import { schema } from '@bookstore/db';
-import { foldText } from '@bookstore/domain';
+import { foldText, formatPhone, isVnMobile, RECIPIENT_MOBILE_MESSAGE } from '@bookstore/domain';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { CarrierAdapter, ShipmentStatusResult } from '../integrations/ghn.js';
@@ -94,6 +94,8 @@ export async function createGhnShipment(ctx: Ctx, carrier: CarrierAdapter, id: s
   if (o.delivery !== 'ship') throw errors.conflict('pickup_order', `Đơn ${o.docNo} là đơn nhận tại cửa hàng, không tạo vận đơn.`);
   if (o.status !== 'confirmed' && o.status !== 'packing') throw errors.conflict('invalid_transition', `Đơn ${o.docNo} cần ở trạng thái “Đã xác nhận” hoặc “Đang đóng gói” để tạo vận đơn.`);
   if (!o.address?.wardCode || !o.address.line) throw new AppError(422, 'incomplete_address', `Đơn ${o.docNo} chưa có đủ địa chỉ giao hàng.`);
+  // GHN refuses a phone that is not a mobile number with a generic error: say what is wrong first (FR-ORD-02).
+  if (!isVnMobile(o.recipient.phone)) throw new AppError(422, 'invalid_recipient_phone', `${RECIPIENT_MOBILE_MESSAGE} Đơn ${o.docNo} có số ${formatPhone(o.recipient.phone)}: hãy tạo vận đơn trên GHN với số đúng rồi nhập mã vận đơn bằng tay.`);
   const districtId = await wardDistrict(ctx.db, o.address.wardCode);
   const lines = await ctx.db
     .select({ l: schema.orderLine, sku: schema.itemVariant.sku, weightG: schema.itemVariant.weightG })
@@ -114,7 +116,8 @@ export async function createGhnShipment(ctx: Ctx, carrier: CarrierAdapter, id: s
     });
   } catch (e) {
     if (e instanceof CarrierError) {
-      throw new AppError(409, 'carrier_unavailable', `GHN chưa tạo được vận đơn: ${e.message}. Có thể tạo vận đơn trên GHN rồi nhập mã vận đơn bằng tay.`);
+      // One full stop whatever GHN's message ends with; point at what usually causes it.
+      throw new AppError(409, 'carrier_unavailable', `GHN chưa tạo được vận đơn: ${e.message.trim().replace(/[.\s]+$/, '')}. Kiểm tra số điện thoại và địa chỉ người nhận, hoặc tạo vận đơn trên GHN rồi nhập mã vận đơn bằng tay.`);
     }
     throw e;
   }

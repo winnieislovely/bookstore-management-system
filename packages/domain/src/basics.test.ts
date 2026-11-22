@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { internalBarcode, normalizeIsbn } from './isbn.js';
 import { foldText, groupCode, slugify } from './text.js';
-import { formatPhone, normalizePhone } from './phone.js';
+import { formatPhone, isVnMobile, normalizePhone } from './phone.js';
 import { checkShiftClose, countDenominations, expectedCash } from './shift.js';
 import { isMarginTooLow, movingAverageCost } from './inventory.js';
 import { vnd } from './money.js';
@@ -36,6 +36,12 @@ describe('text', () => {
 describe('phone', () => {
   it('normalises Vietnamese numbers to E.164', () => {
     expect(normalizePhone('0912 345 678')).toBe('+84912345678');
+    // Recipient phones for the carrier: Vietnamese mobile numbers only (FR-ORD-02).
+    expect(['+84912345678', '+84328765432', '+84587654321', '+84701234567', '+84812345678'].every(isVnMobile)).toBe(true);
+    expect(isVnMobile('+84192345609')).toBe(false);
+    expect(isVnMobile('+842839305243')).toBe(false);
+    expect(isVnMobile('+8491234567')).toBe(false);
+    expect(isVnMobile(null)).toBe(false);
     expect(normalizePhone('84912345678')).toBe('+84912345678');
     expect(normalizePhone('+84 912 345 678')).toBe('+84912345678');
     expect(normalizePhone('12')).toBeNull();

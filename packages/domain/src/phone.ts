@@ -26,6 +26,17 @@ export function normalizePhone(input: string): string | null {
   return `+84${national}`;
 }
 
+/**
+ * A Vietnamese mobile number in E.164: +84 then 3, 5, 7, 8 or 9 and 8 more digits (10 digits locally).
+ * The carrier refuses anything else as a recipient phone (FR-ORD-02, TDD §4.5).
+ */
+export function isVnMobile(e164: string | null | undefined): boolean {
+  return !!e164 && /^\+84[35789]\d{8}$/.test(e164);
+}
+
+/** The message shown when a carrier delivery's recipient phone is not a mobile number (Design §12.9). */
+export const RECIPIENT_MOBILE_MESSAGE = 'Số điện thoại người nhận cần là số di động 10 số, bắt đầu bằng 03, 05, 07, 08 hoặc 09.';
+
 /** Display as `0912 345 678` (Design §14.3). */
 export function formatPhone(e164: string): string {
   if (!e164.startsWith('+84')) return e164;

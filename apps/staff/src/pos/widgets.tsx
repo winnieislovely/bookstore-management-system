@@ -8,6 +8,31 @@ import { createFrameReader } from '../components/barcodeReader';
 
 /** Touch-first POS widgets (Design §10.3, §10.9, §13). */
 
+/**
+ * The part of the screen the on-screen keyboard leaves visible (Design §10.9): how far the keyboard
+ * reaches up from the bottom, and the visible height. iPhone Safari does not resize the page for the
+ * keyboard, so bottom sheets follow the visual viewport; elsewhere this stays 0.
+ */
+function useKeyboardInset() {
+  const [v, setV] = useState({ inset: 0, height: 0 });
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const inset = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+      setV({ inset: inset > 40 ? inset : 0, height: Math.round(vv.height) });
+    };
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, []);
+  return v;
+}
+
 /** Every dialog has a compact title bar and no divider lines between title, body and buttons (Design §10.9, 15 Nov 2026). */
 export function Dialog({ title, onClose, children, size = 'md', footer, hideHeader }: { title: string; onClose?: (() => void) | undefined; children: ReactNode; size?: 'sm' | 'md' | 'lg'; footer?: ReactNode; /** No title bar; the title stays the dialog's accessible name. */ hideHeader?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -30,10 +55,12 @@ export function Dialog({ title, onClose, children, size = 'md', footer, hideHead
     };
   }, []);
   const w = { sm: 'sm:w-[480px]', md: 'sm:w-[640px]', lg: 'sm:w-[880px]' }[size];
+  // With the keyboard open the sheet sits on top of it, at most 90 % of what is still visible (Design §10.9).
+  const kb = useKeyboardInset();
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" style={kb.inset ? { bottom: kb.inset } : undefined} role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 bg-[rgba(26,38,56,0.45)]" onClick={onClose} />
-      <div ref={ref} className={clsx('relative flex max-h-[90dvh] w-full flex-col rounded-t-xl bg-white shadow-lg sm:rounded-lg', w)}>
+      <div ref={ref} className={clsx('relative flex max-h-[90dvh] w-full flex-col rounded-t-xl bg-white shadow-lg sm:rounded-lg', w)} style={kb.inset ? { maxHeight: Math.round(kb.height * 0.9) } : undefined}>
         {!hideHeader && (
         <header className="flex items-center justify-between gap-2 px-6 pt-4">
           <h2 className="text-base font-semibold">{title}</h2>

@@ -5,6 +5,7 @@ import {
   DELIVERY_MODES,
   foldText,
   initialOrderStatus,
+  isVnMobile,
   normalizePhone,
   ORDER_PAYMENT_METHODS,
   ORDER_SOURCES,
@@ -14,6 +15,7 @@ import {
   pickupCodeFromBytes,
   priceCart,
   pricingChannel,
+  RECIPIENT_MOBILE_MESSAGE,
   reviewReasons,
   vnd,
   WEB_ORDER,
@@ -383,6 +385,8 @@ export interface CreateOrderOptions {
 export async function createOrderTx(tx: Tx, ctx: Ctx, data: z.infer<typeof CreateOrderSchema>, opts: CreateOrderOptions) {
   const phoneE164 = normalizePhone(data.recipient.phone);
   if (!phoneE164) throw new AppError(400, 'invalid_phone', `Số điện thoại '${data.recipient.phone}' không hợp lệ.`);
+  // The carrier takes only Vietnamese mobile numbers (FR-ORD-02).
+  if (data.delivery === 'ship' && !isVnMobile(phoneE164)) throw new AppError(422, 'invalid_recipient_phone', RECIPIENT_MOBILE_MESSAGE);
   if (data.externalId) {
     const [dupe] = await tx.select({ id: schema.webOrder.id, docNo: schema.webOrder.docNo }).from(schema.webOrder).where(and(eq(schema.webOrder.source, data.source), eq(schema.webOrder.externalId, data.externalId)));
     if (dupe) throw errors.conflict('duplicate_external_id', `Đơn này đã được nhập: ${dupe.docNo}.`, { orderId: dupe.id });
