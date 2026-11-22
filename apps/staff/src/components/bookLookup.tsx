@@ -100,7 +100,7 @@ export function BookLookup({ onPick, endpoint = '/api/v1/catalog/book-lookup' }:
             aria-activedescendant={open && items[active] ? `${listId}-${active}` : undefined}
             autoComplete="off"
             placeholder="Nhập tên sách hoặc ISBN"
-            className="h-11 w-full rounded-md border border-paper-500 bg-white pr-10 pl-10 text-sm focus:border-navy-700 max-sm:text-base"
+            className="h-10 w-full rounded-md border border-paper-500 bg-white pr-10 pl-10 text-sm focus:border-navy-700 pointer-coarse:h-11 max-sm:text-base"
             value={text}
             onChange={(e) => setText(e.target.value)}
             onFocus={() => (term.length >= 3 || isbn) && setOpen(true)}

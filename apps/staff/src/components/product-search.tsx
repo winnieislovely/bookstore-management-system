@@ -17,6 +17,8 @@ export interface ProductHit {
   sku: string;
   priceVnd: number;
   available: number;
+  /** The shelf's name, to find it (FR-CAT-01). */
+  shelfName?: string | null;
   imageFileId: string | null;
 }
 
@@ -123,6 +125,7 @@ export function ProductSearch({
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-medium">{hitTitle(h)}</span>
                       {h.available > 0 ? <span className="text-[13px] text-ink-500 num">Tồn {formatNumber(h.available)}</span> : <span className="text-[13px] text-danger-700">Hết hàng</span>}
+                      {h.shelfName && <span className="text-[13px] text-ink-500"> · Kệ {h.shelfName}</span>}
                     </span>
                     <span className="text-right whitespace-nowrap num">{formatVnd(h.priceVnd)}</span>
                   </>
@@ -131,6 +134,7 @@ export function ProductSearch({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{hitTitle(h)}</span>
                   <span className="code text-ink-500">{h.sku}</span>
+                  {h.shelfName && <span className="text-[13px] text-ink-500"> · Kệ {h.shelfName}</span>}
                 </span>
                 <span className="text-right num">
                   {formatVnd(h.priceVnd)}

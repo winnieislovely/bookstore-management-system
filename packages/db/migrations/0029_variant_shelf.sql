@@ -1,0 +1,1 @@
+ALTER TABLE "catalog"."item_variant" ADD COLUMN "shelf_code" text;

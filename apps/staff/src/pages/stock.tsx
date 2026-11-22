@@ -33,6 +33,8 @@ export const MOVEMENT_LABEL: Record<string, string> = {
 
 interface StockRow {
   variantId: string;
+  /** The shelf's name, to find it (FR-CAT-01). */
+  shelfName?: string | null;
   itemId: string;
   kind: string;
   title: string;
@@ -81,6 +83,10 @@ export function StockPage() {
   const navigate = useNavigate();
   const [q, setQ] = useParam('q');
   const [state, setState] = useListParam('stock');
+  const [shelf, setShelf] = useListParam('shelf');
+  // The store's shelves, for the Kệ column and filter (FR-CAT-01, Design §12.1).
+  const shelves = useQuery({ queryKey: ['master', 'shelf'], queryFn: () => get<{ items: { code: string; i18n: { vi?: { name?: string } } }[] }>('/api/v1/admin/master-data/shelf') });
+  const shelfOptions = (shelves.data?.items ?? []).map((x) => ({ key: x.code, label: x.i18n.vi?.name ?? x.code }));
   const [changed, setChanged] = useParam('changed');
   const [unsold, setUnsold] = useParam('unsold');
   const changedRange = timeRange(changed);
@@ -89,11 +95,11 @@ export function StockPage() {
   // 'import': Phiếu nhập hàng from Excel; 'adjust': ticked products. Ticking products serves only stock
   // adjustment; Nhập thêm hàng is its own page, /stock/in (Design §12.1, §12.4).
   const [dialog, setDialog] = useState<null | 'import' | 'adjust'>(null);
-  const query = { q: q || undefined, stock: state.join(',') || undefined, changedFrom: changedRange.from, changedTo: changedRange.to, unsoldDays: unsold || undefined, page: Number(page), limit: 40 };
+  const query = { q: q || undefined, stock: state.join(',') || undefined, changedFrom: changedRange.from, changedTo: changedRange.to, unsoldDays: unsold || undefined, shelf: shelf.join(',') || undefined, page: Number(page), limit: 40 };
   const list = useQuery({ queryKey: ['stock-list', query], queryFn: () => get<{ items: StockRow[]; total: number }>('/api/v1/catalog/items', query) });
   const value = useQuery({ queryKey: ['valuation'], queryFn: () => get<{ totalVnd: number }>('/api/v1/inventory/valuation'), enabled: can(me, 'catalog.view_cost') });
   const showCost = list.data?.items.some((r) => 'avgCostVnd' in r) ?? false;
-  const filtered = !!(q || state.length || changed || unsold);
+  const filtered = !!(q || state.length || changed || unsold || shelf.length);
   const refresh = () => {
     void list.refetch();
     void value.refetch();
@@ -112,6 +118,7 @@ export function StockPage() {
         </>
       ),
     },
+    { header: 'Kệ', className: 'whitespace-nowrap', cell: (r: StockRow) => (r.shelfName ? r.shelfName : <span className="text-ink-500">—</span>) },
     { header: 'Tồn', align: 'right', cell: (r) => <span className={clsx('font-semibold', r.onHand <= 0 && 'text-danger-700')}>{formatNumber(r.onHand)}</span> },
     { header: 'Tối thiểu', align: 'right', cell: (r) => (r.minStock == null ? '—' : formatNumber(r.minStock)) },
     ...(showCost ? [{ header: 'Giá nhập', align: 'right' as const, cell: (r: StockRow) => (r.avgCostVnd ? formatVnd(r.avgCostVnd) : '—') }] : []),
@@ -164,6 +171,7 @@ export function StockPage() {
               values: state,
               onChange: setState,
             },
+            { label: 'Kệ', options: shelfOptions, values: shelf, onChange: setShelf },
             // Time of the latest stock change (Design §12.1).
             { kind: 'custom', label: 'Thay đổi gần nhất', summary: timeLabel(changed), active: !!changed, onClear: () => setChanged(''), content: <TimeFilter value={changed} onChange={setChanged} /> },
             // Slow movers: in stock, no sale in that time (FR-INV-10, Design §12.1).

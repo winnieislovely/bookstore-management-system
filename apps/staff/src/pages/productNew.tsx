@@ -1,12 +1,12 @@
 import { VAT_RATES_BP } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ImagePlus, Plus } from 'lucide-react';
-import { useCallback, useId, useState } from 'react';
+import { Globe, ImagePlus } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { BookLookup, type BookResult } from '../components/bookLookup';
 import { SelectField, TextArea, toast } from '../components/data';
-import { Button, Card, Field, InlineAlert, PageHeader } from '../components/ui';
+import { Button, Field, InlineAlert, PageHeader } from '../components/ui';
 import { get, post, upload } from '../lib/api';
 import { formatNumber, formatVnd } from '../lib/format';
 import { categoryOptions, nameOf, type Category, type Named } from './products';
@@ -19,20 +19,22 @@ type AutoField = 'title' | 'isbn' | 'authors' | 'publisherId' | 'description' | 
 /** Select value for a publisher from the lookup that is not on file yet: created on save. */
 const NEW_PUBLISHER = '__new__';
 
-interface Unit {
-  code: string;
-  i18n: { vi?: { name?: string }; en?: { name?: string } };
-}
-
 export function ProductNewPage() {
   const navigate = useNavigate();
   const categories = useQuery({ queryKey: ['categories'], queryFn: () => get<{ items: Category[] }>('/api/v1/catalog/categories') });
   const publishers = useQuery({ queryKey: ['publishers'], queryFn: () => get<{ items: Named[] }>('/api/v1/catalog/publishers') });
-  const units = useQuery({ queryKey: ['master-data', 'unit'], queryFn: () => get<{ items: Unit[] }>('/api/v1/admin/master-data/unit') });
-  const unitList = useId();
   const suppliers = useSuppliers();
-  const [f, setF] = useState({ kind: 'book' as 'book' | 'stationery' | 'other', sku: '', title: '', categoryId: '', description: '', isbn: '', barcode: '', authors: '', publisherId: '', unit: '', weightG: '', cost: '', price: '', qty: '', supplierId: '', consignment: false, discount: '', deadline: '', minStock: '', vatBp: 0 });
+  const [f, setF] = useState({ kind: 'book' as 'book' | 'stationery' | 'other', sku: '', title: '', categoryId: '', description: '', isbn: '', barcode: '', authors: '', publisherId: '', unit: '', weightG: '', cost: '', price: '', qty: '', supplierId: '', consignment: false, discount: '', deadline: '', minStock: '', vatBp: 0, web: false, shelfCode: '' });
+  // The store's shelves, to find the product later (FR-CAT-01).
+  const shelves = useQuery({ queryKey: ['master', 'shelf'], queryFn: () => get<{ items: { code: string; i18n: { vi?: { name?: string } } }[] }>('/api/v1/admin/master-data/shelf') });
   const [image, setImage] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => {
+    if (!image) return setPreview(null);
+    const url = URL.createObjectURL(image);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [image]);
   // Book lookup (FR-CAT-16): which fields it filled, a publisher to create, a cover already stored.
   const [auto, setAuto] = useState<Set<AutoField>>(new Set());
   const [newPublisher, setNewPublisher] = useState<string | null>(null);
@@ -146,6 +148,9 @@ export function ProductNewPage() {
             priceVnd: digits(f.price),
             vatBp: f.vatBp,
             minStock: f.minStock ? digits(f.minStock) : null,
+            // Published on the website as soon as it is created when switched on (FR-CAT-09).
+            publishedWeb: f.web,
+            shelfCode: f.shelfCode || null,
           },
         ],
         // First stock-in from the supplier (FR-PUR-02, FR-PUR-04).
@@ -177,27 +182,39 @@ export function ProductNewPage() {
   };
 
   return (
-    <div className="max-w-[720px] pb-20">
+    // Wide screens: two columns like the selling screen – details left, image, prices, stock and buttons right (Design §12.4).
+    <div className="max-w-[720px] lg:max-w-none">
       <PageHeader
         back={{ to: '/products', label: 'Sản phẩm' }}
         title="Thêm sản phẩm mới"
       />
-      <div className="flex flex-col gap-6">
-        <Card title="Thông tin sản phẩm">
-          {book && (
-            <div className="mb-4">
-              <BookLookup onPick={fill} />
-            </div>
-          )}
+      {/* Two framed parts so they read apart (Design §12.4). */}
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_400px] lg:items-start">
+        <section className="rounded-lg border border-paper-300 bg-white p-4 shadow-sm sm:p-6">
+          <h2 className="mb-4 text-base font-semibold text-ink-900">Thông tin chi tiết</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <SelectField label="Loại" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as typeof f.kind, vatBp: e.target.value === 'book' ? 0 : 1000 })}>
-              <option value="book">Sách</option>
-              <option value="stationery">Văn phòng phẩm</option>
-              <option value="other">Sản phẩm khác</option>
-            </SelectField>
-            <Field label="SKU" required className="code" value={f.sku} onChange={(e) => setF({ ...f, sku: e.target.value.toUpperCase() })} autoFocus />
+            {/* Loại sản phẩm first: label in the left half, the select as wide as the fields below; Tìm sách right under it for a book. */}
+            <label className="grid grid-cols-2 items-center gap-4 text-sm sm:col-span-2">
+              <span className="text-ink-700">Loại sản phẩm</span>
+              <select
+                className="h-10 w-full rounded-md border border-paper-500 bg-white px-3 text-sm pointer-coarse:h-11 max-sm:text-base"
+                value={f.kind}
+                onChange={(e) => setF({ ...f, kind: e.target.value as typeof f.kind, vatBp: e.target.value === 'book' ? 0 : 1000 })}
+              >
+                <option value="book">Sách</option>
+                <option value="stationery">Văn phòng phẩm</option>
+                <option value="other">Sản phẩm khác</option>
+              </select>
+            </label>
+            {book && (
+              <div className="sm:col-span-2">
+                <BookLookup onPick={fill} />
+              </div>
+            )}
+            {/* Tên sản phẩm on its own line; SKU with Danh mục; Nhà cung cấp with Nhà xuất bản (Design §12.4). */}
             <Field label="Tên sản phẩm" required value={f.title} onChange={set('title')} className="sm:col-span-2" />
-            <SelectField label="Danh mục" required value={f.categoryId} onChange={set('categoryId')} className="sm:col-span-2">
+            <Field label="SKU" required className="code" value={f.sku} onChange={(e) => setF({ ...f, sku: e.target.value.toUpperCase() })} autoFocus />
+            <SelectField label="Danh mục" required value={f.categoryId} onChange={set('categoryId')}>
               <option value="">— Chọn —</option>
               {categoryOptions(categories.data?.items ?? [], []).map((c) => (
                 <option key={c.key} value={c.key}>
@@ -205,7 +222,7 @@ export function ProductNewPage() {
                 </option>
               ))}
             </SelectField>
-            <SelectField label="Nhà cung cấp" required value={f.supplierId} onChange={(e) => setF({ ...f, supplierId: e.target.value })} className="sm:col-span-2">
+            <SelectField label="Nhà cung cấp" required value={f.supplierId} onChange={(e) => setF({ ...f, supplierId: e.target.value })}>
               <option value="">— Chọn —</option>
               {suppliers.data?.items.map((x) => (
                 <option key={x.id} value={x.id}>
@@ -213,14 +230,9 @@ export function ProductNewPage() {
                 </option>
               ))}
             </SelectField>
-            <div className="sm:col-span-2">
-              <TextArea label="Mô tả" required value={f.description} onChange={set('description')} rows={auto.has('description') ? 6 : 3} />
-            </div>
             {book ? (
               <>
-                <Field label="ISBN" inputMode="numeric" value={f.isbn} onChange={set('isbn')} />
-                <Field label="Tác giả" value={f.authors} onChange={set('authors')} helper="Nhiều tác giả cách nhau bằng dấu phẩy." />
-                <SelectField label="Nhà xuất bản" value={f.publisherId} onChange={set('publisherId')} className="sm:col-span-2">
+                <SelectField label="Nhà xuất bản" value={f.publisherId} onChange={set('publisherId')}>
                   <option value="">—</option>
                   {newPublisher && <option value={NEW_PUBLISHER}>NXB mới: {newPublisher}</option>}
                   {(publishers.data?.items ?? []).map((p) => (
@@ -229,97 +241,133 @@ export function ProductNewPage() {
                     </option>
                   ))}
                 </SelectField>
+                <Field label="ISBN" inputMode="numeric" value={f.isbn} onChange={set('isbn')} />
+                <Field label="Tác giả" value={f.authors} onChange={set('authors')} placeholder="VD: Tô Hoài, Nguyễn Nhật Ánh" />
               </>
             ) : (
-              <Field label="Mã vạch" value={f.barcode} onChange={set('barcode')} helper="Để trống để in mã nội bộ." className="sm:col-span-2" />
+              <Field label="Mã vạch" value={f.barcode} onChange={set('barcode')} helper="Để trống để in mã nội bộ." />
             )}
-            {/* Free text with suggestions from the unit list (Design §12.1). */}
-            <Field label="Đơn vị" list={unitList} value={f.unit} onChange={set('unit')} helper="Chọn gợi ý hoặc tự gõ." />
-            <datalist id={unitList}>
-              {(units.data?.items ?? []).map((u) => (
-                <option key={u.code} value={u.i18n.vi?.name || u.i18n.en?.name || u.code} />
-              ))}
-            </datalist>
+            {/* Plain free text, no suggestions (Design §12.1). */}
+            <Field label="Đơn vị" value={f.unit} onChange={set('unit')} placeholder="VD: cuốn" />
             <Field label="Khối lượng" required suffix="g" inputMode="numeric" value={f.weightG} onChange={num('weightG')} />
-          </div>
-        </Card>
-
-        <Card title="Giá">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Giá nhập" required suffix="₫" inputMode="numeric" value={money(f.cost)} onChange={num('cost')} />
-            <Field label="Giá bán" required suffix="₫" inputMode="numeric" value={money(f.price)} onChange={num('price')} />
-          </div>
-          {profit !== null && (
-            <p className={clsx('mt-3 text-sm num', profit < 0 ? 'text-danger-700' : 'text-ink-700')} aria-live="polite">
-              Lãi mỗi sản phẩm: <span className="font-semibold">{formatVnd(profit)}</span>
-              {profitPct !== null && ` (${profitPct}%)`}
-            </p>
-          )}
-        </Card>
-
-        <Card title="Tồn kho và thuế">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Field label="Số lượng nhập lần đầu" required inputMode="numeric" value={f.qty} onChange={num('qty')} />
-            <Field label="Tồn tối thiểu" inputMode="numeric" value={f.minStock} onChange={num('minStock')} />
-            <SelectField label="Thuế VAT" value={String(f.vatBp)} onChange={(e) => setF({ ...f, vatBp: Number(e.target.value) })}>
-              {VAT_RATES_BP.map((v) => (
-                <option key={v} value={v}>
-                  {v / 100}%
-                </option>
-              ))}
-            </SelectField>
-            {consignor && (
-              <label className="inline-flex items-center gap-2 text-sm sm:col-span-3">
-                <input type="checkbox" className="size-5 accent-navy-700" checked={f.consignment} onChange={(e) => setF({ ...f, consignment: e.target.checked })} />
-                Hàng ký gửi
-              </label>
-            )}
-            {consignment && (
-              <>
-                <Field label="Chiết khấu thỏa thuận" suffix="%" inputMode="decimal" value={f.discount} onChange={set('discount')} />
-                <Field label="Hạn đối soát / trả hàng" type="date" value={f.deadline} onChange={set('deadline')} />
-              </>
-            )}
-          </div>
-        </Card>
-
-        <Card title="Ảnh sản phẩm">
-          <p className="mb-3 text-[13px] text-ink-500">Bắt buộc một ảnh (JPG, PNG hoặc WebP).</p>
-          {cover && !image && (
-            <div className="mb-3 flex items-center gap-3">
-              <img src={`/api/v1/files/${cover.fileId}`} alt="Ảnh bìa" className="h-24 w-16 rounded-sm border border-paper-300 object-cover" />
-              <span className="text-sm text-ink-700">
-                Ảnh bìa
-              </span>
+            <div className="sm:col-span-2">
+              <TextArea label="Mô tả" required value={f.description} onChange={set('description')} rows={auto.has('description') ? 6 : 3} />
             </div>
-          )}
-          {coverBusy && <p className="mb-3 text-sm text-ink-500">Đang tải ảnh bìa…</p>}
-          <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-full border border-paper-500 px-4 text-sm hover:bg-navy-50">
-            <ImagePlus size={18} aria-hidden />
-            <span className="max-w-[240px] truncate">{image ? image.name : cover ? 'Chọn ảnh khác' : 'Chọn ảnh'}</span>
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              className="sr-only"
-              onChange={(e) => {
-                setImage(e.target.files?.[0] ?? null);
-                unmark('image');
-              }}
-            />
-          </label>
-        </Card>
+            {/* Ảnh sản phẩm under Mô tả; the chosen photo or the found cover shown in full (Design §12.4). */}
+            <div className="flex flex-col gap-2 sm:col-span-2">
+              <span className="text-[13px] font-medium text-ink-700">
+                Ảnh sản phẩm<span className="text-danger-700"> *</span>
+              </span>
+              {preview || (cover && !image) ? (
+                <img src={preview ?? `/api/v1/files/${cover!.fileId}`} alt="Ảnh sản phẩm" className="max-h-60 max-w-full self-start rounded-md border border-paper-300 bg-paper-50 object-contain" />
+              ) : (
+                <p className="text-[13px] text-ink-500">Bắt buộc một ảnh (JPG, PNG hoặc WebP).</p>
+              )}
+              {coverBusy && <p className="text-sm text-ink-500">Đang tải ảnh bìa…</p>}
+              <label className="inline-flex h-10 cursor-pointer items-center gap-2 self-start rounded-full border border-paper-500 px-4 text-sm hover:bg-navy-50">
+                <ImagePlus size={18} aria-hidden />
+                <span>{image || cover ? 'Chọn ảnh khác' : 'Chọn ảnh'}</span>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="sr-only"
+                  onChange={(e) => {
+                    setImage(e.target.files?.[0] ?? null);
+                    unmark('image');
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+        </section>
 
-        {error && <InlineAlert tone="danger">{error}</InlineAlert>}
-      </div>
+        {/* Wide screens: the right column stays in place while the details scroll, Xác nhận always in view (Design §12.4). */}
+        <div className="flex flex-col gap-4 lg:sticky lg:top-20">
+          <div className="flex flex-col gap-8 rounded-lg border border-paper-300 bg-white p-4 shadow-sm sm:p-6">
+          <section>
+            <h2 className="mb-4 text-base font-semibold text-ink-900">Giá và thuế</h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Giá nhập" required suffix="₫" inputMode="numeric" value={money(f.cost)} onChange={num('cost')} />
+              <Field label="Giá bán" required suffix="₫" inputMode="numeric" value={money(f.price)} onChange={num('price')} />
+              {/* The tax with the prices: the selling price includes it (BR-02, Design §12.4). */}
+              <SelectField label="Thuế VAT" value={String(f.vatBp)} onChange={(e) => setF({ ...f, vatBp: Number(e.target.value) })}>
+                {VAT_RATES_BP.map((v) => (
+                  <option key={v} value={v}>
+                    {v / 100}%
+                  </option>
+                ))}
+              </SelectField>
+            </div>
+            {profit !== null && (
+              <p className={clsx('mt-3 text-sm num', profit < 0 ? 'text-danger-700' : 'text-ink-700')} aria-live="polite">
+                Lãi mỗi sản phẩm: <span className="font-semibold">{formatVnd(profit)}</span>
+                {profitPct !== null && ` (${profitPct}%)`}
+              </p>
+            )}
+          </section>
 
-      {/* Sticky action bar (Design §12.4) */}
-      <div className="fixed inset-x-0 bottom-0 z-30 flex h-16 items-center justify-end gap-2 border-t border-paper-300 bg-white px-4 shadow-sm sm:px-6 md:left-[72px] lg:left-[264px]">
-        <Button variant="secondary" onClick={() => navigate('/products')}>
-          Hủy
-        </Button>
-        <Button variant="primary" icon={Plus} loading={busy} onClick={save}>
-          Thêm sản phẩm mới
-        </Button>
+          <section>
+            <h2 className="mb-4 text-base font-semibold text-ink-900">Tồn kho</h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Số lượng nhập lần đầu" required inputMode="numeric" value={f.qty} onChange={num('qty')} />
+              <Field label="Tồn tối thiểu" inputMode="numeric" value={f.minStock} onChange={num('minStock')} />
+              {/* One shelf from Cấu hình › Kệ hàng, to find it when a customer asks (Design §12.4). */}
+              <SelectField label="Kệ" value={f.shelfCode} onChange={set('shelfCode')} className="sm:col-span-2">
+                <option value="">—</option>
+                {(shelves.data?.items ?? []).map((x) => (
+                  <option key={x.code} value={x.code}>
+                    {x.i18n.vi?.name ?? x.code}
+                  </option>
+                ))}
+              </SelectField>
+              {consignor && (
+                <label className="inline-flex items-center gap-2 text-sm sm:col-span-2">
+                  <input type="checkbox" className="size-5 accent-navy-700" checked={f.consignment} onChange={(e) => setF({ ...f, consignment: e.target.checked })} />
+                  Hàng ký gửi
+                </label>
+              )}
+              {consignment && (
+                <>
+                  <Field label="Chiết khấu thỏa thuận" suffix="%" inputMode="decimal" value={f.discount} onChange={set('discount')} />
+                  <Field label="Hạn đối soát / trả hàng" type="date" value={f.deadline} onChange={set('deadline')} />
+                </>
+              )}
+            </div>
+          </section>
+
+          {/* Website: published as soon as it is created when on; off by default (Design §12.4). */}
+          <section>
+            <h2 className="mb-4 text-base font-semibold text-ink-900">Website</h2>
+            {/* Text left, a compact switch right; the whole row is the tap area (Design §12.4). */}
+            <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm">
+              <span className="inline-flex items-center gap-2 text-ink-700">
+                <Globe size={16} aria-hidden /> Hiển thị trên website
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={f.web}
+                aria-label="Hiển thị trên website"
+                onClick={() => setF({ ...f, web: !f.web })}
+                className={clsx('relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors', f.web ? 'bg-success-700' : 'bg-paper-500')}
+              >
+                <span className={clsx('inline-block size-4 rounded-full bg-white shadow-sm transition-transform', f.web ? 'translate-x-[18px]' : 'translate-x-0.5')} />
+              </button>
+            </label>
+          </section>
+
+          </div>
+          {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+          {/* The two buttons at equal widths under the right card; no bar fixed to the bottom (Design §12.4). */}
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="secondary" size="lg" full onClick={() => navigate('/products')}>
+              Hủy
+            </Button>
+            <Button variant="primary" size="lg" full loading={busy} onClick={save}>
+              Xác nhận
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

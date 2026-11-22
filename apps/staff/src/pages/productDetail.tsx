@@ -1,9 +1,10 @@
 import { VAT_RATES_BP } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { Globe, History, ImageOff, ImagePlus, Package, Pencil, Printer, Share2, Trash2 } from 'lucide-react';
+import { Globe, History, ImageOff, ImagePlus, MapPin, Package, Pencil, Printer, Share2, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { useParams } from 'react-router';
+import { CompactSelect } from '../components/compact-select';
 import { ConfirmDialog, Facts, SelectField, TextArea, toast } from '../components/data';
 import { hitTitle, ProductSearch } from '../components/product-search';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip } from '../components/ui';
@@ -31,6 +32,8 @@ interface Variant {
   publishedPos: boolean;
   publishedWeb: boolean;
   minStock: number | null;
+  /** The shelf it sits on, to find it (FR-CAT-01). */
+  shelfCode: string | null;
   version: number;
   barcodes: { code: string; kind: string }[];
   stock: { onHand: number; reserved: number; available: number; byLocation: { location: string; onHand: number; reserved: number }[] };
@@ -101,6 +104,10 @@ export function ProductDetailPage() {
         <span className="ml-auto flex flex-wrap gap-3">
           {x.variants.map((v) => (
             <WebToggle key={v.id} v={v} label={x.variants.length > 1 ? `${v.sku} · Bán trên website` : 'Bán trên website'} disabled={!edit} onSaved={refresh} />
+          ))}
+          {/* The shelf, to find it when a customer asks; changed here at once (Design §12.3). */}
+          {x.variants.map((v) => (
+            <ShelfPicker key={`shelf-${v.id}`} v={v} disabled={!edit} onSaved={refresh} />
           ))}
         </span>
       </div>
@@ -400,6 +407,30 @@ function PriceHistory({ v, onClose }: { v: Variant; onClose: () => void }) {
         </ul>
       )}
     </Dialog>
+  );
+}
+
+/** Move the item to another shelf from the store's list, saved at once (FR-CAT-01, Design §12.3). */
+function ShelfPicker({ v, disabled, onSaved }: { v: Variant; disabled: boolean; onSaved: () => void }) {
+  const shelves = useQuery({ queryKey: ['master', 'shelf', 'all'], queryFn: () => get<{ items: { code: string; active: boolean; i18n: { vi?: { name?: string } } }[] }>('/api/v1/admin/master-data/shelf', { all: 'true' }) });
+  const all = shelves.data?.items ?? [];
+  const name = (code: string) => all.find((x) => x.code === code)?.i18n.vi?.name ?? code;
+  // Active shelves to choose from; the current one stays listed even when no longer used.
+  const options: [string, string][] = [['', 'Chưa xếp kệ'], ...all.filter((x) => x.active || x.code === v.shelfCode).map((x) => [x.code, x.i18n.vi?.name ?? x.code] as [string, string])];
+  const save = async (code: string) => {
+    try {
+      await patch(`/api/v1/catalog/variants/${v.id}`, { version: v.version, shelfCode: code || null });
+      toast.success(code ? `Đã chuyển sang kệ ${name(code)}.` : 'Đã bỏ kệ.');
+      onSaved();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+  return (
+    <span className="inline-flex items-center gap-2 text-sm">
+      <MapPin size={16} className="text-ink-500" aria-hidden /> Kệ
+      <CompactSelect label="Kệ" value={v.shelfCode ?? ''} options={options} disabled={disabled} onChange={(code) => void save(code)} />
+    </span>
   );
 }
 

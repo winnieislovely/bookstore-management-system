@@ -85,6 +85,44 @@ describe('bundles (FR-CAT-12)', () => {
   });
 });
 
+describe('new product published on the website (FR-CAT-09)', () => {
+  it('stays off the website unless the form switches it on', async () => {
+    const make = async (sku: string, publishedWeb?: boolean) =>
+      (await h.call('POST', '/api/v1/catalog/items', { cookie: warehouse, body: { kind: 'other', i18n: { en: { title: sku, description: sku } }, categoryIds: [cat], variants: [{ sku, weightG: 100, priceVnd: 10000, vatBp: 1000, ...(publishedWeb !== undefined && { publishedWeb }) }] } })).body.variantIds[0] as string;
+    const off = await make('WEB-OFF');
+    const on = await make('WEB-ON', true);
+    const rows = await h.t.sql`select id, published_web from catalog.item_variant where id in (${off}, ${on})`;
+    expect(Object.fromEntries(rows.map((r) => [r.id, r.published_web]))).toEqual({ [off]: false, [on]: true });
+  });
+});
+
+describe('shelves (FR-CAT-01, FR-ADM-10)', () => {
+  it('places a product on one shelf from the fixed list, shows it in searches and filters by it; stock stays one quantity', async () => {
+    const shelf = (code: string, name: string, active = true) => h.call('PUT', `/api/v1/admin/master-data/shelf/${code}`, { cookie: owner, body: { name, active, sort: 0 } });
+    expect((await shelf('a3', 'A3 · Văn học Việt Nam')).status).toBe(200);
+    expect((await shelf('b1', 'B1 · Thiếu nhi')).status).toBe(200);
+    const make = (sku: string, shelfCode?: string) =>
+      h.call('POST', '/api/v1/catalog/items', { cookie: warehouse, body: { kind: 'other', i18n: { en: { title: sku, description: sku } }, categoryIds: [cat], variants: [{ sku, weightG: 100, priceVnd: 10000, vatBp: 1000, ...(shelfCode && { shelfCode }) }] } });
+    // Only a shelf of the list can be chosen.
+    expect((await make('SHELF-X', 'zz9')).body.error.code).toBe('invalid_shelf');
+    const id = (await make('SHELF-A', 'a3')).body.variantIds[0] as string;
+    const hit = (await h.call('GET', '/api/v1/catalog/items?q=SHELF-A', { cookie: cashier })).body.items[0];
+    expect(hit).toMatchObject({ sku: 'SHELF-A', shelfCode: 'a3', shelfName: 'A3 · Văn học Việt Nam' });
+    expect((await h.call('GET', '/api/v1/catalog/items?shelf=a3', { cookie: cashier })).body.items.map((x: { sku: string }) => x.sku)).toEqual(['SHELF-A']);
+    // Moving it takes a new label only.
+    const v = (await h.call('GET', `/api/v1/catalog/items/${hit.itemId}`, { cookie: warehouse })).body.variants[0];
+    expect((await h.call('PATCH', `/api/v1/catalog/variants/${id}`, { cookie: warehouse, body: { version: v.version, shelfCode: 'b1' } })).status).toBe(200);
+    expect((await h.call('GET', '/api/v1/catalog/items?q=SHELF-A', { cookie: cashier })).body.items[0].shelfName).toBe('B1 · Thiếu nhi');
+    // A shelf no longer used cannot be chosen, but items already on it still show it.
+    expect((await shelf('b1', 'B1 · Thiếu nhi', false)).status).toBe(200);
+    expect((await make('SHELF-B', 'b1')).body.error.code).toBe('invalid_shelf');
+    expect((await h.call('GET', '/api/v1/catalog/items?q=SHELF-A', { cookie: cashier })).body.items[0].shelfName).toBe('B1 · Thiếu nhi');
+    // Stock is not split by shelf.
+    const [level] = await h.t.sql`select count(*)::int as n from inventory.stock_level where variant_id = ${id} and location <> 'floor'`;
+    expect(level!.n).toBe(0);
+  });
+});
+
 describe('stock-in without supplier orders (FR-PUR-07 removed)', () => {
   it('adds stock directly; the supplier-order endpoints are gone', async () => {
     for (const qty of [8, 12]) {

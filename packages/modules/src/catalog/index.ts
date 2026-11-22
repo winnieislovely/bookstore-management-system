@@ -4,6 +4,7 @@ import { and, asc, count, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
 import * as settings from '../settings/index.js';
+import * as masterdata from '../masterdata/index.js';
 import { availableSql } from './bundles.js';
 import { AppError, can, emit, errors, requirePermission, type Ctx, type Tx } from '../platform/index.js';
 
@@ -42,6 +43,8 @@ export const VariantSchema = z.object({
   publishedWeb: z.boolean().default(false),
   webStockDisplay: z.enum(['exact', 'few_left', 'in_out', 'hidden']).nullable().default(null),
   minStock: z.number().int().min(0).nullable().default(null),
+  /** One shelf from the store's list, to find the item (FR-CAT-01). */
+  shelfCode: z.string().trim().min(1).max(40).nullable().default(null),
 });
 export type VariantInput = z.input<typeof VariantSchema>;
 
@@ -167,6 +170,7 @@ async function insertVariant(tx: Tx, ctx: Ctx, itemId: string, v: ReturnType<typ
       publishedWeb: v.publishedWeb,
       webStockDisplay: v.webStockDisplay,
       minStock: v.minStock,
+      shelfCode: await checkShelf(tx, v.shelfCode),
     })
     .returning();
   const codes = [...new Set(v.barcodes)];
@@ -306,6 +310,8 @@ export const VariantUpdateSchema = z.object({
   webStockDisplay: z.enum(['exact', 'few_left', 'in_out', 'hidden']).nullable().optional(),
   minStock: z.number().int().min(0).nullable().optional(),
   addBarcodes: z.array(z.string().trim().min(4).max(64)).optional(),
+  /** Move the item to another shelf; null takes it off any shelf (FR-CAT-01). */
+  shelfCode: z.string().trim().min(1).max(40).nullable().optional(),
 });
 
 export async function updateVariant(ctx: Ctx, variantId: string, input: z.input<typeof VariantUpdateSchema>) {
@@ -320,6 +326,7 @@ export async function updateVariant(ctx: Ctx, variantId: string, input: z.input<
       if (dupes[0]) throw duplicateError(dupes[0]);
     }
     const { version, addBarcodes, ...fields } = data;
+    if (fields.shelfCode !== undefined) fields.shelfCode = await checkShelf(tx, fields.shelfCode);
     const [after] = await tx
       .update(schema.itemVariant)
       .set({ ...(fields as Record<string, unknown>), version: before.version + 1, updatedAt: ctx.clock.now() })
@@ -332,6 +339,17 @@ export async function updateVariant(ctx: Ctx, variantId: string, input: z.input<
     return { id: variantId, version: after.version };
   });
 }
+
+/** Only an active shelf of the store's list can be chosen (FR-ADM-10); null means none. */
+async function checkShelf(tx: Tx, code: string | null | undefined): Promise<string | null> {
+  if (!code) return null;
+  if (!(await masterdata.isActive(tx, 'shelf', code))) throw new AppError(422, 'invalid_shelf', 'Kệ này không có trong danh sách hoặc đã ngừng dùng.');
+  return code;
+}
+
+/** The shelf's name for a variant, kept even after the shelf is deactivated. */
+const shelfNameSql = (code: SQL | typeof schema.itemVariant.shelfCode) =>
+  sql<string | null>`(select md.i18n -> 'vi' ->> 'name' from platform.master_data md where md.kind = 'shelf' and md.code = ${code})`;
 
 function pick(row: Record<string, unknown>, keys: string[]) {
   return Object.fromEntries(keys.map((k) => [k, row[k]]));
@@ -414,6 +432,8 @@ export const ListQuery = z.object({
   unsoldDays: z.coerce.number().pipe(z.union([z.literal(30), z.literal(60), z.literal(90)])).optional(),
   /** “Thiếu ảnh”: products without a photo, typically imported (FR-CAT-11). */
   image: z.enum(['missing']).optional(),
+  /** Items on these shelves (FR-CAT-01). */
+  shelf: csvField.pipe(z.array(z.string().min(1).max(40)).min(1).optional()),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(40),
 });
@@ -452,6 +472,7 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
       having sum(s.on_hand) > 0 and (max(s.last_sale_at) is null or max(s.last_sale_at) < ${since.toISOString()}::timestamptz))`);
   }
   if (q.image === 'missing') where.push(sql`not exists (select 1 from catalog.item_image im where im.item_id = ${i.id})`);
+  if (q.shelf) where.push(inArray(v.shelfCode, q.shelf));
   const filter = where.length ? and(...where) : undefined;
 
   const rows = await ctx.db
@@ -472,6 +493,8 @@ export async function listItems(ctx: Ctx, input: z.input<typeof ListQuery>) {
       /** Latest stock movement, for the Stock list (Design §12.1). */
       lastMovementAt: sql<string | null>`(select max(m.at) from inventory.stock_movement m where m.variant_id = ${v.id})`,
       minStock: v.minStock,
+      shelfCode: v.shelfCode,
+      shelfName: shelfNameSql(v.shelfCode),
       status: i.status,
       releaseDate: i.releaseDate,
       imageFileId: sql<string | null>`(select im.file_id from catalog.item_image im where im.item_id = ${i.id} order by im.sort limit 1)`,

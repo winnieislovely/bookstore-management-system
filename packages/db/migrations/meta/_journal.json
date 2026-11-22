@@ -204,6 +204,13 @@
       "when": 1795280638445,
       "tag": "0028_preorder_to_delivery",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1795335964848,
+      "tag": "0029_variant_shelf",
+      "breakpoints": true
     }
   ]
 }

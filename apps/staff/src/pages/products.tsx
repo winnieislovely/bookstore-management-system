@@ -17,6 +17,8 @@ import { ImportWizard } from './import';
 
 interface ProductRow {
   variantId: string;
+  /** The shelf's name, to find it (FR-CAT-01). */
+  shelfName?: string | null;
   itemId: string;
   kind: string;
   title: string;
@@ -113,14 +115,18 @@ export function ProductsPage() {
   const [category, setCategory] = useListParam('category');
   const [status, setStatus] = useListParam('status');
   const [image, setImage] = useListParam('image');
+  const [shelf, setShelf] = useListParam('shelf');
+  // The store's shelves, for the Kệ column and filter (FR-CAT-01, Design §12.1).
+  const shelves = useQuery({ queryKey: ['master', 'shelf'], queryFn: () => get<{ items: { code: string; i18n: { vi?: { name?: string } } }[] }>('/api/v1/admin/master-data/shelf') });
+  const shelfOptions = (shelves.data?.items ?? []).map((x) => ({ key: x.code, label: x.i18n.vi?.name ?? x.code }));
   const [page, setPage] = useParam('page', '1');
   const [selected, setSelected] = useState<Map<string, ProductRow>>(new Map());
   const [dialog, setDialog] = useState<null | 'labels' | 'import'>(null);
   const categories = useQuery({ queryKey: ['categories'], queryFn: () => get<{ items: Category[] }>('/api/v1/catalog/categories') });
 
   const csv = (v: string[]) => v.join(',') || undefined;
-  const query = { q: q || undefined, stock: csv(stock), kind: csv(kind), category: csv(category), status: csv(status), image: csv(image), page: Number(page), limit: 40 };
-  const filtered = !!(q || stock.length || kind.length || category.length || status.length || image.length);
+  const query = { q: q || undefined, stock: csv(stock), kind: csv(kind), category: csv(category), status: csv(status), image: csv(image), shelf: csv(shelf), page: Number(page), limit: 40 };
+  const filtered = !!(q || stock.length || kind.length || category.length || status.length || image.length || shelf.length);
   const list = useQuery({ queryKey: ['products', query], queryFn: () => get<ProductPage>('/api/v1/catalog/items', query) });
   const showCost = list.data?.items.some((r) => 'avgCostVnd' in r) ?? false;
 
@@ -137,6 +143,7 @@ export function ProductsPage() {
         </>
       ),
     },
+    { header: 'Kệ', className: 'whitespace-nowrap', cell: (r: ProductRow) => (r.shelfName ? r.shelfName : <span className="text-ink-500">—</span>) },
     { header: t('products.col.stock'), align: 'right', cell: (r) => <span className={clsx(r.onHand <= 0 && 'text-danger-700')}>{formatNumber(r.onHand)}</span> },
     { header: t('products.col.price'), align: 'right', cell: (r) => formatVnd(r.priceVnd) },
     // Cost only with `catalog.view_cost` (FR-CAT-07); the API omits it otherwise.
@@ -192,6 +199,7 @@ export function ProductsPage() {
               onChange: setStock,
             },
             { label: 'Loại', options: KINDS, values: kind, onChange: setKind },
+            { label: 'Kệ', options: shelfOptions, values: shelf, onChange: setShelf },
             { label: 'Phân loại', options: categoryOptions(categories.data?.items ?? [], kind), values: category, onChange: setCategory },
             {
               label: 'Trạng thái',

@@ -757,12 +757,15 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
                     <ResultThumb item={r} />
                     <span className="min-w-0 flex-1">
                       <span className="line-clamp-2 font-medium">{itemTitle(r)}</span>
-                      {stock.data?.has(r.variantId) &&
-                        (stock.data.get(r.variantId)! > 0 ? (
-                          <span className="block text-[13px] text-ink-500 num">Tồn: {formatNumber(stock.data.get(r.variantId)!)}</span>
-                        ) : (
-                          <span className="block text-[13px] text-danger-700">Hết hàng</span>
-                        ))}
+                      {/* Stock, then the shelf to fetch it from (Design §13.1); the shelf shows offline too. */}
+                      {(stock.data?.has(r.variantId) || r.shelfName) && (
+                        <span className="block text-[13px] text-ink-500 num">
+                          {stock.data?.has(r.variantId) &&
+                            (stock.data.get(r.variantId)! > 0 ? <>Tồn: {formatNumber(stock.data.get(r.variantId)!)}</> : <span className="text-danger-700">Hết hàng</span>)}
+                          {stock.data?.has(r.variantId) && r.shelfName && ' · '}
+                          {r.shelfName && <>Kệ {r.shelfName}</>}
+                        </span>
+                      )}
                       {(() => {
                         const hs = holds.data?.filter((h) => h.variantId === r.variantId) ?? [];
                         if (!hs.length) return null;

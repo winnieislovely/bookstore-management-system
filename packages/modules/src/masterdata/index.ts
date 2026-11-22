@@ -8,7 +8,7 @@ import { AppError, errors, requirePermission, type Ctx, type Tx } from '../platf
  * Master data (FR-ADM-10, TDD §4.12): configurable lists referenced by code, so labels can be
  * renamed without code changes. Staff-only labels are Vietnamese (`{ vi: { name } }`, TDD §5.1).
  */
-export const MASTER_KINDS = ['unit', 'reason_code', 'payment_method', 'order_source', 'holiday', 'location'] as const;
+export const MASTER_KINDS = ['unit', 'reason_code', 'payment_method', 'order_source', 'holiday', 'location', 'shelf'] as const;
 export type MasterKind = (typeof MASTER_KINDS)[number];
 
 /** Kinds whose codes are fixed by the system: only the label, order and active flag can change. */
@@ -52,6 +52,8 @@ const DEFAULTS: Record<MasterKind, [string, string][]> = {
     ['floor', 'Quầy kệ'],
     ['back', 'Kho sau'],
   ],
+  // The store's shelves, to find goods (FR-CAT-01); the store adds its own.
+  shelf: [],
 };
 
 export async function seed(tx: Tx): Promise<void> {

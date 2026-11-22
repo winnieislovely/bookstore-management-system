@@ -24,6 +24,8 @@ export interface CachedItem {
   /** Item kind and first photo (null when none), for the search results (TDD §7.3). */
   kind?: string;
   imageFileId?: string | null;
+  /** The shelf's name, to fetch it from the right shelf (FR-CAT-01). */
+  shelfName?: string | null;
   /** Folded search text: both titles, authors, SKU, barcodes (diacritic-insensitive). */
   search: string;
 }

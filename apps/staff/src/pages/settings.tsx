@@ -239,6 +239,8 @@ const MASTER: [string, string][] = [
   ['payment_method', 'Phương thức thanh toán'],
   ['order_source', 'Nguồn đơn hàng'],
   ['holiday', 'Ngày lễ'],
+  // The store's shelves, to find goods (FR-CAT-01, FR-ADM-10).
+  ['shelf', 'Kệ hàng'],
 ];
 interface MasterRow {
   code: string;

@@ -128,6 +128,8 @@ export const itemVariant = catalog.table(
     status: text().notNull().default('active'),
     publishedPos: boolean().notNull().default(true),
     publishedWeb: boolean().notNull().default(false),
+    /** A shelf from master data (kind `shelf`), to find the item; not a stock location (FR-CAT-01). */
+    shelfCode: text(),
     webStockDisplay: text(),
     minStock: integer(),
     createdAt: createdAt(),

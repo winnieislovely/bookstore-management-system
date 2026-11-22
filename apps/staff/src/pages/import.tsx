@@ -128,6 +128,8 @@ export function ImportWizard({ kind, kinds, onKindChange, onImported }: { kind: 
             {kind !== 'customers' && (
               <InlineAlert tone="info">
                 Mẫu có cột SKU (bắt buộc) và ISBN (không bắt buộc) riêng. Ảnh không nhập qua Excel: sản phẩm mới được đánh dấu “Thiếu ảnh” để thêm ảnh sau.
+                {/* The product import's opening stock is for goods already held (SRS FR-CAT-11, Design §12.4). */}
+                {kind === 'products' && ' Cột Tồn đầu kỳ chỉ dùng cho hàng cửa hàng đang có sẵn (không ghi nhà cung cấp). Hàng mới mua từ nhà cung cấp hãy nhập ở trang Tồn kho.'}
               </InlineAlert>
             )}
             <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border-2 border-dashed border-paper-500 px-6 py-10 text-center hover:bg-navy-50">
