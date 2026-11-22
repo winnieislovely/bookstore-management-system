@@ -151,6 +151,16 @@ body { font-size: 14px; line-height: 22px; }
   input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"], [aria-invalid="true"]):focus,
   textarea:not([aria-invalid="true"]):focus,
   select:not([aria-invalid="true"]):focus { border-color: var(--color-navy-700); }
+  /* Design §10.2: every dropdown draws the same arrow – ChevronDown 16 px ink-500, 12 px from the right
+     edge – instead of the browser's own, with room for it (beats px-3: a higher specificity in this layer). */
+  select:not([multiple]) {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235C6675' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 16px 16px;
+    padding-right: 36px;
+  }
 }
 
 /* Design §6.5 touch density */

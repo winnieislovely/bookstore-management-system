@@ -1,4 +1,4 @@
-import { isVnMobile, normalizePhone, ORDER_SOURCES, RECIPIENT_MOBILE_MESSAGE, type ManualDiscount } from '@bookstore/domain';
+import { isVnMobile, normalizePhone, ORDER_SOURCES, parseVnd, RECIPIENT_MOBILE_MESSAGE, type ManualDiscount } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Calculator, CheckCircle, Minus, MoreHorizontal, Package, PackageCheck, Plus, Truck, Undo2, X, XCircle } from 'lucide-react';
@@ -255,6 +255,29 @@ function useWards(provinceId: number | null) {
   });
 }
 
+/** A compact money field, 36 × 144 px like the Hình thức dropdown and the Giảm giá field (Design §12.9). */
+function CompactMoney({ label, value, onChange }: { label: string; value: number | null; onChange: (v: number | null) => void }) {
+  const [text, setText] = useState(value === null ? '' : formatNumber(value));
+  useEffect(() => setText(value === null ? '' : formatNumber(value)), [value]);
+  return (
+    <span className="inline-flex h-9 w-36 items-center gap-2 rounded-md border border-paper-500 bg-white px-3 focus-within:border-navy-700">
+      <input
+        aria-label={label}
+        inputMode="numeric"
+        className="h-full min-w-0 flex-1 bg-transparent text-right text-sm num outline-none"
+        placeholder="0"
+        value={text}
+        onChange={(e) => {
+          const v = parseVnd(e.target.value);
+          setText(v === null ? '' : formatNumber(v));
+          onChange(v);
+        }}
+      />
+      <span className="text-sm text-ink-500">₫</span>
+    </span>
+  );
+}
+
 export function OrderNewPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -429,7 +452,7 @@ export function OrderNewPage() {
         <div className="flex min-w-0 flex-col gap-6">
           <Card title="Thông tin đơn hàng">
             <div className="grid grid-cols-1 gap-4">
-              <SelectField label="Kênh" required value={f.source} onChange={(e) => setF({ ...f, source: e.target.value, channelId: '' })}>
+              <SelectField label="Nguồn đơn" required value={f.source} onChange={(e) => setF({ ...f, source: e.target.value, channelId: '' })}>
                 {ORDER_SOURCES.filter((s) => s !== 'website').map((s) => (
                   <option key={s} value={s}>
                     {ORDER_SOURCE[s]}
@@ -547,15 +570,19 @@ export function OrderNewPage() {
             </div>
             <div className="flex flex-col gap-4">
               {f.delivery === 'ship' && (
+                // A row like Hình thức and Giảm giá: label left, the compact 36 px field right (Design §12.9).
                 <div className="flex flex-col gap-2">
-                  <MoneyInput
-                    label="Phí giao hàng"
-                    value={f.shippingVnd}
-                    onChange={(v) => {
-                      setFeeManual(true);
-                      setF({ ...f, shippingVnd: v });
-                    }}
-                  />
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="text-ink-700">Phí giao hàng</span>
+                    <CompactMoney
+                      label="Phí giao hàng"
+                      value={f.shippingVnd}
+                      onChange={(v) => {
+                        setFeeManual(true);
+                        setF({ ...f, shippingVnd: v });
+                      }}
+                    />
+                  </div>
                   {/* Only states worth reading: no standing hint under the field (Design §12.9). */}
                   {(feeManual || (feeKey && (fee.isFetching || fee.isError))) && (
                     <p className="text-[13px] text-ink-500" aria-live="polite">
@@ -574,7 +601,9 @@ export function OrderNewPage() {
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center justify-between gap-3 text-sm">
                     <span className="text-ink-700">Giảm giá</span>
-                    <DiscountInput size="sm" value={discount} onChange={setDiscount} disabled={!lines.length} />
+                    <span className="w-36">
+                      <DiscountInput size="sm" fill value={discount} onChange={setDiscount} disabled={!lines.length} />
+                    </span>
                   </div>
                   {manualVnd > 0 && <p className="text-right text-[13px] text-ink-500 num">= {formatVnd(manualVnd)}</p>}
                 </div>

@@ -18,7 +18,7 @@ export function CompactSelect<T extends string>({ label, value, options, onChang
         aria-label={`${label}: ${current}`}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
-        className="relative inline-flex h-9 min-w-32 items-center justify-between gap-2 rounded-md border border-paper-500 bg-white px-3 text-sm font-medium before:absolute before:inset-x-0 before:-inset-y-1 before:content-[''] disabled:bg-paper-100 disabled:text-ink-500"
+        className="relative inline-flex h-9 min-w-36 items-center justify-between gap-2 rounded-md border border-paper-500 bg-white px-3 text-sm font-medium before:absolute before:inset-x-0 before:-inset-y-1 before:content-[''] disabled:bg-paper-100 disabled:text-ink-500"
       >
         {current}
         {!disabled && <ChevronDown size={16} className={clsx('text-ink-500 transition-transform', open && 'rotate-180')} aria-hidden />}
