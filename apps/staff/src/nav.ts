@@ -61,14 +61,6 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
-    label: 'nav.group.library',
-    items: [
-      { path: '/library/catalog', label: 'nav.libraryCatalog', icon: Library, anyOf: ['library.manage', 'library.lend'] },
-      { path: '/library', label: 'nav.libraryDesk', icon: ArrowLeftRight, anyOf: ['library.lend'], badge: 'libraryOverdue' },
-      { path: '/library/counts', label: 'nav.libraryCounts', icon: ClipboardList, anyOf: ['library.count'] },
-    ],
-  },
-  {
     label: 'nav.group.catalog',
     items: [
       { path: '/products', label: 'nav.products', icon: BookOpen, anyOf: ['catalog.view'] },
@@ -76,6 +68,14 @@ export const NAV: NavGroup[] = [
       { path: '/counts', label: 'nav.counts', icon: ClipboardList, anyOf: ['inventory.count'] },
       { path: '/suppliers', label: 'nav.suppliers', icon: Building2, anyOf: ['purchasing.manage'] },
       { path: '/consignment', label: 'nav.consignment', icon: Handshake, anyOf: ['purchasing.manage', 'purchasing.payables'] },
+    ],
+  },
+  {
+    label: 'nav.group.library',
+    items: [
+      { path: '/library/catalog', label: 'nav.libraryCatalog', icon: Library, anyOf: ['library.manage', 'library.lend'] },
+      { path: '/library', label: 'nav.libraryDesk', icon: ArrowLeftRight, anyOf: ['library.lend'], badge: 'libraryOverdue' },
+      { path: '/library/counts', label: 'nav.libraryCounts', icon: ClipboardList, anyOf: ['library.count'] },
     ],
   },
   {

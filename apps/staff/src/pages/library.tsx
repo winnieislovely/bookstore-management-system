@@ -1392,10 +1392,9 @@ export function LibraryCatalogPage() {
           )
         }
       />
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <SearchBox value={q} onChange={setQ} placeholder="Tìm mã cá biệt, ký hiệu, tên sách, tác giả, ISBN…" />
-        </div>
+      {/* The filter directly beside the search box, as on every list (Design §12.1). */}
+      <div className="mb-4 flex items-center gap-2">
+        <SearchBox value={q} onChange={setQ} placeholder="Tìm mã cá biệt, ký hiệu, tên sách, tác giả, ISBN…" />
         <FilterMenu
           groups={[
             { kind: 'single', label: 'Ngôn ngữ', options: [{ key: 'vi', label: 'Tiếng Việt' }, { key: 'en', label: 'Tiếng Anh' }], value: language, onChange: setLanguage },

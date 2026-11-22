@@ -82,7 +82,7 @@ export function OrdersPage() {
       ),
     },
     // Source as plain text, no colour dot (Design §10.5).
-    { header: 'Kênh', cell: (r) => <span className="text-ink-700">{r.channelName ?? ORDER_SOURCE[r.source] ?? r.source}</span> },
+    { header: 'Nguồn đơn', cell: (r) => <span className="text-ink-700">{r.channelName ?? ORDER_SOURCE[r.source] ?? r.source}</span> },
     { header: 'SP', align: 'right', cell: (r) => formatNumber(r.items) },
     { header: 'Tổng tiền', align: 'right', cell: (r) => formatVnd(r.totalVnd) },
     { header: 'Thanh toán', cell: (r) => <PaymentChip method={r.paymentMethod} paidAt={r.paidAt} status={r.status} /> },
@@ -108,8 +108,8 @@ export function OrdersPage() {
         <SearchBox value={q} onChange={setQ} placeholder="Tìm mã đơn, người nhận, SĐT, mã vận đơn…" />
         <FilterMenu
           groups={[
-            { label: 'Giai đoạn', options: Object.entries(STAGES).map(([k, label]) => ({ key: k, label, count: stages[k] ?? 0 })), values: stage, onChange: setStage },
-            { label: 'Kênh', options: ORDER_SOURCES.map((k) => ({ key: k, label: ORDER_SOURCE[k]! })), values: source, onChange: setSource },
+            { label: 'Trạng thái', options: Object.entries(STAGES).map(([k, label]) => ({ key: k, label, count: stages[k] ?? 0 })), values: stage, onChange: setStage },
+            { label: 'Nguồn đơn', options: ORDER_SOURCES.map((k) => ({ key: k, label: ORDER_SOURCE[k]! })), values: source, onChange: setSource },
             { kind: 'custom', label: 'Thời gian', summary: timeLabel(time), active: !!time, onClear: () => setTime(''), content: <TimeFilter value={time} onChange={setTime} /> },
           ]}
         />
