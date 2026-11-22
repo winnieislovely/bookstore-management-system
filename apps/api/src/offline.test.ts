@@ -175,7 +175,9 @@ describe('synchronisation (TDD §7.5, §7.6)', () => {
     const [shift] = await h.t.sql`select closed_at, expected_vnd, counted_vnd, variance_vnd from sales.shift where client_id = ${clientShiftId}`;
     // Float 500.000 + cash 30.000 + 5.000 + 12.000 + 6.000 − 20.000 out = 533.000
     expect(shift).toMatchObject({ expected_vnd: '533000', counted_vnd: '400000', variance_vnd: '-133000' });
-    expect((await h.call('GET', '/api/v1/notifications', { cookie: manager })).body.items[0]).toMatchObject({ template: 'shift.variance_exceeded' });
+    // The shift variance and, for the flagged sales, a sync-exception notice (FR-POS-26).
+    const notes = (await h.call('GET', '/api/v1/notifications', { cookie: manager })).body.items as { template: string }[];
+    expect(notes.map((x) => x.template)).toEqual(expect.arrayContaining(['shift.variance_exceeded', 'pos.sync_exception']));
   });
 
   it('replaying the same batch is harmless (NFR-OFF-03)', async () => {
@@ -241,10 +243,47 @@ describe('manager review (FR-POS-26)', () => {
     expect(await jobs.integrityCheck(h.ctx())).toEqual([]);
   });
 
+  it('lists each device with its last user and notifies managers of sync exceptions (FR-ADM-04, FR-POS-26)', async () => {
+    const list = (await h.call('GET', '/api/v1/pos/devices', { cookie: manager })).body.items as { deviceCode: string; lastUserId: string | null; lastUserName: string | null }[];
+    expect(list.find((d) => d.deviceCode === 'Q1')).toMatchObject({ lastUserId: cashierId });
+    expect(list.find((d) => d.deviceCode === 'Q1')!.lastUserName).toBeTruthy();
+    // Q1B never called the server, so it has no last user.
+    expect(list.find((d) => d.deviceCode === 'Q1B')!.lastUserId).toBeNull();
+    const notes = (await h.call('GET', '/api/v1/notifications', { cookie: manager })).body.items as { template: string; vars: { deviceCode?: string; count?: number } }[];
+    const n = notes.find((x) => x.template === 'pos.sync_exception');
+    expect(n?.vars).toMatchObject({ deviceCode: 'Q1' });
+    expect(n!.vars.count).toBeGreaterThan(0);
+    // Cashiers do not manage devices, so they are not told.
+    const cashierNotes = (await h.call('GET', '/api/v1/notifications', { cookie: cashier })).body.items as { template: string }[];
+    expect(cashierNotes.some((x) => x.template === 'pos.sync_exception')).toBe(false);
+  });
+
+  it('the owner renames a register; its code stays (FR-ADM-04)', async () => {
+    expect((await h.call('PATCH', `/api/v1/pos/registers/${registerId}`, { cookie: cashier, body: { name: 'Quầy chính' } })).status).toBe(403);
+    expect((await h.call('PATCH', `/api/v1/pos/registers/${registerId}`, { cookie: owner, body: { name: 'Quầy chính' } })).status).toBe(200);
+    const reg = ((await h.call('GET', '/api/v1/pos/registers', { cookie: cashier })).body.items as { id: string; code: string; name: string }[]).find((x) => x.id === registerId);
+    expect(reg).toMatchObject({ code: 'Q1', name: 'Quầy chính' });
+  });
+
   it('a revoked device is told to wipe its data (NFR-OFF-02)', async () => {
     expect((await h.call('POST', `/api/v1/pos/devices/${deviceId}/revoke`, { cookie: manager })).status).toBe(204);
     const r = await deviceCall('GET', '/pos/v1/bootstrap', cashier);
     expect(r.status).toBe(401);
     expect(r.body.error).toMatchObject({ code: 'device_revoked', details: { wipe: true } });
+  });
+
+  it('disabling an employee can revoke the phone they used last (FR-ADM-04)', async () => {
+    const leaver = await h.staff(owner, 'nghiviec', roles.cashier!);
+    keys = (await webcrypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])) as webcrypto.CryptoKeyPair;
+    const spki = Buffer.from(await webcrypto.subtle.exportKey('spki', keys.publicKey)).toString('base64');
+    const phone = (await h.call('POST', '/api/v1/pos/devices', { cookie: manager, body: { registerId, publicKey: spki } })).body as { id: string; deviceCode: string };
+    expect((await deviceCall('GET', '/pos/v1/bootstrap', leaver, undefined, { code: phone.deviceCode })).status).toBe(200);
+    const u = ((await h.call('GET', '/api/v1/admin/users', { cookie: owner })).body.items as { id: string; username: string; version: number }[]).find((x) => x.username === 'nghiviec')!;
+    const r = await h.call('PATCH', `/api/v1/admin/users/${u.id}`, { cookie: owner, body: { status: 'disabled', revokeDevices: true, version: u.version } });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const d = ((await h.call('GET', '/api/v1/pos/devices', { cookie: manager })).body.items as { id: string; revokedAt: string | null }[]).find((x) => x.id === phone.id);
+    expect(d!.revokedAt).not.toBeNull();
+    // The phone is cut off even with another employee signed in on it.
+    expect((await deviceCall('GET', '/pos/v1/bootstrap', cashier, undefined, { code: phone.deviceCode })).body.error.code).toBe('device_revoked');
   });
 });

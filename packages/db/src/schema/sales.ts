@@ -28,6 +28,8 @@ export const posDevice = sales.table('pos_device', {
   revokedAt: ts(),
   lastSeenAt: ts(),
   leaseExpiresAt: ts(),
+  /** The signed-in user at the latest device request, to revoke the phones of a departing employee (FR-ADM-04). */
+  lastUserId: uuid().references(() => appUser.id),
   createdAt: createdAt(),
 });
 

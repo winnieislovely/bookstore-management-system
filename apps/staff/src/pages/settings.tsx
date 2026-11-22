@@ -8,6 +8,7 @@ import { formatDateTime, formatNumber, formatRelative } from '../lib/format';
 import { Dialog } from '../pos/widgets';
 import { can, useMe } from '../lib/session';
 import { ChannelsPanel } from './holds';
+import { PosDevicesPanel } from './admin';
 
 /** Settings (FR-ADM-04, FR-ADM-06, FR-ADM-10, TDD §11.5 health page). */
 
@@ -107,6 +108,9 @@ const GROUPS: [string, Def[]][] = [
   ],
 ];
 
+/** Setting key → its label, for the audit log sentences (Design §12.11). */
+export const SETTING_LABEL: Record<string, string> = Object.fromEntries(GROUPS.flatMap(([, defs]) => defs.map((d) => [d.key, d.label.toLowerCase()])));
+
 interface SettingItem {
   key: string;
   secret: boolean;
@@ -115,25 +119,34 @@ interface SettingItem {
 }
 
 export function SettingsPage() {
-  const [tab, setTab] = useParam('tab', 'config');
   const { data: me } = useMe();
+  const settingsAll = can(me, 'settings.manage');
+  // Someone who only manages POS devices sees that tab alone (FR-ADM-04).
+  const [tab, setTab] = useParam('tab', settingsAll ? 'config' : 'pos');
   return (
     <>
       <PageHeader title="Cài đặt" />
       <Tabs
         tabs={[
-          { key: 'config', label: 'Cấu hình' },
-          { key: 'master', label: 'Danh mục dùng chung' },
-          { key: 'backup', label: 'Sao lưu & dữ liệu' },
+          ...(settingsAll
+            ? [
+                { key: 'config', label: 'Cấu hình' },
+                { key: 'master', label: 'Danh mục dùng chung' },
+              ]
+            : []),
+          // Registers and POS devices, formerly the Thiết bị POS page (Design, Quầy & máy bán hàng).
+          { key: 'pos', label: 'Quầy & máy bán hàng' },
+          ...(settingsAll ? [{ key: 'backup', label: 'Sao lưu & dữ liệu' }] : []),
           // Channel profiles need online.manage too (FR-SOC-01).
           ...(can(me, 'online.manage') ? [{ key: 'channels', label: 'Kênh bán' }] : []),
         ]}
         value={tab as 'config'}
         onChange={setTab}
       />
-      {tab === 'config' && <Config />}
-      {tab === 'master' && <MasterData />}
-      {tab === 'backup' && <Backup />}
+      {tab === 'config' && settingsAll && <Config />}
+      {tab === 'master' && settingsAll && <MasterData />}
+      {tab === 'pos' && <PosDevicesPanel />}
+      {tab === 'backup' && settingsAll && <Backup />}
       {tab === 'channels' && can(me, 'online.manage') && <ChannelsPanel />}
     </>
   );

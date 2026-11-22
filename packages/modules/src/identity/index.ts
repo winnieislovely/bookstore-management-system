@@ -437,12 +437,15 @@ export const UpdateUserSchema = z.object({
   displayName: z.string().trim().min(1).max(120).optional(),
   roleId: z.uuid().optional(),
   status: z.enum(['active', 'disabled']).optional(),
+  /** With status disabled: revoke the active devices this employee used last (FR-ADM-04, NFR-OFF-02). */
+  revokeDevices: z.boolean().optional(),
   version: z.number().int(),
 });
 
 export async function updateUser(ctx: Ctx, id: string, input: z.infer<typeof UpdateUserSchema>) {
   const actor = requirePermission(ctx, 'user.manage');
   const data = UpdateUserSchema.parse(input);
+  if (data.revokeDevices && data.status === 'disabled') requirePermission(ctx, 'pos.offline.manage');
   return ctx.db.transaction(async (tx) => {
     const [before] = await tx.select().from(schema.appUser).where(eq(schema.appUser.id, id));
     if (!before) throw errors.notFound('Người dùng');
@@ -463,6 +466,11 @@ export async function updateUser(ctx: Ctx, id: string, input: z.infer<typeof Upd
       .returning();
     if (!u) throw errors.stale();
     if (data.status === 'disabled') await tx.delete(schema.session).where(eq(schema.session.userId, id));
+    if (data.status === 'disabled' && data.revokeDevices) {
+      const d = schema.posDevice;
+      const revoked = await tx.update(d).set({ revokedAt: ctx.clock.now() }).where(and(eq(d.lastUserId, id), isNull(d.revokedAt))).returning({ id: d.id });
+      for (const x of revoked) await audit.record(tx, ctx, { action: 'pos_device.revoke', entity: 'pos_device', entityId: x.id, after: { reason: 'user_disabled', userId: id } });
+    }
     await audit.record(tx, ctx, {
       action: data.roleId && data.roleId !== before.roleId ? 'user.role_change' : 'user.update',
       entity: 'app_user',

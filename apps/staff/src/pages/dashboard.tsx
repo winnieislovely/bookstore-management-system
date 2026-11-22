@@ -7,7 +7,7 @@ import { Button, Card, ErrorState, PageHeader, Skeleton } from '../components/ui
 import { get } from '../lib/api';
 import { formatDate, formatNumber, formatVnd, formatVndCompact } from '../lib/format';
 import { t } from '../lib/i18n';
-import { useMe } from '../lib/session';
+import { can, useMe } from '../lib/session';
 import { type LibraryOverviewData } from './library';
 
 /** Dashboard (FR-RPT-01, Design §12.5): today's figures, range-filtered charts and lists — no alert tiles. */
@@ -531,8 +531,10 @@ function Donut({ data, total }: { data: { kind: MixKind; units: number }[]; tota
   );
 }
 
-function ProductMixCard({ data, className }: { data: { kind: MixKind; units: number }[]; className: string }) {
+function ProductMixCard({ data, className, showValue }: { data: { kind: MixKind; units: number }[]; className: string; showValue: boolean }) {
   const navigate = useNavigate();
+  // Total stock value at cost, for those who may see costs (Design §12.5).
+  const value = useQuery({ queryKey: ['valuation'], queryFn: () => get<{ totalVnd: number }>('/api/v1/inventory/valuation'), enabled: showValue });
   const total = data.reduce((a, d) => a + d.units, 0);
   return (
     <Card
@@ -561,6 +563,12 @@ function ProductMixCard({ data, className }: { data: { kind: MixKind; units: num
         </div>
       ) : (
         <p className="text-ink-500">{t('dashboard.noData')}</p>
+      )}
+      {showValue && value.data && (
+        <div className="mt-5 flex items-center justify-between gap-3 border-t border-paper-300 pt-3 text-sm">
+          <span className="text-ink-500">Giá trị tồn kho</span>
+          <span className="num font-semibold text-ink-900">{formatVnd(value.data.totalVnd)}</span>
+        </div>
       )}
     </Card>
   );
@@ -633,7 +641,7 @@ export function DashboardPage() {
           {q.data?.libraryOverview && <LibraryCard data={q.data.libraryOverview} overdue={q.data.overdueLoans} />}
           </div>
           <TrendCard />
-          {q.data?.productMix && <ProductMixCard data={q.data.productMix} className="col-span-12 xl:col-span-4 xl:p-4" />}
+          {q.data?.productMix && <ProductMixCard data={q.data.productMix} showValue={can(me, 'catalog.view_cost')} className="col-span-12 xl:col-span-4 xl:p-4" />}
           <Card title={t('dashboard.bestsellers')} className="col-span-12 xl:col-span-4 xl:p-4">
             {q.data?.bestsellers.length ? (
               <table className="w-full table-fixed text-sm">

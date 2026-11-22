@@ -53,6 +53,21 @@ export async function createRegister(ctx: Ctx, input: z.input<typeof RegisterSch
   });
 }
 
+export const RegisterUpdateSchema = z.object({ name: z.string().trim().min(1).max(60) });
+
+/** Rename a register; its code stays, as device codes derive from it (FR-ADM-04). */
+export async function updateRegister(ctx: Ctx, id: string, input: z.input<typeof RegisterUpdateSchema>) {
+  requirePermission(ctx, 'settings.manage');
+  const data = RegisterUpdateSchema.parse(input);
+  return ctx.db.transaction(async (tx) => {
+    const [before] = await tx.select().from(schema.register).where(eq(schema.register.id, id));
+    if (!before) throw errors.notFound('Quầy');
+    await tx.update(schema.register).set({ name: data.name }).where(eq(schema.register.id, id));
+    await audit.record(tx, ctx, { action: 'register.update', entity: 'register', entityId: id, before: { name: before.name }, after: data });
+    return { id };
+  });
+}
+
 /** The first-run wizard creates register `Q1` (TDD §6.2). */
 export async function seedRegister(tx: Tx): Promise<void> {
   await tx.insert(schema.register).values({ code: 'Q1', name: 'Quầy 1' }).onConflictDoNothing();

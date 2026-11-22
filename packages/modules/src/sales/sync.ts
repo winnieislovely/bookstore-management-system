@@ -85,9 +85,12 @@ export async function listDevices(ctx: Ctx) {
       lastSeenAt: schema.posDevice.lastSeenAt,
       leaseExpiresAt: schema.posDevice.leaseExpiresAt,
       revokedAt: schema.posDevice.revokedAt,
+      lastUserId: schema.posDevice.lastUserId,
+      lastUserName: schema.appUser.displayName,
     })
     .from(schema.posDevice)
     .innerJoin(schema.register, eq(schema.register.id, schema.posDevice.registerId))
+    .leftJoin(schema.appUser, eq(schema.appUser.id, schema.posDevice.lastUserId))
     .orderBy(asc(schema.posDevice.deviceCode));
 }
 
@@ -140,7 +143,8 @@ export async function authenticateDevice(ctx: Ctx, req: DeviceRequest): Promise<
   const now = ctx.clock.now();
   const cfg = await settings.snapshot(ctx);
   const leaseExpiresAt = new Date(now.getTime() + cfg['pos.offline_lease_hours'] * 3600_000);
-  await ctx.db.update(schema.posDevice).set({ lastSeenAt: now, leaseExpiresAt }).where(eq(schema.posDevice.id, d.id));
+  // The signed-in user, to offer revoking a departing employee's phone (FR-ADM-04).
+  await ctx.db.update(schema.posDevice).set({ lastSeenAt: now, leaseExpiresAt, ...(ctx.actor && { lastUserId: ctx.actor.userId }) }).where(eq(schema.posDevice.id, d.id));
   const ts = Date.parse(req.timestamp);
   return { id: d.id, deviceCode: d.deviceCode, registerId: d.registerId, leaseExpiresAt, skewMs: Number.isFinite(ts) ? ts - now.getTime() : 0 };
 }
@@ -715,6 +719,9 @@ export async function sync(ctx: Ctx, device: Device, input: z.input<typeof SyncS
       results.push(result);
     }
   }
+  // New exceptions reach the users who manage POS devices (FR-POS-26, FR-ADM-08).
+  const flagged = results.filter((x) => x.status === 'rejected' || (x.status === 'accepted' && x.exceptions.length > 0)).length;
+  if (flagged) await ctx.db.transaction((tx) => notifications.notifyHolders(tx, 'pos.offline.manage', 'pos.sync_exception', { deviceCode: device.deviceCode, count: flagged }));
   return { results, delta: await delta(ctx, data.cursor), leaseExpiresAt: device.leaseExpiresAt };
 }
 

@@ -97,12 +97,10 @@ export function StockPage() {
   const [dialog, setDialog] = useState<null | 'import' | 'adjust'>(null);
   const query = { q: q || undefined, stock: state.join(',') || undefined, changedFrom: changedRange.from, changedTo: changedRange.to, unsoldDays: unsold || undefined, shelf: shelf.join(',') || undefined, page: Number(page), limit: 40 };
   const list = useQuery({ queryKey: ['stock-list', query], queryFn: () => get<{ items: StockRow[]; total: number }>('/api/v1/catalog/items', query) });
-  const value = useQuery({ queryKey: ['valuation'], queryFn: () => get<{ totalVnd: number }>('/api/v1/inventory/valuation'), enabled: can(me, 'catalog.view_cost') });
   const showCost = list.data?.items.some((r) => 'avgCostVnd' in r) ?? false;
   const filtered = !!(q || state.length || changed || unsold || shelf.length);
   const refresh = () => {
     void list.refetch();
-    void value.refetch();
   };
 
   const columns: Column<StockRow>[] = [
@@ -143,7 +141,6 @@ export function StockPage() {
     <>
       <PageHeader
         title="Tồn kho"
-        subtitle={value.data ? <span className="num">Giá trị tồn kho: <span className="font-semibold text-ink-900">{formatVnd(value.data.totalVnd)}</span></span> : undefined}
         actions={
           can(me, 'purchasing.manage') && (
             <>
@@ -151,7 +148,7 @@ export function StockPage() {
                 Nhập từ Excel
               </Button>
               <Button variant="primary" icon={PackagePlus} onClick={() => navigate('/stock/in')}>
-                Nhập thêm hàng
+                Nhập hàng
               </Button>
             </>
           )

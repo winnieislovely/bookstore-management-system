@@ -11,7 +11,6 @@ import {
   Handshake,
   Landmark,
   House,
-  Monitor,
   Receipt,
   ShoppingCart,
   ScrollText,
@@ -98,9 +97,8 @@ export const NAV: NavGroup[] = [
   {
     label: 'nav.group.settings',
     items: [
-      { path: '/settings', label: 'nav.settings', icon: Settings, anyOf: ['settings.manage'] },
+      { path: '/settings', label: 'nav.settings', icon: Settings, anyOf: ['settings.manage', 'pos.offline.manage'] },
       { path: '/import', label: 'nav.dataImport', icon: Upload, anyOf: ['catalog.import', 'data.import'] },
-      { path: '/devices', label: 'nav.devices', icon: Monitor, anyOf: ['pos.offline.manage'] },
       { path: '/audit', label: 'nav.audit', icon: ScrollText, anyOf: ['audit.view'] },
     ],
   },

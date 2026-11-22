@@ -1,0 +1,2 @@
+ALTER TABLE "sales"."pos_device" ADD COLUMN "last_user_id" uuid;--> statement-breakpoint
+ALTER TABLE "sales"."pos_device" ADD CONSTRAINT "pos_device_last_user_id_app_user_id_fk" FOREIGN KEY ("last_user_id") REFERENCES "platform"."app_user"("id") ON DELETE no action ON UPDATE no action;

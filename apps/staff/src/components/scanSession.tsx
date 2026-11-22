@@ -1,6 +1,6 @@
 import { clsx } from 'clsx';
 import { AlertTriangle, CheckCircle2, X, XCircle } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createFrameReader } from './barcodeReader';
 import { Button } from './ui';
 
@@ -9,6 +9,8 @@ export interface ScanOutcome {
   tone: 'success' | 'warning' | 'danger';
   title: string;
   lines?: string[];
+  /** More on the card under the lines, such as a quantity to correct (stock count). */
+  extra?: ReactNode;
 }
 
 /** A short beep and vibration when a code is read, where the device allows it. */
@@ -156,6 +158,7 @@ export function ScanSession({
                 {l}
               </p>
             ))}
+            {result.extra}
           </div>
         )}
       </div>

@@ -211,6 +211,13 @@
       "when": 1795335964848,
       "tag": "0029_variant_shelf",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1795368466381,
+      "tag": "0030_device_last_user",
+      "breakpoints": true
     }
   ]
 }

@@ -276,6 +276,19 @@ describe('void (FR-POS-14)', () => {
     expect((await h.call('POST', `/api/v1/pos/sales/${sale.body.id}/void`, { cookie: manager, body: { reason: 'x', shiftId } })).body.error.code).toBe('sale_not_completed');
     const audit = (await h.call('GET', `/api/v1/admin/audit?entity=sale&entityId=${sale.body.id}`, { cookie: await h.login('lan', OWNER_PW) })).body.items;
     expect(audit[0]).toMatchObject({ action: 'sale.void', after: { reason: 'Khách đổi ý' } });
+    // The log reads as a sentence: the sale's number and the id to open (Design §12.11).
+    const [doc] = await h.t.sql`select doc_no from sales.sale where id = ${sale.body.id}`;
+    expect(audit[0]).toMatchObject({ label: doc!.doc_no, refId: sale.body.id });
+    expect(audit[0].actorName).toBeTruthy();
+    // Kinds of action: a void is Bán hàng & đơn, not Đăng nhập; logins are their own kind.
+    const owner = await h.login('lan', OWNER_PW);
+    const ofGroup = async (g: string) => ((await h.call('GET', `/api/v1/admin/audit?group=${g}&limit=200`, { cookie: owner })).body.items as { id: string; action: string }[]);
+    expect((await ofGroup('sales')).some((x) => x.id === audit[0].id)).toBe(true);
+    expect((await ofGroup('login')).every((x) => x.action.startsWith('auth.login') || x.action.startsWith('auth.lockout'))).toBe(true);
+    expect((await ofGroup('login')).some((x) => x.id === audit[0].id)).toBe(false);
+    expect((await h.call('GET', '/api/v1/admin/audit?group=nope', { cookie: owner })).status).toBe(400);
+    // Entries without a person: `system`.
+    expect(((await h.call('GET', '/api/v1/admin/audit?actorId=system', { cookie: owner })).body.items as { actorId: string | null }[]).every((x) => x.actorId === null)).toBe(true);
   });
 });
 

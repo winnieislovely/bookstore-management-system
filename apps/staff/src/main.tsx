@@ -14,7 +14,8 @@ import { landingPath, NAV } from './nav';
 import { ChangePasswordPage, LoginPage, SetupPage } from './pages/auth';
 import { DashboardPage } from './pages/dashboard';
 import { ImportPage } from './pages/import';
-import { AuditPage, DevicesPage, RolesPage, UsersPage } from './pages/admin';
+import { RolesPage, UsersPage } from './pages/admin';
+import { AuditPage } from './pages/audit';
 import { ConsignmentPage } from './pages/consignment';
 import { CountDetailPage, CountsPage } from './pages/counts';
 import { CustomerDetailPage, CustomersPage } from './pages/customers';
@@ -112,7 +113,6 @@ const BUILT: Record<string, ReactNode> = {
   '/reports/library': <LibraryReportPage />,
   '/settings': <SettingsPage />,
   '/import': <ImportPage />,
-  '/devices': <DevicesPage />,
   '/audit': <AuditPage />,
 };
 
@@ -133,6 +133,8 @@ const DETAILS: { path: string; anyOf: string[]; element: ReactNode }[] = [
   // One page per report area now (Design §12.6); the old link opens sales.
   { path: 'reports', anyOf: ['report.view'], element: <Navigate to="/reports/sales" replace /> },
   { path: 'counts/:id', anyOf: ['inventory.count'], element: <CountDetailPage /> },
+  // Thiết bị POS is a Cấu hình tab now; old links land there.
+  { path: 'devices', anyOf: ['settings.manage', 'pos.offline.manage'], element: <Navigate to="/settings?tab=pos" replace /> },
   { path: 'library/titles/:id', anyOf: ['library.manage', 'library.lend'], element: <LibraryTitlePage /> },
   { path: 'library/counts/:id', anyOf: ['library.count'], element: <LibraryCountDetailPage /> },
   { path: 'library/slips/:id', anyOf: ['library.lend'], element: <LibrarySlipPage /> },

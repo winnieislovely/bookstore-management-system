@@ -117,6 +117,8 @@ function notificationTitle(n: NotificationItem): string {
       return t(v.problem === 'wal_lagging' ? 'notify.backup.walLagging' : 'notify.backup.stale');
     case 'consignment.deadline':
       return t('notify.consignment.deadline', { sku: String(v.sku ?? '') });
+    case 'pos.sync_exception':
+      return t('notify.pos.syncException', { device: String(v.deviceCode ?? ''), count: String(v.count ?? '') });
     case 'library.loans_to_call':
       return t('notify.library.loansToCall', { overdue: String(v.overdue ?? 0), dueSoon: String(v.dueSoon ?? 0) });
     case 'delivery.update': {
@@ -152,6 +154,8 @@ function notificationLink(n: NotificationItem): string | null {
       return v.saleId ? `/sales/${String(v.saleId)}` : v.orderId ? `/orders/${String(v.orderId)}` : null;
     case 'consignment.deadline':
       return '/consignment';
+    case 'pos.sync_exception':
+      return '/settings?tab=pos';
     case 'backup.problem':
       return '/settings';
     case 'library.loans_to_call':

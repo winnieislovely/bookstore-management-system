@@ -2,6 +2,7 @@ import * as audit from '@bookstore/modules/audit';
 import * as identity from '@bookstore/modules/identity';
 import * as settings from '@bookstore/modules/settings';
 import * as system from '@bookstore/modules/system';
+import { AUDIT_GROUPS, type AuditGroup } from '@bookstore/domain';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import type { AppEnv } from '../http/context.js';
@@ -95,8 +96,9 @@ export function adminRoutes(app: OpenAPIHono<AppEnv>): void {
       query: z.object({
         entity: z.string().optional(),
         entityId: z.string().optional(),
-        actorId: z.uuid().optional(),
+        actorId: z.union([z.uuid(), z.literal('system')]).optional(),
         action: z.string().optional(),
+        group: z.enum(AUDIT_GROUPS.map((g) => g.key) as [AuditGroup, ...AuditGroup[]]).optional(),
         from: z.iso.datetime().optional(),
         to: z.iso.datetime().optional(),
         cursor: z.string().optional(),

@@ -81,6 +81,9 @@ const groupSummary = (g: FilterGroup) => {
 /** “Bộ lọc” pill beside the search box; each field is a dropdown, multi-select fields have checkboxes (Design §10.9, §12.1). */
 export function FilterMenu({ groups }: { groups: FilterGroup[] }) {
   const [open, setOpen] = useState(false);
+  // The panel opens under the button, right-aligned; a button near the left edge opens it left-aligned so
+  // it never runs off the screen (e.g. Báo cáo thư viện, where the button stands alone on the left).
+  const [alignLeft, setAlignLeft] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const panelId = useId();
@@ -104,7 +107,10 @@ export function FilterMenu({ groups }: { groups: FilterGroup[] }) {
         aria-expanded={open}
         aria-controls={panelId}
         aria-label={active ? `${t('common.filters')} (${active})` : t('common.filters')}
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          if (!open) setAlignLeft((box.current?.getBoundingClientRect().right ?? Infinity) < 316);
+          setOpen(!open);
+        }}
         className={clsx('inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-medium max-sm:px-3', active ? 'border-navy-700 bg-navy-50 text-navy-700' : 'border-paper-500 bg-white text-ink-900 hover:bg-navy-50')}
       >
         <ListFilter size={18} aria-hidden />
@@ -112,7 +118,7 @@ export function FilterMenu({ groups }: { groups: FilterGroup[] }) {
         {active > 0 && <span className="inline-flex size-5 items-center justify-center rounded-full bg-navy-700 text-xs font-semibold text-white num">{active}</span>}
       </button>
       {open && (
-        <div id={panelId} role="dialog" aria-label={t('common.filters')} className="absolute right-0 z-30 mt-2 w-[300px] max-w-[calc(100vw-2rem)] rounded-lg border border-paper-300 bg-white p-2 shadow-md">
+        <div id={panelId} role="dialog" aria-label={t('common.filters')} className={clsx('absolute z-30 mt-2 w-[300px] max-w-[calc(100vw-2rem)] rounded-lg border border-paper-300 bg-white p-2 shadow-md', alignLeft ? 'left-0' : 'right-0')}>
           <div className="divide-y divide-paper-300">
             {groups.map((g) => {
               const isOpen = expanded === g.label;

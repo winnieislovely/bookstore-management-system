@@ -1,14 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
-import { clsx } from 'clsx';
-import { CheckCircle2, ClipboardList, Download, Plus, Send, Upload, XCircle } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { CheckCircle2, ClipboardList, Download, MoreVertical, Plus, ScanBarcode, Send, Upload, XCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { ConfirmDialog, DataTable, FilterMenu, SearchBox, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
-import { Button, Card, ErrorState, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
+import { ConfirmDialog, DataTable, errText, FilterMenu, SearchBox, TimeFilter, timeLabel, timeRange, toast, useListParam, useParam, type Column } from '../components/data';
+import { Button, ErrorState, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
 import { can, useMe } from '../lib/session';
-import { categoryOptions, type Category } from './products';
+import { CompactMultiSelect } from '../components/compact-select';
+import { Dialog } from '../pos/widgets';
+import { ScanSession, type ScanOutcome } from '../components/scanSession';
 
 /**
  * Stock counts (FR-INV-06, Design §13.8): scope by product type and category; counted quantities
@@ -100,16 +101,10 @@ export function CountsPage() {
   );
 }
 
-/** Scope = product types, optionally narrowed to categories holding those types (Design §13.8). */
+/** Scope = product types only, all by default (SRS FR-INV-06, Design §13.8). */
 function CreateCount({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   const [kinds, setKinds] = useState<string[]>(['book', 'stationery', 'other']);
-  const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [blind, setBlind] = useState(true);
-  const categories = useQuery({ queryKey: ['categories'], queryFn: () => get<{ items: Category[] }>('/api/v1/catalog/categories') });
-  const options = categoryOptions(categories.data?.items ?? [], kinds);
-  // Drop categories that no longer match the chosen types.
-  useEffect(() => setCategoryIds((ids) => ids.filter((id) => options.some((o) => o.key === id))), [kinds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
-  const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   return (
     <ConfirmDialog
       title="Tạo phiếu kiểm kho"
@@ -117,40 +112,16 @@ function CreateCount({ onClose, onCreated }: { onClose: () => void; onCreated: (
       onClose={onClose}
       onConfirm={async () => {
         if (!kinds.length) throw new Error('Chọn ít nhất một loại sản phẩm.');
-        const r = await post<{ id: string }>('/api/v1/inventory/counts', { scope: { kind: 'types', itemKinds: kinds, ...(categoryIds.length && { categoryIds }) }, blind });
+        const r = await post<{ id: string }>('/api/v1/inventory/counts', { scope: { kind: 'types', itemKinds: kinds }, blind });
         onCreated(r.id);
       }}
     >
       <div className="flex flex-col gap-4">
-        <fieldset>
-          <legend className="mb-1 text-[13px] font-medium text-ink-700">Loại sản phẩm</legend>
-          <div className="flex flex-wrap gap-x-5 gap-y-1">
-            {KINDS.map(([k, label]) => (
-              <label key={k} className="inline-flex h-10 items-center gap-2 text-sm">
-                <input type="checkbox" className="size-[18px] accent-navy-700" checked={kinds.includes(k)} onChange={() => setKinds(toggle(kinds, k))} />
-                {label}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend className="mb-1 text-[13px] font-medium text-ink-700">Danh mục</legend>
-          <p className="mb-2 text-[13px] text-ink-500">Để trống để kiểm mọi danh mục của các loại đã chọn.</p>
-          {options.length ? (
-            <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
-              {options.map((c) => {
-                const on = categoryIds.includes(c.key);
-                return (
-                  <button key={c.key} type="button" aria-pressed={on} onClick={() => setCategoryIds(toggle(categoryIds, c.key))} className={clsx('h-8 rounded-full border px-3 text-sm', on ? 'border-navy-700 bg-navy-100 text-navy-700' : 'border-paper-500')}>
-                    {c.label.trim()}
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="text-sm text-ink-500">Không có danh mục cho các loại đã chọn.</p>
-          )}
-        </fieldset>
+        {/* Loại sản phẩm: label left, a multi-tick dropdown right, all by default (Design §13.8). */}
+        <div className="flex items-center justify-between gap-4 text-sm">
+          <span className="text-ink-700">Loại sản phẩm</span>
+          <CompactMultiSelect label="Loại sản phẩm" className="w-56 max-w-[60%]" values={kinds} options={KINDS} onChange={setKinds} />
+        </div>
         <label className="inline-flex items-start gap-2 text-sm">
           <input type="checkbox" className="mt-0.5 size-[18px] accent-navy-700" checked={blind} onChange={(e) => setBlind(e.target.checked)} />
           <span>
@@ -178,12 +149,90 @@ interface CountLine {
 
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
+interface ScanResult {
+  variantId: string;
+  sku: string;
+  title: string;
+  counted: number;
+}
+
+/** The count of the product just scanned, correctable at once (“Sửa”), e.g. after scanning one of 40 alike. */
+function QtyFix({ counted, onSet }: { counted: number; onSet: (qty: number) => Promise<number> }) {
+  const [value, setValue] = useState(String(counted));
+  const [now, setNow] = useState(counted);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const qty = Number(value);
+  return (
+    <form
+      className="mt-2 flex flex-wrap items-center gap-2 text-sm text-ink-700"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (value === '' || qty === now) return;
+        setBusy(true);
+        setError(null);
+        try {
+          setNow(await onSet(qty));
+        } catch (err) {
+          setError(errText(err));
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <label className="flex items-center gap-2">
+        Số đếm
+        <input className="h-9 w-20 rounded-md border border-paper-500 bg-white px-2 text-right num text-ink-900 max-sm:text-base" inputMode="numeric" aria-label="Số đếm" value={value} onChange={(e) => setValue(e.target.value.replace(/\D/g, ''))} />
+      </label>
+      <Button type="submit" variant="secondary" size="sm" disabled={busy || value === '' || qty === now}>
+        Sửa
+      </Button>
+      {error && <span className="w-full text-danger-700">{error}</span>}
+    </form>
+  );
+}
+
 export function CountDetailPage() {
   const { id } = useParams();
   const { data: me } = useMe();
   const c = useQuery({ queryKey: ['count', id], queryFn: () => get<Omit<CountDetail, 'lines'> & { lines: CountLine[] }>(`/api/v1/inventory/counts/${id}`) });
   const [confirm, setConfirm] = useState<null | 'submit' | 'approve' | 'cancel'>(null);
-  const [filter, setFilter] = useState<'all' | 'uncounted' | 'variance'>('all');
+  const [filter, setFilter] = useState('');
+  const [menu, setMenu] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [camera, setCamera] = useState(false);
+  const [scanMsg, setScanMsg] = useState<ScanOutcome | null>(null);
+  // Latest scan handler for the keyboard listener below (set once the count is loaded).
+  const scanCode = useRef<(code: string) => void>(() => undefined);
+  const counting = c.data?.status === 'open' && !camera;
+  /**
+   * A hand scanner (Bluetooth or USB) types like a keyboard: a burst of keys ending in Enter. It works
+   * anywhere on the page – there is no search field (Design §13.8); slow typing is not taken as a scan.
+   */
+  useEffect(() => {
+    if (!counting) return;
+    let buf = '';
+    let last = 0;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const now = performance.now();
+      if (now - last > 100) buf = '';
+      last = now;
+      if (e.key === 'Enter') {
+        if (buf.length >= 4) {
+          e.preventDefault();
+          scanCode.current(buf);
+        }
+        buf = '';
+      } else if (e.key.length === 1) {
+        buf += e.key;
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [counting]);
   const [uploading, setUploading] = useState(false);
   const [sheetResult, setSheetResult] = useState<{ tone: 'success' | 'danger'; text: string; rows?: { row: number; sku: string; message: string }[] } | null>(null);
 
@@ -206,6 +255,34 @@ export function CountDetailPage() {
       toast.error((e as Error).message);
     }
   };
+
+  /** One scan: one more of the product, with its count correctable at once (Design §13.8). */
+  const record = async (code: string): Promise<ScanOutcome> => {
+    try {
+      const r = await post<ScanResult>(`/api/v1/inventory/counts/${x.id}/scan`, { code });
+      void c.refetch();
+      return {
+        tone: 'success',
+        title: 'Đã đếm',
+        lines: [`${r.sku} – ${r.title}`],
+        extra: (
+          <QtyFix
+            key={`${r.variantId}-${r.counted}`}
+            counted={r.counted}
+            onSet={async (qty) => {
+              const s = await post<ScanResult>(`/api/v1/inventory/counts/${x.id}/scan`, { code: r.sku, qty });
+              void c.refetch();
+              return s.counted;
+            }}
+          />
+        ),
+      };
+    } catch (e) {
+      const code409 = e instanceof ApiError && e.status === 409;
+      return { tone: code409 ? 'warning' : 'danger', title: code409 ? 'Không có trong phiếu' : 'Không đếm được', lines: [errText(e)] };
+    }
+  };
+  scanCode.current = (code) => void record(code.trim()).then(setScanMsg);
 
   const uploadSheet = async (file: File) => {
     setUploading(true);
@@ -232,97 +309,104 @@ export function CountDetailPage() {
       <PageHeader
         back={{ to: '/counts', label: 'Kiểm kho' }}
         title={x.docNo}
-        actions={
-          <>
-            {(open || x.status === 'submitted') && (
-              <Button variant="destructive-outline" icon={XCircle} onClick={() => setConfirm('cancel')}>
-                Hủy phiếu
-              </Button>
-            )}
-            {open && (
-              <Button variant="primary" icon={Send} onClick={() => setConfirm('submit')}>
-                Gửi duyệt
-              </Button>
-            )}
-            {x.status === 'submitted' && can(me, 'inventory.count_approve') && (
-              <Button variant="primary" icon={CheckCircle2} onClick={() => setConfirm('approve')}>
-                Duyệt và ghi chênh lệch
-              </Button>
-            )}
-          </>
-        }
+        // Every action in a ⋮ menu on the title row, like the library count (Design §13.8).
+        menu={(open || x.status === 'submitted') && <Button variant="ghost" icon={MoreVertical} aria-label="Thao tác" title="Thao tác" onClick={() => setMenu(true)} />}
       />
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <Chip status={x.status} />
-        <span className="text-sm text-ink-700 num">
-          Đã đếm {formatNumber(counted)}/{formatNumber(x.lines.length)}
-        </span>
-        <div className="h-2 w-48 overflow-hidden rounded-full bg-paper-200" aria-hidden>
-          <div className="h-full bg-navy-700" style={{ width: `${x.lines.length ? (counted / x.lines.length) * 100 : 0}%` }} />
+      {!open && (
+        <div className="mb-4">
+          <Chip status={x.status} />
         </div>
-        {x.blind && <StatusChip tone="neutral">Đếm mù</StatusChip>}
+      )}
+      {/* One box: “Tiến độ”, the percentage counted and the bar; the camera scan button beside it (Design §13.8). */}
+      <div className="mb-4 flex items-start gap-2">
+      <div className="flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-paper-300 bg-white px-4 py-3 shadow-sm">
+        <span className="flex items-center justify-between gap-3 text-sm font-semibold text-ink-900">
+          Tiến độ
+          <span className="num">{x.lines.length ? Math.floor((counted / x.lines.length) * 100) : 0}%</span>
+        </span>
+        <span className="block h-2 w-full overflow-hidden rounded-full bg-paper-200" aria-hidden>
+          <span className="block h-full bg-navy-700" style={{ width: `${x.lines.length ? (counted / x.lines.length) * 100 : 0}%` }} />
+        </span>
+      </div>
+      {open && (
+        <button type="button" className="inline-flex size-12 shrink-0 items-center justify-center rounded-md text-navy-700 hover:bg-navy-50" aria-label="Quét mã bằng camera" title="Quét mã bằng camera" onClick={() => setCamera(true)}>
+          <ScanBarcode size={28} aria-hidden />
+        </button>
+      )}
       </div>
 
       {open && (
-        <Card title="Phiếu đếm" className="mb-6">
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-ink-700">
-              {sheetOnly
-                ? `Phiếu có ${formatNumber(x.lines.length)} sản phẩm (trên ${SHEET_REQUIRED_ABOVE}): tải phiếu đếm về, điền cột “Đếm được” rồi tải lên lại.`
-                : 'Tải phiếu đếm về để đếm ngoài (in hoặc điền trên máy), rồi tải lên lại; hoặc nhập số đếm ngay trong bảng bên dưới.'}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <a className="inline-flex h-9 items-center gap-2 rounded-full border border-paper-500 px-4 text-sm font-medium hover:bg-navy-50" href={`/api/v1/inventory/counts/${x.id}/sheet?format=xlsx`}>
-                <Download size={18} aria-hidden /> Tải phiếu đếm (Excel)
-              </a>
-              <a className="inline-flex h-9 items-center gap-2 rounded-full border border-paper-500 px-4 text-sm font-medium hover:bg-navy-50" href={`/api/v1/inventory/counts/${x.id}/sheet?format=csv`}>
-                <Download size={18} aria-hidden /> CSV
-              </a>
-              <label className={clsx('inline-flex h-9 cursor-pointer items-center gap-2 rounded-full bg-navy-700 px-4 text-sm font-medium text-white hover:bg-navy-800', uploading && 'opacity-60')}>
-                <Upload size={18} aria-hidden /> {uploading ? 'Đang tải lên…' : 'Tải lên phiếu đã đếm'}
-                <input
-                  type="file"
-                  accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                  className="sr-only"
-                  disabled={uploading}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    e.target.value = '';
-                    if (f) void uploadSheet(f);
-                  }}
-                />
-              </label>
-            </div>
-            {sheetResult && (
-              <InlineAlert tone={sheetResult.tone}>
-                {sheetResult.text}
-                {sheetResult.rows && (
-                  <ul className="mt-1 list-disc pl-5">
-                    {sheetResult.rows.map((r) => (
-                      <li key={r.row}>
-                        Dòng {r.row} {r.sku && <span className="code">{r.sku}</span>}: {r.message}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </InlineAlert>
-            )}
-          </div>
-        </Card>
+        <div className="mb-6 flex flex-col gap-3 empty:hidden">
+          {/* Continuous camera session: Tiếp tục after each product, Xong to finish (Design §13.8). */}
+          {camera && (
+            <ScanSession
+              label="Quét mã sản phẩm"
+              prompt="Đưa ISBN hoặc mã vạch sản phẩm vào khung"
+              onScan={record}
+              progress={`Đã đếm ${formatNumber(counted)}/${formatNumber(x.lines.length)}`}
+              onClose={() => {
+                setCamera(false);
+                setScanMsg(null);
+              }}
+            />
+          )}
+          {scanMsg && (
+            <InlineAlert tone={scanMsg.tone}>
+              <span className="font-semibold">{scanMsg.title}</span>
+              {scanMsg.lines?.map((l) => <span key={l}> – {l}</span>)}
+              {scanMsg.extra}
+            </InlineAlert>
+          )}
+          {sheetOnly && <InlineAlert tone="info">Phiếu có {formatNumber(x.lines.length)} sản phẩm (trên {SHEET_REQUIRED_ABOVE}): quét mã để đếm, hoặc tải phiếu đếm từ menu ⋮, điền cột “Đếm được” rồi tải lên lại.</InlineAlert>}
+          {uploading && <p className="text-sm text-ink-500">Đang tải lên phiếu đếm…</p>}
+          {sheetResult && (
+            <InlineAlert tone={sheetResult.tone}>
+              {sheetResult.text}
+              {sheetResult.rows && (
+                <ul className="mt-1 list-disc pl-5">
+                  {sheetResult.rows.map((r) => (
+                    <li key={r.row}>
+                      Dòng {r.row} {r.sku && <span className="code">{r.sku}</span>}: {r.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </InlineAlert>
+          )}
+          {/* Picked from the ⋮ menu (“Tải lên phiếu đã đếm”). */}
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) void uploadSheet(f);
+            }}
+          />
+        </div>
       )}
 
-      <div className="mb-3 flex gap-2">
-        {(
-          [
-            ['all', 'Tất cả'],
-            ['uncounted', 'Chưa đếm'],
-            ...(showExpected ? [['variance', 'Có chênh lệch']] : []),
-          ] as [typeof filter, string][]
-        ).map(([k, label]) => (
-          <button key={k} type="button" aria-pressed={filter === k} onClick={() => setFilter(k)} className={clsx('h-8 rounded-full border px-3 text-sm', filter === k ? 'border-navy-700 bg-navy-100 text-navy-700' : 'border-paper-500 bg-white')}>
-            {label}
-          </button>
-        ))}
+      {/* “Danh sách kiểm kho” with the filter button on the same row (Design §13.8). */}
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-ink-900">Danh sách kiểm kho</h2>
+        <FilterMenu
+          groups={[
+            {
+              kind: 'single',
+              label: 'Trạng thái',
+              options: [
+                { key: 'uncounted', label: `Chưa đếm (${x.lines.length - counted})` },
+                ...(showExpected ? [{ key: 'variance', label: `Có chênh lệch (${x.lines.filter((l) => !!l.variance).length})` }] : []),
+              ],
+              value: filter,
+              onChange: setFilter,
+            },
+          ]}
+        />
       </div>
       <DataTable
         columns={[
@@ -360,6 +444,33 @@ export function CountDetailPage() {
         minWidth={560}
         empty={{ icon: ClipboardList, title: 'Không có dòng phù hợp' }}
       />
+      {menu && (
+        <Dialog title="Thao tác" size="sm" onClose={() => setMenu(false)}>
+          <div className="flex flex-col gap-2">
+            {open && (
+              <>
+                <Button variant="primary" full icon={Send} onClick={() => (setMenu(false), setConfirm('submit'))}>
+                  Gửi duyệt
+                </Button>
+                <a className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-full border border-paper-500 bg-white px-4 text-sm font-medium hover:bg-navy-50" href={`/api/v1/inventory/counts/${x.id}/sheet?format=xlsx`} onClick={() => setMenu(false)}>
+                  <Download size={18} aria-hidden /> Tải phiếu đếm (Excel)
+                </a>
+                <Button variant="secondary" full icon={Upload} disabled={uploading} onClick={() => (setMenu(false), fileRef.current?.click())}>
+                  Tải lên phiếu đã đếm
+                </Button>
+              </>
+            )}
+            {x.status === 'submitted' && can(me, 'inventory.count_approve') && (
+              <Button variant="primary" full icon={CheckCircle2} onClick={() => (setMenu(false), setConfirm('approve'))}>
+                Duyệt và ghi chênh lệch
+              </Button>
+            )}
+            <Button variant="destructive-outline" full icon={XCircle} onClick={() => (setMenu(false), setConfirm('cancel'))}>
+              Hủy phiếu
+            </Button>
+          </div>
+        </Dialog>
+      )}
       {confirm === 'submit' && (
         <ConfirmDialog
           title="Gửi phiếu kiểm để duyệt?"

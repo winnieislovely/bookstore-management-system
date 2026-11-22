@@ -105,6 +105,11 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
     { method: 'post', path: '/api/v1/inventory/counts/:id/lines', access: 'inventory.count', summary: 'Record a scan or a counted quantity', params: IdParams, body: inventory.CountLineSchema },
     async ({ ctx, params, body }) => inventory.recordCount(ctx, params.id, body),
   );
+  defineRoute(
+    app,
+    { method: 'post', path: '/api/v1/inventory/counts/:id/scan', access: 'inventory.count', summary: 'A scanned product: one more, or a corrected quantity', params: IdParams, body: inventory.CountScanSchema },
+    async ({ ctx, params, body }) => inventory.scanCount(ctx, params.id, body),
+  );
   defineRoute(app, { method: 'post', path: '/api/v1/inventory/counts/:id/submit', access: 'inventory.count', summary: 'Submit a count for approval', status: 204, params: IdParams }, async ({ ctx, params }) => {
     await inventory.submitCount(ctx, params.id);
   });

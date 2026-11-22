@@ -202,7 +202,9 @@ export async function listTitles(ctx: Ctx, input: z.input<typeof TitlesQuery>) {
     .orderBy(sql`${t.callNo} asc nulls last`, asc(t.title))
     .limit(q.limit);
   const categories = await ctx.db.execute<{ category: string }>(sql`select distinct category from library.lib_title where category is not null order by category`);
-  return { items, categories: categories.map((c) => c.category) };
+  // Every copy by status, unfiltered, for the line under the Quản lý thư viện title (Design §13.8).
+  const copyStatus = await ctx.db.execute<{ status: string; n: number }>(sql`select status, count(*)::int as n from library.lib_copy group by status`);
+  return { items, categories: categories.map((c) => c.category), copyStatus: [...copyStatus] };
 }
 
 function requireAny(ctx: Ctx) {

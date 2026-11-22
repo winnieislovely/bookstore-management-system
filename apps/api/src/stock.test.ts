@@ -314,6 +314,29 @@ describe('blind stock count (FR-INV-06, UC-07)', () => {
     expect(lv.body.items[0].onHand).toBe(5);
   });
 
+  it('counts by scanning: ISBN for a book, the system barcode for stationery, a correction, out of count and unknown codes (FR-INV-06)', async () => {
+    const c = await h.call('POST', '/api/v1/inventory/counts', { cookie: warehouse, body: { scope: { kind: 'types', itemKinds: ['book'] }, blind: true } });
+    const scan = (body: object) => h.call('POST', `/api/v1/inventory/counts/${c.body.id}/scan`, { cookie: warehouse, body });
+    // Each scan adds one; the ISBN can be typed with or without hyphens.
+    expect((await scan({ code: '978-604-1-23456-7' })).body).toMatchObject({ sku: 'SACH-NNA-0012', counted: 1 });
+    const two = await scan({ code: '9786041234567' });
+    expect(two.body).toMatchObject({ variantId: bookVariant, counted: 2 });
+    // The quantity of the product just scanned can be set at once.
+    expect((await scan({ code: 'SACH-NNA-0012', qty: 12 })).body.counted).toBe(12);
+    // A stationery item, found by its system barcode, is outside this book-only count.
+    const [pen] = await h.t.sql`select b.code from catalog.barcode b join catalog.item_variant v on v.id = b.variant_id join catalog.item i on i.id = v.item_id where i.kind = 'stationery' limit 1`;
+    const out = await scan({ code: pen!.code });
+    expect(out.status).toBe(409);
+    expect(out.body.error.code).toBe('not_in_count');
+    expect((await scan({ code: 'NO-SUCH-CODE' })).status).toBe(404);
+    // In a stationery count the same barcode counts.
+    const s = await h.call('POST', '/api/v1/inventory/counts', { cookie: warehouse, body: { scope: { kind: 'types', itemKinds: ['stationery'] }, blind: false } });
+    expect((await h.call('POST', `/api/v1/inventory/counts/${s.body.id}/scan`, { cookie: warehouse, body: { code: pen!.code } })).body.counted).toBe(1);
+    for (const id of [c.body.id, s.body.id]) await h.call('POST', `/api/v1/inventory/counts/${id}/cancel`, { cookie: warehouse });
+    // A cancelled count takes no more scans.
+    expect((await scan({ code: 'SACH-NNA-0012' })).status).toBe(409);
+  });
+
   it('scopes by product type, round-trips the count sheet and can be cancelled before approval', async () => {
     const c = await h.call('POST', '/api/v1/inventory/counts', { cookie: warehouse, body: { scope: { kind: 'types', itemKinds: ['book'] }, blind: true } });
     expect(c.status, JSON.stringify(c.body)).toBe(201);

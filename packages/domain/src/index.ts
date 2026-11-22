@@ -17,3 +17,4 @@ export * from './barcode.js';
 export * from './orders.js';
 export * from './library.js';
 export * from './callNumber.js';
+export * from './audit.js';

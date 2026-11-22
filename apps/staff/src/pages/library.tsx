@@ -1,7 +1,7 @@
 import { barcodeSvg, BORROW_BLOCK_TEXT, cutterNumber, deweyCategory, discountedLoanFees, dueAfter, escapeXml, normalizeDewey, vietnameseNaturalOrder, type BorrowBlock, type LoanDiscount } from '@bookstore/domain';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, ArrowLeftRight, BookmarkCheck, CheckCircle2, ChevronRight, Library, Pencil, Phone, Plus, Printer, ScanBarcode, Search, X } from 'lucide-react';
+import { AlertOctagon, ArrowLeftRight, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Library, Pencil, Phone, Plus, Printer, ScanBarcode, Search, X } from 'lucide-react';
 import { useId, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ConfirmDialog, DataTable, Facts, FilterMenu, SearchBox, SelectField, TextArea, TimeFilter, errText, timeDays, timeLabel, toast, useDebounced, useParam, type Column } from '../components/data';
@@ -1327,6 +1327,17 @@ export function LibraryDeskPage() {
 // =============================================================================================
 // Quản lý thư viện: titles and copies (FR-LIB-01..04)
 
+/** “120 bản · Sẵn sàng 100 · Đang mượn 15 · …”, statuses with no copy left out. */
+function copyLine(rows?: { status: string; n: number }[]) {
+  if (!rows?.length) return undefined;
+  const total = rows.reduce((a, x) => a + x.n, 0);
+  const parts = Object.entries(COPY_STATUS)
+    .map(([k, st]) => [st.label, rows.find((x) => x.status === k)?.n ?? 0] as const)
+    .filter(([, n]) => n > 0)
+    .map(([label, n]) => `${label} ${formatNumber(n)}`);
+  return <span className="num">{[`${formatNumber(total)} bản`, ...parts].join(' · ')}</span>;
+}
+
 export function LibraryCatalogPage() {
   const navigate = useNavigate();
   const { data: me } = useMe();
@@ -1338,7 +1349,7 @@ export function LibraryCatalogPage() {
   const [dialog, setDialog] = useState<null | 'new'>(null);
   const list = useQuery({
     queryKey: ['library-titles', q, language, status, category, classified],
-    queryFn: () => get<{ items: TitleRow[]; categories: string[] }>('/api/v1/library/titles', { q: q || undefined, language: language || undefined, status: status || undefined, category: category || undefined, unclassified: classified === 'no' ? 'true' : undefined }),
+    queryFn: () => get<{ items: TitleRow[]; categories: string[]; copyStatus?: { status: string; n: number }[] }>('/api/v1/library/titles', { q: q || undefined, language: language || undefined, status: status || undefined, category: category || undefined, unclassified: classified === 'no' ? 'true' : undefined }),
   });
   const columns: Column<TitleRow>[] = [
     {
@@ -1382,6 +1393,8 @@ export function LibraryCatalogPage() {
     <>
       <PageHeader
         title="Quản lý thư viện"
+        // Copies by status in one plain line, moved here from Báo cáo thư viện (Design §13.8).
+        subtitle={copyLine(list.data?.copyStatus)}
         actions={
           manage && (
             <>
@@ -2171,83 +2184,93 @@ interface LibraryReport {
   collection: { language: string; status: string; n: number }[];
 }
 
+/** “30 ngày qua ▾”: opens the list time options (no “Tất cả”) under it (Design §12.6). */
+function PeriodButton({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button type="button" aria-expanded={open} aria-label={`Thời gian: ${timeLabel(value)}`} onClick={() => setOpen((o) => !o)} className="inline-flex h-9 items-center gap-2 rounded-md border border-paper-500 bg-white px-3 text-sm font-medium whitespace-nowrap">
+        {timeLabel(value)}
+        <ChevronDown size={16} className={clsx('text-ink-500 transition-transform', open && 'rotate-180')} aria-hidden />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} aria-hidden />
+          <div role="dialog" aria-label="Thời gian" className="absolute right-0 z-30 mt-2 w-[300px] max-w-[calc(100vw-2rem)] rounded-lg border border-paper-300 bg-white p-3 shadow-md">
+            <TimeFilter
+              value={value}
+              onChange={(v) => {
+                onChange(v);
+                if (v === '7d' || v === '30d') setOpen(false);
+              }}
+              allowAll={false}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function LibraryReportPage() {
   const [time, setTime] = useParam('time', '30d');
   const days = timeDays(time);
   const r = useQuery({ queryKey: ['report-library', time], enabled: !!days, queryFn: () => get<LibraryReport>('/api/v1/reports/library', { from: days![0], to: days![1] }) });
   const d = r.data;
-  const kpi = (label: string, value: ReactNode) => (
-    <div className="rounded-lg border border-paper-300 bg-white p-4 shadow-sm">
-      <p className="text-[13px] text-ink-500">{label}</p>
-      <p className="mt-1 text-xl font-semibold num">{value}</p>
-    </div>
-  );
-  const byStatus = (lang: string) => Object.keys(COPY_STATUS).map((s) => d?.collection.find((c) => c.language === lang && c.status === s)?.n ?? 0);
+  const collected = d ? d.loanFeesVnd + d.lateFeesVnd + d.lossChargesVnd : 0;
   return (
     <>
-      <PageHeader title="Báo cáo thư viện" />
-      <div className="mb-4 flex">
-        <FilterMenu groups={[{ kind: 'custom', label: 'Thời gian', summary: timeLabel(time), active: time !== '30d', onClear: () => setTime('30d'), content: <TimeFilter value={time} onChange={setTime} allowAll={false} /> }]} />
-      </div>
+      <PageHeader
+        title="Báo cáo thư viện"
+        // A labelled period button on the title row (Design §12.6).
+        menu={<PeriodButton value={time} onChange={setTime} />}
+      />
       {r.error && <ErrorState error={r.error} onRetry={() => r.refetch()} />}
       {!d && !r.error && <Skeleton className="h-40" />}
       {d && (
-        <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            {kpi('Lượt mượn', formatNumber(d.loans))}
-            {kpi('Lượt gia hạn', formatNumber(d.renewals))}
-            {kpi('Lượt trả', formatNumber(d.returns))}
-            {kpi('Người mượn', formatNumber(d.borrowers))}
-            {kpi('Đang cho mượn', formatNumber(d.openLoans))}
-            {kpi('Đang quá hạn', <span className={d.overdueLoans ? 'text-danger-700' : ''}>{formatNumber(d.overdueLoans)}</span>)}
-            {kpi('Phí mượn đã thu', formatVnd(d.loanFeesVnd))}
-            {kpi('Phí trễ đã thu', formatVnd(d.lateFeesVnd))}
-            {kpi('Phí mất, hỏng đã thu', formatVnd(d.lossChargesVnd))}
-            {kpi('Đã miễn', formatVnd(d.waivedVnd))}
-          </div>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Card title="Sách được mượn nhiều">
-              {d.popular.length === 0 ? (
-                <EmptyState icon={Library} title="Chưa có lượt mượn trong kỳ" />
-              ) : (
-                <ol className="flex flex-col gap-2 text-sm">
-                  {d.popular.map((p) => (
-                    <li key={p.title} className="flex gap-3">
-                      <span className="code w-28 shrink-0">{p.callNo ?? '—'}</span>
-                      <span className="min-w-0 flex-1 truncate">{p.title}</span>
-                      <span className="font-semibold num">{p.loans}</span>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </Card>
-            <Card title="Bản sách theo trạng thái">
-              <table className="w-full text-sm num">
-                <thead>
-                  <tr className="text-left text-ink-500">
-                    <th className="py-1 font-medium" />
-                    {Object.values(COPY_STATUS).map((s) => (
-                      <th key={s.label} className="py-1 text-right font-medium">
-                        {s.label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {['vi', 'en'].map((lang) => (
-                    <tr key={lang} className="border-t border-paper-300">
-                      <td className="py-2">{lang === 'vi' ? 'Tiếng Việt' : 'Tiếng Anh'}</td>
-                      {byStatus(lang).map((n, i) => (
-                        <td key={i} className="py-2 text-right">
-                          {formatNumber(n)}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Card>
-          </div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <Card title="Mượn trả trong kỳ">
+            <p className="text-2xl font-semibold num text-ink-900">{formatNumber(d.loans)} <span className="text-sm font-normal text-ink-500">lượt mượn</span></p>
+            <p className="mt-1 text-sm text-ink-500 num">
+              Gia hạn {formatNumber(d.renewals)} · Trả {formatNumber(d.returns)} · Người mượn {formatNumber(d.borrowers)}
+            </p>
+          </Card>
+          <Card title="Tiền thu trong kỳ">
+            <p className="text-2xl font-semibold num text-ink-900">{formatVnd(collected)}</p>
+            <dl className="mt-3 flex flex-col gap-1.5 text-sm">
+              {(
+                [
+                  ['Phí mượn', d.loanFeesVnd],
+                  ['Phí trễ', d.lateFeesVnd],
+                  ['Phí mất, hỏng', d.lossChargesVnd],
+                ] as const
+              ).map(([label, v]) => (
+                <div key={label} className="flex justify-between gap-3">
+                  <dt className="text-ink-700">{label}</dt>
+                  <dd className="num text-ink-900">{formatVnd(v)}</dd>
+                </div>
+              ))}
+              <div className="flex justify-between gap-3 text-ink-500">
+                <dt>Đã miễn</dt>
+                <dd className="num">{formatVnd(d.waivedVnd)}</dd>
+              </div>
+            </dl>
+          </Card>
+          <Card title="Sách được mượn nhiều" className="lg:col-span-2">
+            {d.popular.length === 0 ? (
+              <p className="text-sm text-ink-500">Chưa có lượt mượn trong kỳ.</p>
+            ) : (
+              <ol className="flex flex-col gap-2 text-sm">
+                {d.popular.slice(0, 5).map((p, i) => (
+                  <li key={p.title} className="flex gap-3">
+                    <span className="w-5 shrink-0 text-ink-500 num">{i + 1}</span>
+                    <span className="min-w-0 flex-1 truncate">{p.title}</span>
+                    <span className="font-semibold num">{formatNumber(p.loans)}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Card>
         </div>
       )}
     </>

@@ -1,9 +1,9 @@
 import { PERMISSIONS } from '@bookstore/domain';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, Copy, Lock, Monitor, Plus, RefreshCw, ScrollText, Search, ShieldCheck, Unlock, UserRound } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Lock, Monitor, Plus, RefreshCw, Search, ShieldCheck, Unlock, UserRound } from 'lucide-react';
 import { useState } from 'react';
-import { ConfirmDialog, DataTable, Facts, SearchBox, SelectField, Tabs, TextArea, toast, useParam, type Column } from '../components/data';
-import { Button, Field, InlineAlert, PageHeader, StatusChip, type Tone } from '../components/ui';
+import { ConfirmDialog, DataTable, Facts, SearchBox, SelectField, TextArea, toast, useParam, type Column } from '../components/data';
+import { Button, Card, Field, InlineAlert, PageHeader, StatusChip, type Tone } from '../components/ui';
 import { get, patch, post } from '../lib/api';
 import { formatDateTime, formatRelative } from '../lib/format';
 import { can, useMe } from '../lib/session';
@@ -134,12 +134,18 @@ function UserForm({ user, roles, onClose, onSaved }: { user: User | null; roles:
   const [password, setPassword] = useState(() => (user ? '' : tempPassword()));
   const [status, setStatus] = useState(user?.status === 'disabled' ? 'disabled' : 'active');
   const [error, setError] = useState<string | null>(null);
+  const { data: me } = useMe();
+  // Disabling an employee: their phones still hold store data, so offer to revoke them (FR-ADM-04).
+  const disabling = !!user && user.status !== 'disabled' && status === 'disabled';
+  const devices = useQuery({ queryKey: ['devices'], queryFn: () => get<{ items: Device[] }>('/api/v1/pos/devices'), enabled: disabling && can(me, 'pos.offline.manage') });
+  const theirs = (devices.data?.items ?? []).filter((d) => d.lastUserId === user?.id && !d.revokedAt);
+  const [revokeDevices, setRevokeDevices] = useState(true);
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
-      if (user) await patch(`/api/v1/admin/users/${user.id}`, { displayName, ...(roleId && { roleId }), status, version: user.version });
+      if (user) await patch(`/api/v1/admin/users/${user.id}`, { displayName, ...(roleId && { roleId }), status, ...(disabling && theirs.length > 0 && revokeDevices && { revokeDevices: true }), version: user.version });
       else await post('/api/v1/admin/users', { username: username.trim(), displayName: displayName.trim(), roleId, password });
       toast.success(user ? 'Đã lưu nhân viên.' : 'Đã thêm nhân viên. Họ sẽ đổi mật khẩu khi đăng nhập lần đầu.');
       onSaved();
@@ -211,6 +217,15 @@ function UserForm({ user, roles, onClose, onSaved }: { user: User | null; roles:
             <option value="active">Đang dùng</option>
             <option value="disabled">Ngừng dùng</option>
           </SelectField>
+        )}
+        {disabling && theirs.length > 0 && (
+          <label className="inline-flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-0.5 size-[18px] accent-navy-700" checked={revokeDevices} onChange={(e) => setRevokeDevices(e.target.checked)} />
+            <span>
+              Thu hồi máy bán hàng người này dùng gần nhất: <span className="code">{theirs.map((d) => d.deviceCode).join(', ')}</span>
+              <span className="block text-[13px] text-ink-500">Dữ liệu cửa hàng trên máy bị xóa ở lần kết nối tới.</span>
+            </span>
+          </label>
         )}
         {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       </div>
@@ -349,6 +364,8 @@ interface Device {
   lastSeenAt: string | null;
   leaseExpiresAt: string | null;
   revokedAt: string | null;
+  lastUserId: string | null;
+  lastUserName: string | null;
 }
 interface SyncException {
   id: string;
@@ -373,35 +390,32 @@ const EXCEPTION_LABEL: Record<string, string> = {
 };
 const dangerous = (code: string) => code.startsWith('rejected') || code === 'approval_revoked';
 
-export function DevicesPage() {
+type Register = { id: string; code: string; name: string };
+
+/** More than this since the last contact: offline sales may be waiting on the device (Design, Quầy & máy bán hàng). */
+const QUIET_MS = 10 * 60_000;
+
+/**
+ * Cấu hình › Quầy & máy bán hàng (FR-ADM-04, TDD §7.2, §7.6): sync exceptions while unresolved, registers
+ * (add, rename) and devices with their last user and revoke. Replaces the Thiết bị POS page.
+ */
+export function PosDevicesPanel() {
   const { data: me } = useMe();
-  const [tab, setTab] = useState<'exceptions' | 'devices' | 'registers'>('exceptions');
-  const [showAll, setShowAll] = useState(false);
-  const devices = useQuery({ queryKey: ['devices'], queryFn: () => get<{ items: Device[] }>('/api/v1/pos/devices'), enabled: tab === 'devices' });
-  const exceptions = useQuery({ queryKey: ['sync-exceptions', showAll], queryFn: () => get<{ items: SyncException[] }>('/api/v1/pos/sync/exceptions', { all: String(showAll) }) });
-  const registers = useQuery({ queryKey: ['registers'], queryFn: () => get<{ items: { id: string; code: string; name: string }[] }>('/api/v1/pos/registers'), enabled: tab === 'registers' });
+  const manageDevices = can(me, 'pos.offline.manage');
+  const manageRegisters = can(me, 'settings.manage');
+  const devices = useQuery({ queryKey: ['devices'], queryFn: () => get<{ items: Device[] }>('/api/v1/pos/devices'), enabled: manageDevices });
+  const exceptions = useQuery({ queryKey: ['sync-exceptions', false], queryFn: () => get<{ items: SyncException[] }>('/api/v1/pos/sync/exceptions', { all: 'false' }), enabled: manageDevices });
+  const registers = useQuery({ queryKey: ['registers'], queryFn: () => get<{ items: Register[] }>('/api/v1/pos/registers') });
   const [revoking, setRevoking] = useState<Device | null>(null);
   const [resolving, setResolving] = useState<SyncException | null>(null);
-  const [addingRegister, setAddingRegister] = useState(false);
-  const open = exceptions.data?.items.filter((x) => !x.resolvedAt).length ?? 0;
+  const [editing, setEditing] = useState<Register | 'new' | null>(null);
+  const open = exceptions.data?.items ?? [];
+  const quiet = revoking?.lastSeenAt && Date.now() - Date.parse(revoking.lastSeenAt) > QUIET_MS ? revoking.lastSeenAt : null;
   return (
-    <>
-      <PageHeader title="Thiết bị POS" />
-      <Tabs
-        tabs={[
-          { key: 'exceptions', label: 'Ngoại lệ đồng bộ', ...(open && { count: open }) },
-          { key: 'devices', label: 'Thiết bị' },
-          { key: 'registers', label: 'Quầy' },
-        ]}
-        value={tab}
-        onChange={setTab}
-      />
-      {tab === 'exceptions' && (
-        <>
-          <label className="mb-3 inline-flex items-center gap-2 text-sm">
-            <input type="checkbox" className="size-5" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
-            Hiện cả mục đã xử lý
-          </label>
+    <div className="flex flex-col gap-6">
+      {/* Only while something needs a look; a notification says so too (FR-POS-26). */}
+      {open.length > 0 && (
+        <Card title={`${open.length} đơn bán ngoại tuyến cần xem`} className="border-warning-700/40">
           <DataTable
             columns={[
               { header: 'Nhận lúc', cell: (x: SyncException) => formatDateTime(x.receivedAt) },
@@ -419,47 +433,56 @@ export function DevicesPage() {
                   </div>
                 ),
               },
-              { header: 'Xử lý', cell: (x) => (x.resolvedAt ? <span className="text-[13px]"><StatusChip tone="success" icon={CheckCircle2}>Đã xử lý</StatusChip><span className="block text-ink-500">{x.resolutionNote}</span></span> : <Button size="sm" variant="tonal" onClick={(e) => (e.stopPropagation(), setResolving(x))}>Xử lý</Button>) },
+              { header: '', align: 'right', cell: (x) => <Button size="sm" variant="tonal" onClick={(e) => (e.stopPropagation(), setResolving(x))}>Xử lý</Button> },
             ]}
-            rows={exceptions.data?.items}
+            rows={open}
             rowKey={(x) => x.id}
-            error={exceptions.error}
-            empty={{ icon: CheckCircle2, title: 'Không có ngoại lệ cần xem', help: 'Đơn bán ngoại tuyến có giá lệch, tồn âm hay chuyển khoản chưa xác minh sẽ hiện ở đây.' }}
+            empty={{ icon: CheckCircle2, title: 'Không có ngoại lệ cần xem' }}
           />
-        </>
+        </Card>
       )}
-      {tab === 'devices' && (
+      <Card
+        title="Quầy"
+        action={
+          manageRegisters && (
+            <Button variant="secondary" size="sm" icon={Plus} onClick={() => setEditing('new')}>
+              Thêm quầy
+            </Button>
+          )
+        }
+      >
         <DataTable
-          columns={[
-            { header: 'Mã máy', cell: (d: Device) => <span className="code">{d.deviceCode}</span> },
-            { header: 'Quầy', cell: (d) => d.registerCode },
-            { header: 'Hoạt động gần nhất', cell: (d) => (d.lastSeenAt ? formatRelative(d.lastSeenAt) : '—') },
-            { header: 'Hạn bán ngoại tuyến', cell: (d) => (d.leaseExpiresAt ? formatDateTime(d.leaseExpiresAt) : '—') },
-            { header: 'Trạng thái', cell: (d) => (d.revokedAt ? <StatusChip tone="neutral">Đã thu hồi</StatusChip> : d.leaseExpiresAt && new Date(d.leaseExpiresAt) < new Date() ? <StatusChip tone="warning">Quá hạn kết nối</StatusChip> : <StatusChip tone="success">Đang dùng</StatusChip>) },
-            { header: '', align: 'right', cell: (d) => (!d.revokedAt ? <Button size="sm" variant="destructive-outline" onClick={(e) => (e.stopPropagation(), setRevoking(d))}>Thu hồi</Button> : null) },
-          ]}
-          rows={devices.data?.items}
-          rowKey={(d) => d.id}
-          error={devices.error}
-          empty={{ icon: Monitor, title: 'Chưa có máy bán hàng', help: 'Đăng ký máy bằng cách mở màn hình Bán hàng trên máy đó.' }}
+          columns={[{ header: 'Mã', cell: (r: Register) => <span className="code">{r.code}</span> }, { header: 'Tên', cell: (r) => r.name }]}
+          rows={registers.data?.items}
+          rowKey={(r) => r.id}
+          {...(manageRegisters && { onRow: setEditing })}
+          minWidth={320}
+          empty={{ icon: Monitor, title: 'Chưa có quầy' }}
         />
-      )}
-      {tab === 'registers' && (
-        <>
-          {can(me, 'settings.manage') && (
-            <div className="mb-3 flex justify-end">
-              <Button variant="primary" icon={Plus} onClick={() => setAddingRegister(true)}>
-                Thêm quầy
-              </Button>
-            </div>
-          )}
-          <DataTable columns={[{ header: 'Mã', cell: (r: { id: string; code: string; name: string }) => <span className="code">{r.code}</span> }, { header: 'Tên', cell: (r) => r.name }]} rows={registers.data?.items} rowKey={(r) => r.id} minWidth={360} empty={{ icon: Monitor, title: 'Chưa có quầy' }} />
-        </>
+      </Card>
+      {manageDevices && (
+        <Card title="Máy bán hàng">
+          <DataTable
+            columns={[
+              { header: 'Mã máy', cell: (d: Device) => <span className="code">{d.deviceCode}</span> },
+              { header: 'Quầy', cell: (d) => d.registerCode },
+              { header: 'Người dùng gần nhất', cell: (d) => d.lastUserName ?? <span className="text-ink-500">—</span> },
+              { header: 'Hoạt động gần nhất', cell: (d) => (d.lastSeenAt ? formatRelative(d.lastSeenAt) : '—') },
+              { header: 'Trạng thái', cell: (d) => (d.revokedAt ? <StatusChip tone="neutral">Đã thu hồi</StatusChip> : d.leaseExpiresAt && new Date(d.leaseExpiresAt) < new Date() ? <StatusChip tone="warning">Quá hạn kết nối</StatusChip> : <StatusChip tone="success">Đang dùng</StatusChip>) },
+              { header: '', align: 'right', cell: (d) => (!d.revokedAt ? <Button size="sm" variant="destructive-outline" onClick={(e) => (e.stopPropagation(), setRevoking(d))}>Thu hồi</Button> : null) },
+            ]}
+            rows={devices.data?.items}
+            rowKey={(d) => d.id}
+            error={devices.error}
+            minWidth={640}
+            empty={{ icon: Monitor, title: 'Chưa có máy bán hàng', help: 'Đăng ký máy bằng cách mở màn hình Bán hàng trên máy đó.' }}
+          />
+        </Card>
       )}
       {revoking && (
         <ConfirmDialog
           title={`Thu hồi máy ${revoking.deviceCode}?`}
-          body="Máy sẽ không bán và không đồng bộ được nữa; dữ liệu đã lưu trên máy bị xóa ở lần kết nối tới. Đơn chưa đồng bộ trên máy đó sẽ mất."
+          body="Máy sẽ không bán và không đồng bộ được nữa; dữ liệu cửa hàng lưu trên máy bị xóa ở lần kết nối tới."
           confirm="Thu hồi"
           destructive
           onClose={() => setRevoking(null)}
@@ -468,11 +491,13 @@ export function DevicesPage() {
             toast.success('Đã thu hồi máy.');
             await devices.refetch();
           }}
-        />
+        >
+          {quiet && <InlineAlert tone="warning">Máy liên lạc lần cuối {formatDateTime(quiet)}; đơn bán ngoại tuyến sau thời điểm này chưa gửi lên sẽ mất.</InlineAlert>}
+        </ConfirmDialog>
       )}
       {resolving && <ResolveDialog x={resolving} onClose={() => setResolving(null)} onDone={() => exceptions.refetch()} />}
-      {addingRegister && <AddRegister onClose={() => setAddingRegister(false)} onDone={() => registers.refetch()} />}
-    </>
+      {editing && <RegisterForm row={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onDone={() => registers.refetch()} />}
+    </div>
   );
 }
 
@@ -503,100 +528,26 @@ function ResolveDialog({ x, onClose, onDone }: { x: SyncException; onClose: () =
   );
 }
 
-function AddRegister({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const [code, setCode] = useState('');
-  const [name, setName] = useState('');
+/** Add a register, or rename one – the code is fixed once made, device codes derive from it. */
+function RegisterForm({ row, onClose, onDone }: { row: Register | null; onClose: () => void; onDone: () => void }) {
+  const [code, setCode] = useState(row?.code ?? '');
+  const [name, setName] = useState(row?.name ?? '');
   return (
     <ConfirmDialog
-      title="Thêm quầy"
-      confirm="Thêm"
+      title={row ? 'Sửa quầy' : 'Thêm quầy'}
+      confirm={row ? 'Lưu' : 'Thêm'}
       onClose={onClose}
       onConfirm={async () => {
-        await post('/api/v1/pos/registers', { code: code.trim().toUpperCase(), name: name.trim() });
-        toast.success('Đã thêm quầy.');
+        if (row) await patch(`/api/v1/pos/registers/${row.id}`, { name: name.trim() });
+        else await post('/api/v1/pos/registers', { code: code.trim().toUpperCase(), name: name.trim() });
+        toast.success(row ? 'Đã lưu quầy.' : 'Đã thêm quầy.');
         onDone();
       }}
     >
-      <Field label="Mã quầy" required className="code" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
+      {row ? <Facts items={[['Mã quầy', <span className="code">{row.code}</span>]]} /> : <Field label="Mã quầy" required className="code" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />}
       <Field label="Tên quầy" required value={name} onChange={(e) => setName(e.target.value)} />
     </ConfirmDialog>
   );
 }
 
-// =============================================================================================
-// Audit log (FR-ADM-05)
-
-interface AuditEntry {
-  id: string;
-  actorId: string | null;
-  actorName: string | null;
-  action: string;
-  entity: string;
-  entityId: string | null;
-  before: unknown;
-  after: unknown;
-  at: string;
-  ip: string | null;
-  requestId: string | null;
-}
-
-export function AuditPage() {
-  const [action, setAction] = useState('');
-  const [entity, setEntity] = useState('');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const [pages, setPages] = useState<string[]>(['']);
-  const [open, setOpen] = useState<AuditEntry | null>(null);
-  const cursor = pages[pages.length - 1];
-  const q = { action: action || undefined, entity: entity || undefined, from: from ? new Date(from).toISOString() : undefined, to: to ? new Date(`${to}T23:59:59`).toISOString() : undefined, cursor: cursor || undefined, limit: 40 };
-  const list = useQuery({ queryKey: ['audit', q], queryFn: () => get<{ items: AuditEntry[]; nextCursor: string | null }>('/api/v1/admin/audit', q) });
-  const reset = () => setPages(['']);
-  return (
-    <>
-      <PageHeader title="Nhật ký thao tác" />
-      <div className="mb-4 grid gap-3 sm:grid-cols-4">
-        <Field label="Thao tác (bắt đầu bằng)" placeholder="vd. sale.void" value={action} onChange={(e) => (setAction(e.target.value), reset())} />
-        <Field label="Đối tượng" placeholder="vd. customer" value={entity} onChange={(e) => (setEntity(e.target.value), reset())} />
-        <Field label="Từ ngày" type="date" value={from} onChange={(e) => (setFrom(e.target.value), reset())} />
-        <Field label="Đến ngày" type="date" value={to} onChange={(e) => (setTo(e.target.value), reset())} />
-      </div>
-      <DataTable
-        columns={[
-          { header: 'Thời gian', cell: (a: AuditEntry) => formatDateTime(a.at) },
-          { header: 'Người thực hiện', cell: (a) => a.actorName ?? 'Hệ thống' },
-          { header: 'Thao tác', cell: (a) => <span className="code">{a.action}</span> },
-          { header: 'Đối tượng', cell: (a) => <span>{a.entity}{a.entityId && <span className="ml-1 code text-[13px] text-ink-500">{a.entityId.slice(0, 13)}</span>}</span> },
-          { header: 'IP', cell: (a) => <span className="code text-[13px]">{a.ip ?? ''}</span> },
-        ]}
-        rows={list.data?.items}
-        rowKey={(a) => a.id}
-        onRow={setOpen}
-        error={list.error}
-        empty={{ icon: ScrollText, title: 'Không có mục phù hợp' }}
-      />
-      <div className="mt-4 flex justify-end gap-2">
-        <Button size="sm" variant="ghost" disabled={pages.length <= 1} onClick={() => setPages(pages.slice(0, -1))}>
-          ‹ Mới hơn
-        </Button>
-        <Button size="sm" variant="ghost" disabled={!list.data?.nextCursor} onClick={() => setPages([...pages, list.data!.nextCursor!])}>
-          Cũ hơn ›
-        </Button>
-      </div>
-      {open && (
-        <Dialog title={open.action} size="lg" onClose={() => setOpen(null)}>
-          <div className="flex flex-col gap-4">
-            <Facts items={[['Thời gian', formatDateTime(open.at)], ['Người thực hiện', open.actorName ?? 'Hệ thống'], ['Đối tượng', `${open.entity} ${open.entityId ?? ''}`], ['Mã yêu cầu', <span className="code">{open.requestId}</span>]]} />
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {(['before', 'after'] as const).map((k) => (
-                <div key={k}>
-                  <p className="mb-1 text-[13px] font-semibold text-ink-700">{k === 'before' ? 'Trước' : 'Sau'}</p>
-                  <pre className="max-h-80 overflow-auto rounded-md bg-paper-100 p-3 text-xs">{open[k] == null ? '—' : JSON.stringify(open[k], null, 2)}</pre>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Dialog>
-      )}
-    </>
-  );
-}
+// The audit log page is in ./audit.tsx (Design §12.11).

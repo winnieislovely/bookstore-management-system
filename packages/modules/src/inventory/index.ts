@@ -1,5 +1,5 @@
 import { schema } from '@bookstore/db';
-import { adjustmentValue, foldText, movingAverageCost, STOCK_COUNT, canTransition, vnd, type MovementType } from '@bookstore/domain';
+import { adjustmentValue, foldText, movingAverageCost, normalizeIsbn, STOCK_COUNT, canTransition, vnd, type MovementType } from '@bookstore/domain';
 import { and, asc, desc, eq, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as audit from '../audit/index.js';
@@ -429,6 +429,45 @@ export async function recordCount(ctx: Ctx, countId: string, input: z.input<type
         .returning({ counted: l.counted });
     }
     return { variantId: data.variantId, counted: line!.counted };
+  });
+}
+
+export const CountScanSchema = z.object({
+  /** SKU, ISBN or a barcode recorded on the product (the system one for stationery and other goods). */
+  code: z.string().trim().min(1).max(64),
+  /** Set the scanned product's count to this, to correct it at once; without it the scan adds one. */
+  qty: z.number().int().min(0).max(100000).optional(),
+});
+
+/**
+ * One scan on a stock count (FR-INV-06): finds the product by its code and adds one to its line, or sets
+ * the line to `qty`. Any count size – the 50-product limit is for typing in the table only.
+ */
+export async function scanCount(ctx: Ctx, countId: string, input: z.input<typeof CountScanSchema>) {
+  requirePermission(ctx, 'inventory.count');
+  const data = CountScanSchema.parse(input);
+  const v = schema.itemVariant;
+  const isbn = normalizeIsbn(data.code);
+  return ctx.db.transaction(async (tx) => {
+    const [count] = await tx.select().from(schema.stockCount).where(eq(schema.stockCount.id, countId)).for('update');
+    if (!count) throw errors.notFound('Phiếu kiểm kho');
+    if (count.status !== 'open') throw errors.conflict('count_not_open', 'Phiếu kiểm kho đã nộp, không thể đếm thêm.');
+    // Same match as the POS lookup: SKU, ISBN-13 or a recorded barcode.
+    const [variant] = await tx
+      .select({ id: v.id, sku: v.sku, title: sql<string>`${schema.item.i18n} -> 'en' ->> 'title'` })
+      .from(v)
+      .innerJoin(schema.item, eq(schema.item.id, v.itemId))
+      .where(sql`${v.sku} = ${data.code} or ${v.isbn13} = ${isbn ?? data.code} or exists (select 1 from catalog.barcode b where b.variant_id = ${v.id} and b.code = ${data.code})`)
+      .limit(1);
+    if (!variant) throw new AppError(404, 'code_not_found', `Không tìm thấy mã ${data.code}.`);
+    const l = schema.stockCountLine;
+    const [line] = await tx
+      .update(l)
+      .set({ counted: data.qty === undefined ? sql`coalesce(${l.counted}, 0) + 1` : data.qty, updatedAt: ctx.clock.now() })
+      .where(and(eq(l.countId, countId), eq(l.variantId, variant.id)))
+      .returning({ counted: l.counted });
+    if (!line) throw errors.conflict('not_in_count', `${variant.sku} – ${variant.title} không có trong phiếu này.`);
+    return { variantId: variant.id, sku: variant.sku, title: variant.title, counted: line.counted ?? 0 };
   });
 }
 

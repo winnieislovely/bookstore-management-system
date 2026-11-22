@@ -14,6 +14,9 @@ export function posRoutes(app: OpenAPIHono<AppEnv>): void {
   defineRoute(app, { method: 'post', path: '/api/v1/pos/registers', access: 'settings.manage', summary: 'Add a register', status: 201, body: sales.RegisterSchema }, async ({ ctx, body }) =>
     sales.createRegister(ctx, body),
   );
+  defineRoute(app, { method: 'patch', path: '/api/v1/pos/registers/:id', access: 'settings.manage', summary: 'Rename a register', params: IdParams, body: sales.RegisterUpdateSchema }, async ({ ctx, params, body }) =>
+    sales.updateRegister(ctx, params.id, body),
+  );
   defineRoute(app, { method: 'post', path: '/api/v1/pos/shifts/open', access: 'shift.open', summary: 'Open a shift with the opening float', status: 201, body: sales.OpenShiftSchema }, async ({ ctx, body }) =>
     sales.openShift(ctx, body),
   );
