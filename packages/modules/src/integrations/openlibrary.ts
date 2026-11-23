@@ -118,16 +118,21 @@ export class OpenLibraryAdapter implements BookLookupAdapter {
 
   constructor(cfg: OpenLibraryConfig = {}) {
     this.http = cfg.fetch ?? fetch;
-    this.timeoutMs = cfg.timeoutMs ?? 5000;
+    // Open Library answers in 3–8 s (TDD §8.8); 5 s failed most lookups.
+    this.timeoutMs = cfg.timeoutMs ?? 12_000;
     this.headers = { 'user-agent': `TheBookshelfBMS/1.0${cfg.contact ? ` (${cfg.contact})` : ''}`, accept: 'application/json' };
   }
 
   private async get(url: string): Promise<Response> {
-    let res: Response;
-    try {
-      res = await this.http(url, { headers: this.headers, signal: AbortSignal.timeout(this.timeoutMs) });
-    } catch (e) {
-      throw new BookLookupError(`Open Library không phản hồi: ${(e as Error).message}`);
+    let res: Response | undefined;
+    // A dropped connection ("fetch failed") is tried once more; a timeout is not, so staff never wait twice (TDD §8.8).
+    for (let attempt = 0; !res; attempt++) {
+      try {
+        res = await this.http(url, { headers: this.headers, signal: AbortSignal.timeout(this.timeoutMs) });
+      } catch (e) {
+        const timedOut = (e as Error).name === 'TimeoutError' || (e as Error).name === 'AbortError';
+        if (timedOut || attempt >= 1) throw new BookLookupError(`Open Library không phản hồi: ${(e as Error).message}`);
+      }
     }
     if (res.status >= 500 || res.status === 429) throw new BookLookupError(`Open Library trả lỗi ${res.status}.`);
     return res;
@@ -169,17 +174,25 @@ export class OpenLibraryAdapter implements BookLookupAdapter {
     const ed = await this.json(`https://openlibrary.org/isbn/${isbn13}.json`);
     if (!ed) return [];
     const workId = workIdOf(((ed.works as { key?: string }[] | undefined) ?? [])[0]?.key);
-    const work = workId ? await this.json(`https://openlibrary.org/works/${workId}.json`) : null;
-    const authorKeys = [
-      ...((ed.authors as { key?: string }[] | undefined) ?? []).map((a) => a.key),
-      ...((work?.authors as { author?: { key?: string } }[] | undefined) ?? []).map((a) => a.author?.key),
-    ].filter((k): k is string => typeof k === 'string' && /^\/authors\/OL\d+A$/.test(k));
-    const authors: string[] = [];
-    for (const key of [...new Set(authorKeys)].slice(0, 3)) {
-      const a = await this.json(`https://openlibrary.org${key}.json`);
-      const name = text(a?.name) ?? text(a?.personal_name);
-      if (name) authors.push(name);
-    }
+    const isAuthorKey = (k: unknown): k is string => typeof k === 'string' && /^\/authors\/OL\d+A$/.test(k);
+    // One author record; a failed one is left out rather than failing the lookup (TDD §8.8).
+    const authorName = async (key: string) => {
+      try {
+        const a = await this.json(`https://openlibrary.org${key}.json`);
+        return text(a?.name) ?? text(a?.personal_name);
+      } catch {
+        return null;
+      }
+    };
+    const edKeys = [...new Set(((ed.authors as { key?: string }[] | undefined) ?? []).map((a) => a.key).filter(isAuthorKey))].slice(0, 3);
+    // The work and the edition's authors are fetched in parallel; the work may add authors after that.
+    const [work, edNames] = await Promise.all([workId ? this.json(`https://openlibrary.org/works/${workId}.json`) : Promise.resolve(null), Promise.all(edKeys.map(authorName))]);
+    const workKeys = ((work?.authors as { author?: { key?: string } }[] | undefined) ?? [])
+      .map((a) => a.author?.key)
+      .filter(isAuthorKey)
+      .filter((k) => !edKeys.includes(k))
+      .slice(0, Math.max(0, 3 - edKeys.length));
+    const authors = [...edNames, ...(await Promise.all(workKeys.map(authorName)))].filter((n): n is string => !!n);
     const t = text(ed.title) ?? '';
     const sub = text(ed.subtitle);
     return [

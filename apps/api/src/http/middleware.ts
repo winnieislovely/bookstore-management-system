@@ -4,7 +4,23 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getCookie } from 'hono/cookie';
 import { randomUUID } from 'node:crypto';
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
+
+// Default validation messages in Vietnamese (NFR-USE-05); schemas with their own message keep it.
+z.config(z.locales.vi());
+
+/** Field names for validation messages, by the last segment of the issue path (Design §14.2). */
+const FIELD_LABELS: Record<string, string> = {
+  name: 'Tên', displayName: 'Tên hiển thị', username: 'Tên đăng nhập', password: 'Mật khẩu', newPassword: 'Mật khẩu mới',
+  phone: 'Số điện thoại', email: 'Email', taxCode: 'Mã số thuế', address: 'Địa chỉ', note: 'Ghi chú', reason: 'Lý do',
+  title: 'Tên', description: 'Mô tả', sku: 'SKU', isbn: 'ISBN', barcode: 'Mã vạch', priceVnd: 'Giá bán', costVnd: 'Giá nhập',
+  qty: 'Số lượng', weightGrams: 'Khối lượng', sort: 'Thứ tự', birthDate: 'Ngày sinh', pin: 'Mã PIN', amountVnd: 'Số tiền',
+};
+const issueText = (i: { path: PropertyKey[]; message: string }) => {
+  const key = [...i.path].reverse().find((p) => typeof p === 'string') as string | undefined;
+  const label = key && FIELD_LABELS[key];
+  return label && !i.message.toLowerCase().startsWith(label.toLowerCase()) ? `${label}: ${i.message}` : i.message;
+};
 import { CSRF_HEADER, SESSION_COOKIE, type AppEnv, type Deps } from './context.js';
 
 /**
@@ -119,7 +135,11 @@ export function errorHandler(deps: Deps) {
         {
           error: {
             code: 'validation_failed',
-            message: 'Dữ liệu chưa hợp lệ. Hãy kiểm tra các ô được đánh dấu.',
+            // Name each problem: the forms show this message, not marked fields (B-03, Design §14.2).
+            message: `Dữ liệu chưa hợp lệ. ${[...new Set(err.issues.map(issueText))]
+              .slice(0, 5)
+              .map((m) => m.replace(/\.?$/, '.'))
+              .join(' ')} Hãy sửa rồi lưu lại.`,
             details: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
             requestId,
           },

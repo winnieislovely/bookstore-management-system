@@ -1,3 +1,7 @@
+| B-21 | Major | Kiểm kho (chi tiết) | M1/M2 | Trên điện thoại phiếu kiểm là bảng cuộn ngang; Design §10.6/§12.2 yêu cầu card list | **Đã sửa** – dưới 640 px hiện danh sách thẻ (tên, SKU, Hệ thống · Chênh lệch, ô Đếm được 44 px); bảng giữ nguyên từ 640 px. Đã kiểm 360 px (nhập số → chênh lệch −1, tiến độ 5%) và 768 px |
+| B-10 | Major | Thêm sản phẩm / Thư viện – Tìm sách | – | Tra cứu Open Library thường thất bại: timeout 5 s/request, Open Library trả lời 3–8 s, các lời gọi tuần tự | **Đã cải thiện** (TDD §8.8 sửa trước): timeout 12 s, gọi work + tác giả song song, bỏ qua tác giả lỗi, thử lại 1 lần khi rớt kết nối, lý do lỗi trong `details.reason`; 2 test mới. Đã tra thành công 1 ISBN (7,7 s). Sau đó Open Library **không truy cập được từ mạng máy test** (curl cũng hết 15 s, các trang khác bình thường) → **cần kiểm lại trên máy chủ thật** |
+| B-04 | Minor | API | – | Thông báo mặc định của zod bằng tiếng Anh | **Đã sửa** – `z.config(z.locales.vi())` |
+| B-03 | Major | Mọi form (vd. Nhà cung cấp) | – | Lỗi `validation_failed` chỉ hiện "Hãy kiểm tra các ô được đánh dấu" nhưng không ô nào được đánh dấu | **Đã sửa** – API nêu từng lỗi kèm tên trường: "Dữ liệu chưa hợp lệ. Số điện thoại không hợp lệ. Email: địa chỉ email không hợp lệ. Hãy sửa rồi lưu lại." (`apps/api/src/http/middleware.ts`) + test. Chưa tô đỏ từng ô (mỗi form phải tự ánh xạ `details`) |
 # Kết quả test trước deployment
 
 Theo [test-plan-deployment.md](test-plan-deployment.md). Môi trường: CSDL `bookstore_qa` làm mới từ đầu (`.env.qa`), api :3000, staff :5173 (dev server), worker.
@@ -12,13 +16,13 @@ Theo [test-plan-deployment.md](test-plan-deployment.md). Môi trường: CSDL `b
 | 0.3 | `pnpm build` | Pass (cảnh báo) | Bundle JS staff 1,12 MB (gzip 327 kB) > 500 kB – Minor, hiệu năng tải lần đầu |
 | 0.3 | Docker image | Pass | `docker build` thành công |
 | 0.4 | Migrations trên DB trống | Pass | |
-| 0.5 | Chạy lại sau các bản sửa: typecheck, lint, test | Pass | domain 84, db 8, api 207 (+2 test mới). Lần chạy `pnpm test` đầu tiên lỗi do Testcontainers khởi động quá 180 s (môi trường), chạy lại pass |
+| 0.5 | Chạy lại sau các bản sửa: typecheck, lint, test | Pass | domain 84, db 8, api 210 (+5 test mới). Lần chạy `pnpm test` đầu tiên lỗi do Testcontainers khởi động quá 180 s (môi trường), chạy lại pass |
 
 ## Tóm tắt
 
 - **Đã sửa trong phiên (6):** B-02, B-05, B-06, B-09, B-16, B-23 – đều kiểm lại trên trình duyệt hoặc test tự động. Chưa commit. Bản `.docx` của SRS/TDD chưa cập nhật theo bản `.md`.
 - **Còn mở chặn deploy:** không còn Blocker.
-- **Còn mở Major (3):** B-03 (lỗi theo ô không hiển thị), B-10 (tra cứu Open Library timeout), B-21 (kiểm kho trên điện thoại không phải dạng thẻ).
+- **Major:** B-03, B-21 đã sửa; B-10 đã cải thiện nhưng cần kiểm lại trên máy chủ thật vì Open Library không truy cập được từ mạng máy test.
 - **Giao diện:** 38 màn × 6 viewport – **không có tràn ngang cấp trang và không có chữ bị cắt**. Bảng cuộn ngang trong khung (cả ở 1280 px) là đúng Design §10.6.
 - **Chưa test:** xem cuối file.
 

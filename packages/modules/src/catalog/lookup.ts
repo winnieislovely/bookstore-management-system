@@ -38,8 +38,9 @@ function throttle(ctx: Ctx) {
   recent.set(userId, list);
 }
 
-function unavailable(): never {
-  throw new AppError(503, 'lookup_unavailable', 'Không tra cứu được lúc này. Nhập thông tin bên dưới.');
+function unavailable(reason?: string): never {
+  // The reason (timeout, HTTP status) goes in details for support; staff see the plain message.
+  throw new AppError(503, 'lookup_unavailable', 'Không tra cứu được lúc này. Nhập thông tin bên dưới.', reason ? { reason } : undefined);
 }
 
 /** A cached answer, or the adapter's (then cached). Adapter failures become 503 `lookup_unavailable`. */
@@ -55,7 +56,7 @@ async function cached<T>(ctx: Ctx, key: string, load: () => Promise<T>): Promise
   try {
     value = await load();
   } catch (e) {
-    if (e instanceof BookLookupError) unavailable();
+    if (e instanceof BookLookupError) unavailable(e.message);
     throw e;
   }
   await ctx.db
@@ -119,7 +120,7 @@ export async function importCover(ctx: Ctx, adapter: BookLookupAdapter, storage:
   try {
     bytes = await adapter.cover(coverId);
   } catch (e) {
-    if (e instanceof BookLookupError) unavailable();
+    if (e instanceof BookLookupError) unavailable(e.message);
     throw e;
   }
   if (!bytes) throw new AppError(404, 'cover_not_found', 'Sách này không có ảnh bìa. Hãy tải ảnh lên.');

@@ -247,3 +247,14 @@ describe('OpenAPI description (FR-WEB-16, NFR-MNT-01)', () => {
     expect(doc.paths['/api/v1/admin/users/{id}']?.patch).toBeDefined();
   });
 });
+
+describe('validation messages (NFR-USE-05, Design §14.2)', () => {
+  it('names each wrong field in Vietnamese', async () => {
+    const r = await call('POST', '/api/v1/purchasing/suppliers', { cookie: owner, body: { name: 'X', phone: 'abc', email: 'bad' } });
+    expect(r.status).toBe(400);
+    expect(r.body.error.message).toContain('Dữ liệu chưa hợp lệ. Số điện thoại không hợp lệ.');
+    expect(r.body.error.message).toContain('Email: địa chỉ email không hợp lệ.');
+    expect(r.body.error.message).not.toMatch(/Invalid|được đánh dấu/);
+    expect(r.body.error.details.map((d: { path: string }) => d.path)).toEqual(['phone', 'email']);
+  });
+});

@@ -88,3 +88,53 @@ describe('book lookup (FR-CAT-16)', () => {
     expect((await h.call('POST', '/api/v1/catalog/book-lookup/cover', { cookie: manager, body: { coverId: 999 } })).body.error.code).toBe('cover_not_found');
   });
 });
+
+describe('Open Library adapter, ISBN path (TDD §8.8)', () => {
+  it('fetches the work and authors in parallel and skips an author it cannot read', async () => {
+    const { OpenLibraryAdapter } = await import('@bookstore/modules/integrations/openlibrary');
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const pages: Record<string, unknown> = {
+      '/isbn/9780141036144.json': { title: 'Nineteen Eighty-Four', works: [{ key: '/works/OL1W' }], authors: [{ key: '/authors/OL1A' }, { key: '/authors/OL2A' }] },
+      '/works/OL1W.json': { description: 'A novel.', authors: [{ author: { key: '/authors/OL1A' } }, { author: { key: '/authors/OL3A' } }] },
+      '/authors/OL1A.json': { name: 'George Orwell' },
+      '/authors/OL3A.json': { name: 'Second Author' },
+    };
+    const fake = (async (url: string) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 20));
+      inFlight--;
+      const path = new URL(url).pathname;
+      if (path === '/authors/OL2A.json') return new Response('busy', { status: 503 });
+      const body = pages[path];
+      return body ? Response.json(body) : new Response('not found', { status: 404 });
+    }) as typeof fetch;
+    const hits = await new OpenLibraryAdapter({ fetch: fake }).byIsbn('9780141036144');
+    expect(hits[0]!.authors).toEqual(['George Orwell', 'Second Author']);
+    expect(hits[0]!.description).toBe('A novel.');
+    expect(maxInFlight).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('Open Library adapter, dropped connection (TDD §8.8)', () => {
+  it('retries a failed connection once, but not a timeout', async () => {
+    const { OpenLibraryAdapter } = await import('@bookstore/modules/integrations/openlibrary');
+    let calls = 0;
+    const flaky = (async () => {
+      calls++;
+      if (calls === 1) throw new TypeError('fetch failed');
+      return Response.json({ docs: [{ key: '/works/OL9W', title: 'Mắt biếc' }] });
+    }) as typeof fetch;
+    expect((await new OpenLibraryAdapter({ fetch: flaky }).search('mat biec'))[0]!.title).toBe('Mắt biếc');
+    expect(calls).toBe(2);
+
+    let slowCalls = 0;
+    const slow = (async () => {
+      slowCalls++;
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    }) as typeof fetch;
+    await expect(new OpenLibraryAdapter({ fetch: slow }).search('x')).rejects.toThrow(/không phản hồi/);
+    expect(slowCalls).toBe(1);
+  });
+});

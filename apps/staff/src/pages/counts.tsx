@@ -408,42 +408,66 @@ export function CountDetailPage() {
           ]}
         />
       </div>
-      <DataTable
-        columns={[
-          { header: 'SKU', cell: (l: CountLine) => <span className="code">{l.sku}</span> },
-          { header: 'Sản phẩm', cell: (l) => l.title },
-          ...(showExpected ? [{ header: 'Hệ thống', align: 'right' as const, cell: (l: CountLine) => formatNumber(l.expected ?? 0) }] : []),
-          {
-            header: 'Đếm được',
-            align: 'right',
-            cell: (l) =>
-              // Typed on screen for counts of up to 50 products (FR-INV-06).
-              open && !sheetOnly ? (
-                <input
-                  key={`${l.variantId}-${l.counted}`}
-                  className="h-9 w-20 rounded-md border border-paper-500 text-right text-sm num px-2"
-                  inputMode="numeric"
-                  aria-label={`Số đếm ${l.sku}`}
-                  defaultValue={l.counted ?? ''}
-                  placeholder="—"
-                  onBlur={(e) => void setCount(l, e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-                />
-              ) : l.counted === null ? (
-                <span className="text-ink-500">—</span>
-              ) : (
-                formatNumber(l.counted)
-              ),
-          },
-          ...(showExpected
-            ? [{ header: 'Chênh lệch', align: 'right' as const, cell: (l: CountLine) => (l.variance == null ? '' : <span className={l.variance < 0 ? 'text-danger-700' : l.variance > 0 ? 'text-warning-700' : 'text-success-700'}>{l.variance > 0 ? '+' : ''}{formatNumber(l.variance)}</span>) }]
-            : []),
-        ]}
-        rows={rows}
-        rowKey={(l) => l.variantId}
-        minWidth={560}
-        empty={{ icon: ClipboardList, title: 'Không có dòng phù hợp' }}
-      />
+      {(() => {
+        // Typed on screen for counts of up to 50 products (FR-INV-06).
+        const countCell = (l: CountLine) =>
+          open && !sheetOnly ? (
+            <input
+              key={`${l.variantId}-${l.counted}`}
+              className="h-9 w-20 rounded-md border border-paper-500 text-right text-sm num px-2 max-sm:h-11 max-sm:text-base"
+              inputMode="numeric"
+              aria-label={`Số đếm ${l.sku}`}
+              defaultValue={l.counted ?? ''}
+              placeholder="—"
+              onBlur={(e) => void setCount(l, e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+            />
+          ) : l.counted === null ? (
+            <span className="text-ink-500">—</span>
+          ) : (
+            formatNumber(l.counted)
+          );
+        const varianceCell = (l: CountLine) =>
+          l.variance == null ? '' : <span className={l.variance < 0 ? 'text-danger-700' : l.variance > 0 ? 'text-warning-700' : 'text-success-700'}>{l.variance > 0 ? '+' : ''}{formatNumber(l.variance)}</span>;
+        return (
+          <>
+            <div className="max-sm:hidden">
+              <DataTable
+                columns={[
+                  { header: 'SKU', cell: (l: CountLine) => <span className="code">{l.sku}</span> },
+                  { header: 'Sản phẩm', cell: (l) => l.title },
+                  ...(showExpected ? [{ header: 'Hệ thống', align: 'right' as const, cell: (l: CountLine) => formatNumber(l.expected ?? 0) }] : []),
+                  { header: 'Đếm được', align: 'right', cell: countCell },
+                  ...(showExpected ? [{ header: 'Chênh lệch', align: 'right' as const, cell: varianceCell }] : []),
+                ]}
+                rows={rows}
+                rowKey={(l) => l.variantId}
+                minWidth={560}
+                empty={{ icon: ClipboardList, title: 'Không có dòng phù hợp' }}
+              />
+            </div>
+            {/* Phones: a card list instead of the table (Design §10.6, §12.2). */}
+            <ul className="flex flex-col gap-3 sm:hidden" aria-label="Danh sách kiểm kho">
+              {rows.length === 0 && <li className="rounded-lg border border-paper-300 bg-white p-4 text-center text-ink-500">Không có dòng phù hợp</li>}
+              {rows.map((l) => (
+                <li key={l.variantId} className="flex items-center gap-3 rounded-lg border border-paper-300 bg-white p-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold text-ink-900 [overflow-wrap:anywhere]">{l.title}</div>
+                    <div className="code text-sm text-ink-500">{l.sku}</div>
+                    {showExpected && (
+                      <div className="mt-1 text-sm text-ink-500 num">
+                        Hệ thống {formatNumber(l.expected ?? 0)}
+                        {l.variance != null && <> · Chênh lệch {varianceCell(l)}</>}
+                      </div>
+                    )}
+                  </div>
+                  <div className="shrink-0 text-right num">{countCell(l)}</div>
+                </li>
+              ))}
+            </ul>
+          </>
+        );
+      })()}
       {menu && (
         <Dialog title="Thao tác" size="sm" onClose={() => setMenu(false)}>
           <div className="flex flex-col gap-2">
