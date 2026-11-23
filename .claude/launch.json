@@ -8,18 +8,6 @@
       "port": 3000
     },
     {
-      "name": "api-qa",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@bookstore/api", "exec", "tsx", "--env-file=D:/bookstore-management-system/.env.qa", "src/main.ts"],
-      "port": 3000
-    },
-    {
-      "name": "worker-qa",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@bookstore/worker", "exec", "tsx", "--env-file=D:/bookstore-management-system/.env.qa", "src/main.ts"],
-      "port": 3999
-    },
-    {
       "name": "staff",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@bookstore/staff", "dev"],
