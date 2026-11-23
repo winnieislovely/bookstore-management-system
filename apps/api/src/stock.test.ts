@@ -66,6 +66,28 @@ describe('master data', () => {
     consignorId = (await h.call('POST', '/api/v1/purchasing/suppliers', { cookie: warehouse, body: { name: 'NXB Kim Đồng', phone: '0900000000', isConsignor: true } })).body.id;
     expect(supplierId && consignorId).toBeTruthy();
   });
+
+  it('edits the category tree: rename, move without cycles, deactivate leaves first (FR-CAT-06)', async () => {
+    const post = async (name: string, parentId: string | null = null) => (await h.call('POST', '/api/v1/catalog/categories', { cookie: owner, body: { parentId, i18n: { en: { name } } } })).body.id as string;
+    const books = await post('Books QA');
+    const novels = await post('Novels QA', books);
+    const list = async (all = false) => (await h.call('GET', `/api/v1/catalog/categories${all ? '?all=true' : ''}`, { cookie: owner })).body.items as { id: string; version: number; status: string; parentId: string | null; i18n: { en: { name: string }; vi?: { name: string } } }[];
+    const v = async (id: string) => (await list(true)).find((c) => c.id === id)!.version;
+    const patch = async (id: string, body: Record<string, unknown>, cookie = owner) => h.call('PATCH', `/api/v1/catalog/categories/${id}`, { cookie, body: { version: await v(id), ...body } });
+
+    expect((await patch(novels, { i18n: { en: { name: 'Novels' }, vi: { name: 'Tiểu thuyết' } }, sort: 2 })).status).toBe(200);
+    expect((await list()).find((c) => c.id === novels)!.i18n.vi?.name).toBe('Tiểu thuyết');
+    expect((await patch(books, { parentId: novels })).body.error.code).toBe('category_cycle');
+    expect((await patch(books, { parentId: books })).body.error.code).toBe('category_cycle');
+    expect((await patch(books, { status: 'archived' })).body.error.code).toBe('category_has_children');
+    expect((await h.call('PATCH', `/api/v1/catalog/categories/${books}`, { cookie: owner, body: { version: 0, sort: 1 } })).body.error.code).toBe('stale_version');
+    expect((await patch(novels, { sort: 3 }, cashier)).status).toBe(403);
+
+    expect((await patch(novels, { status: 'archived' })).status).toBe(200);
+    expect((await patch(books, { status: 'archived' })).status).toBe(200);
+    expect((await list()).some((c) => c.id === books || c.id === novels)).toBe(false);
+    expect((await list(true)).filter((c) => c.id === books || c.id === novels).map((c) => c.status)).toEqual(['archived', 'archived']);
+  });
 });
 
 describe('quick stock-in of a new product (FR-PUR-02, FR-PUR-04, UC-05)', () => {

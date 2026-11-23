@@ -163,8 +163,6 @@ async function onShelf(tx: Tx, variantId: string, qty: number): Promise<boolean>
 /** A slip is a hold of books on the shelf or an order of books to order, never both (FR-ORD-14). */
 const mixedSlip = () => new AppError(422, 'mixed_slip', 'Một phiếu chỉ gồm sách có sẵn (giữ sách) hoặc sách cần đặt. Bỏ bớt sách rồi tạo từng phiếu riêng.');
 
-const valueOf = (lines: { qty: number; unitPriceVnd: number | null }[]) => lines.reduce((a, l) => a + l.qty * (l.unitPriceVnd ?? 0), 0);
-
 /** A hold: every book is on the shelf; the customer is there, so the holding period starts now. */
 async function startHolding(tx: Tx, ctx: Ctx, row: Pick<PreorderRow, 'id' | 'depositVnd'>, from = ctx.clock.now()) {
   const expiresAt = new Date(from.getTime() + (await holdDays(tx, ctx, row.depositVnd)) * DAY);

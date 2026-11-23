@@ -81,9 +81,12 @@ const uploadBody = bodyLimit({
 export const limitBody: MiddlewareHandler<AppEnv> = (c, next) =>
   c.req.path === '/api/v1/files' || c.req.path === '/pos/v1/sync' || /^\/api\/v1\/admin\/import\/[a-z_]+\/preview$/.test(c.req.path) ? uploadBody(c, next) : smallBody(c, next);
 
-/** Paths a locked or must-change-password session may still call. */
-const LOCKED_ALLOWED = new Set(['/api/v1/auth/unlock', '/api/v1/auth/logout', '/api/v1/me']);
-const PASSWORD_CHANGE_ALLOWED = new Set(['/api/v1/me/password', '/api/v1/auth/logout', '/api/v1/me']);
+/**
+ * Paths a locked or must-change-password session may still call. The app shell reads the setup
+ * status before anything else, so it must answer too, or the app cannot reach the PIN or password screen.
+ */
+const LOCKED_ALLOWED = new Set(['/api/v1/auth/unlock', '/api/v1/auth/logout', '/api/v1/me', '/api/v1/setup']);
+const PASSWORD_CHANGE_ALLOWED = new Set(['/api/v1/me/password', '/api/v1/auth/logout', '/api/v1/me', '/api/v1/setup']);
 
 export const session: MiddlewareHandler<AppEnv> = async (c, next) => {
   const token = getCookie(c, SESSION_COOKIE);

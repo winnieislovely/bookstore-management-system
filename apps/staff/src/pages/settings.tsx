@@ -1,9 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertOctagon, CheckCircle2, Clock, DatabaseBackup, Plus, Save } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { DataTable, Facts, SelectField, Tabs, TextArea, toast, useParam } from '../components/data';
 import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
-import { get, post, put } from '../lib/api';
+import { ApiError, get, patch, post, put } from '../lib/api';
 import { formatDateTime, formatNumber, formatRelative } from '../lib/format';
 import { Dialog } from '../pos/widgets';
 import { can, useMe } from '../lib/session';
@@ -247,6 +247,8 @@ function SettingInput({ def: d, value, isSet, masked, onChange }: { def: Def; va
 // Master data (FR-ADM-10)
 
 const MASTER: [string, string][] = [
+  // The category tree (FR-CAT-06): a new store has none, so it comes first (Design Appendix A).
+  ['product_category', 'Danh mục sản phẩm'],
   ['reason_code', 'Lý do điều chỉnh kho'],
   ['unit', 'Đơn vị tính'],
   ['payment_method', 'Phương thức thanh toán'],
@@ -263,19 +265,27 @@ interface MasterRow {
 }
 
 function MasterData() {
-  const [kind, setKind] = useState('reason_code');
+  const [kind, setKind] = useState('product_category');
+  const picker = (
+    <SelectField label="Danh mục" value={kind} onChange={(e) => setKind(e.target.value)}>
+      {MASTER.map(([k, l]) => (
+        <option key={k} value={k}>
+          {l}
+        </option>
+      ))}
+    </SelectField>
+  );
+  if (kind === 'product_category') return <CategoryTree picker={picker} />;
+  return <MasterList kind={kind} picker={picker} />;
+}
+
+function MasterList({ kind, picker }: { kind: string; picker: ReactNode }) {
   const list = useQuery({ queryKey: ['master', kind, 'all'], queryFn: () => get<{ items: MasterRow[] }>(`/api/v1/admin/master-data/${kind}`, { all: 'true' }) });
   const [editing, setEditing] = useState<MasterRow | 'new' | null>(null);
   return (
     <>
       <div className="mb-4 flex flex-wrap items-end gap-3">
-        <SelectField label="Danh mục" value={kind} onChange={(e) => setKind(e.target.value)}>
-          {MASTER.map(([k, l]) => (
-            <option key={k} value={k}>
-              {l}
-            </option>
-          ))}
-        </SelectField>
+        {picker}
         {kind !== 'payment_method' && (
           <Button variant="secondary" icon={Plus} onClick={() => setEditing('new')}>
             Thêm mục
@@ -451,5 +461,160 @@ function Backup() {
         </div>
       </Card>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Product categories (FR-CAT-06): the tree, edited like the other shared lists
+
+interface CategoryRow {
+  id: string;
+  parentId: string | null;
+  i18n: { en: { name: string }; vi?: { name?: string } };
+  sort: number;
+  status: string;
+  version: number;
+}
+interface CategoryNode extends CategoryRow {
+  depth: number;
+  path: string;
+}
+
+const categoryName = (c: CategoryRow) => c.i18n.vi?.name || c.i18n.en.name;
+
+/** Depth-first order (by sort, then name) with each row's depth and path, e.g. “Sách › Thiếu nhi”. */
+function categoryTree(rows: CategoryRow[]): CategoryNode[] {
+  const byParent = new Map<string | null, CategoryRow[]>();
+  const ids = new Set(rows.map((r) => r.id));
+  for (const r of rows) {
+    const p = r.parentId && ids.has(r.parentId) ? r.parentId : null;
+    byParent.set(p, [...(byParent.get(p) ?? []), r]);
+  }
+  const out: CategoryNode[] = [];
+  const walk = (parent: string | null, depth: number, path: string[]) => {
+    const kids = (byParent.get(parent) ?? []).sort((a, b) => a.sort - b.sort || categoryName(a).localeCompare(categoryName(b), 'vi'));
+    for (const k of kids) {
+      const p = [...path, categoryName(k)];
+      out.push({ ...k, depth, path: p.join(' › ') });
+      walk(k.id, depth + 1, p);
+    }
+  };
+  walk(null, 0, []);
+  return out;
+}
+
+/** The message, with field details when the server sends them (Design §14.2). */
+function errText(e: unknown): string {
+  if (e instanceof ApiError && Array.isArray(e.details) && e.details.length) return (e.details as { message: string }[]).map((d) => d.message).join(' ');
+  return (e as Error).message;
+}
+
+function CategoryTree({ picker }: { picker: ReactNode }) {
+  const list = useQuery({ queryKey: ['categories', 'all'], queryFn: () => get<{ items: CategoryRow[] }>('/api/v1/catalog/categories', { all: 'true' }) });
+  const nodes = list.data ? categoryTree(list.data.items) : undefined;
+  const [editing, setEditing] = useState<CategoryNode | 'new' | null>(null);
+  return (
+    <>
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        {picker}
+        <Button variant="secondary" icon={Plus} onClick={() => setEditing('new')}>
+          Thêm danh mục
+        </Button>
+      </div>
+      <DataTable
+        columns={[
+          {
+            header: 'Danh mục',
+            cell: (r: CategoryNode) => (
+              <div style={{ paddingLeft: r.depth * 20 }} className="min-w-0">
+                <div className="font-medium text-ink-900">{categoryName(r)}</div>
+                {(r.depth > 0 || r.i18n.vi?.name) && <div className="text-sm text-ink-500">{r.depth > 0 ? r.path : r.i18n.en.name}</div>}
+              </div>
+            ),
+          },
+          { header: 'Thứ tự', align: 'right', cell: (r) => r.sort },
+          { header: '', cell: (r) => (r.status === 'active' ? <StatusChip tone="success">Đang dùng</StatusChip> : <StatusChip tone="neutral">Ngừng dùng</StatusChip>) },
+        ]}
+        rows={nodes}
+        rowKey={(r) => r.id}
+        onRow={setEditing}
+        error={list.error}
+        onRetry={() => list.refetch()}
+        minWidth={480}
+        empty={{ icon: Plus, title: 'Chưa có danh mục sản phẩm', help: 'Thêm danh mục trước khi thêm hoặc nhập sản phẩm.' }}
+      />
+      {editing && <CategoryForm row={editing === 'new' ? null : editing} nodes={nodes ?? []} onClose={() => setEditing(null)} />}
+    </>
+  );
+}
+
+function CategoryForm({ row, nodes, onClose }: { row: CategoryNode | null; nodes: CategoryNode[]; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [en, setEn] = useState(row?.i18n.en.name ?? '');
+  const [vi, setVi] = useState(row?.i18n.vi?.name ?? '');
+  const [parentId, setParentId] = useState(row?.parentId ?? '');
+  const [sort, setSort] = useState(String(row?.sort ?? 0));
+  const [active, setActive] = useState(row ? row.status === 'active' : true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // A category cannot go under itself or one of its own sub-categories.
+  const own = new Set<string>();
+  if (row) {
+    own.add(row.id);
+    for (const n of nodes) if (n.parentId && own.has(n.parentId)) own.add(n.id);
+  }
+  const parents = nodes.filter((n) => !own.has(n.id) && (n.status === 'active' || n.id === row?.parentId));
+  return (
+    <Dialog
+      title={row ? `Sửa danh mục ${categoryName(row)}` : 'Thêm danh mục'}
+      size="sm"
+      onClose={onClose}
+      footer={
+        <Button
+          variant="primary"
+          loading={busy}
+          disabled={!en.trim()}
+          onClick={async () => {
+            setBusy(true);
+            setError(null);
+            const i18n = { en: { name: en.trim() }, ...(vi.trim() && { vi: { name: vi.trim() } }) };
+            try {
+              if (row) await patch(`/api/v1/catalog/categories/${row.id}`, { version: row.version, i18n, parentId: parentId || null, sort: Number(sort) || 0, status: active ? 'active' : 'archived' });
+              else await post('/api/v1/catalog/categories', { i18n, parentId: parentId || null, sort: Number(sort) || 0 });
+              await qc.invalidateQueries({ queryKey: ['categories'] });
+              toast.success(row ? 'Đã lưu danh mục.' : 'Đã thêm danh mục.');
+              onClose();
+            } catch (e) {
+              setError(errText(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Lưu
+        </Button>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <Field label="Tên tiếng Anh" required value={en} onChange={(e) => setEn(e.target.value)} helper="Bắt buộc – dùng cho website." />
+        <Field label="Tên tiếng Việt" value={vi} onChange={(e) => setVi(e.target.value)} helper="Không bắt buộc. Hiển thị cho nhân viên khi có." />
+        <SelectField label="Danh mục cha" value={parentId} onChange={(e) => setParentId(e.target.value)}>
+          <option value="">— Không (danh mục gốc) —</option>
+          {parents.map((n) => (
+            <option key={n.id} value={n.id}>
+              {n.path}
+            </option>
+          ))}
+        </SelectField>
+        <Field label="Thứ tự" inputMode="numeric" value={sort} onChange={(e) => setSort(e.target.value.replace(/\D/g, ''))} />
+        {row && (
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input type="checkbox" className="size-5" checked={active} onChange={(e) => setActive(e.target.checked)} />
+            Đang dùng
+          </label>
+        )}
+        {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+      </div>
+    </Dialog>
   );
 }

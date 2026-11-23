@@ -609,8 +609,52 @@ export async function createCategory(ctx: Ctx, input: z.input<typeof CategorySch
   });
 }
 
-/** Active categories; `kinds` = item kinds filed directly under each, for the product list filter (Design §12.1). */
-export async function listCategories(ctx: Ctx) {
+export const CategoryUpdateSchema = z.object({
+  version: z.number().int(),
+  parentId: z.uuid().nullable().optional(),
+  i18n: I18nText(z.object({ name: z.string().trim().min(1, 'Cần nhập tên danh mục bằng tiếng Anh.') })).optional(),
+  sort: z.number().int().optional(),
+  status: z.enum(['active', 'archived']).optional(),
+});
+
+/**
+ * Rename, move, reorder or deactivate a category (FR-CAT-06, Settings → Danh mục sản phẩm). A move may
+ * not put a category under itself or its own sub-category; a category with an active sub-category stays active.
+ */
+export async function updateCategory(ctx: Ctx, id: string, input: z.input<typeof CategoryUpdateSchema>) {
+  requirePermission(ctx, 'catalog.edit');
+  const data = CategoryUpdateSchema.parse(input);
+  return ctx.db.transaction(async (tx) => {
+    const c = schema.category;
+    const [before] = await tx.select().from(c).where(eq(c.id, id)).for('update');
+    if (!before) throw errors.notFound('Danh mục');
+    if (before.version !== data.version) throw errors.stale();
+    if (data.parentId) {
+      const all = await tx.select({ id: c.id, parentId: c.parentId }).from(c);
+      const parentOf = new Map(all.map((r) => [r.id, r.parentId]));
+      if (!parentOf.has(data.parentId)) throw errors.notFound('Danh mục cha');
+      for (let p: string | null | undefined = data.parentId; p; p = parentOf.get(p)) {
+        if (p === id) throw new AppError(422, 'category_cycle', 'Không thể chuyển danh mục vào chính nó hoặc danh mục con của nó.');
+      }
+    }
+    if (data.status === 'archived' && before.status === 'active') {
+      const [child] = await tx.select({ id: c.id }).from(c).where(and(eq(c.parentId, id), eq(c.status, 'active'))).limit(1);
+      if (child) throw new AppError(422, 'category_has_children', 'Danh mục còn danh mục con đang dùng. Hãy ngừng dùng hoặc chuyển các danh mục con trước.');
+    }
+    const after = {
+      ...(data.parentId !== undefined && { parentId: data.parentId }),
+      ...(data.i18n && { i18n: { ...(before.i18n as object), ...data.i18n } as never }),
+      ...(data.sort !== undefined && { sort: data.sort }),
+      ...(data.status && { status: data.status }),
+    };
+    await tx.update(c).set({ ...after, updatedAt: ctx.clock.now(), version: before.version + 1 }).where(eq(c.id, id));
+    await audit.record(tx, ctx, { action: 'category.update', entity: 'category', entityId: id, before: { parentId: before.parentId, i18n: before.i18n, sort: before.sort, status: before.status }, after });
+    return { id, version: before.version + 1 };
+  });
+}
+
+/** Active categories (all of them with `all`, for Settings); `kinds` = item kinds filed directly under each, for the product list filter (Design §12.1). */
+export async function listCategories(ctx: Ctx, opts: { all?: boolean } = {}) {
   requirePermission(ctx, 'catalog.view');
   const c = schema.category;
   return ctx.db
@@ -627,7 +671,7 @@ export async function listCategories(ctx: Ctx) {
       kinds: sql<string[]>`coalesce((select array_agg(distinct i.kind) from catalog.item_category ic join catalog.item i on i.id = ic.item_id where ic.category_id = "category"."id"), '{}')`,
     })
     .from(c)
-    .where(eq(c.status, 'active'))
+    .where(opts.all ? undefined : eq(c.status, 'active'))
     .orderBy(asc(c.sort), asc(c.slug));
 }
 

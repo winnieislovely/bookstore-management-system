@@ -46,7 +46,8 @@ export function LoginPage() {
     setError(null);
     try {
       await post('/api/v1/auth/login', { username, password });
-      await qc.invalidateQueries({ queryKey: ['me'] });
+      // Refetch, not invalidate: nothing observes 'me' on this page, so an invalidation would leave stale data for the gate.
+      await qc.refetchQueries({ queryKey: ['me'] });
       navigate('/', { replace: true });
     } catch (err) {
       setError(errorMessage(err));
@@ -171,7 +172,8 @@ export function ChangePasswordPage() {
     setError(null);
     try {
       await patch('/api/v1/me/password', { currentPassword: form.current, newPassword: form.next });
-      await qc.invalidateQueries({ queryKey: ['me'] });
+      // Refetch, not invalidate: nothing observes 'me' on this page, so an invalidation would leave stale data for the gate.
+      await qc.refetchQueries({ queryKey: ['me'] });
       navigate('/', { replace: true });
     } catch (err) {
       setError(errorMessage(err));

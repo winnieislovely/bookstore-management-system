@@ -7,6 +7,7 @@ import * as audit from '../audit/index.js';
 import * as settings from '../settings/index.js';
 import {
   AppError,
+  can,
   errors,
   randomToken,
   requirePermission,
@@ -397,7 +398,10 @@ function publicUser(u: typeof schema.appUser.$inferSelect & { roleName?: string 
 
 /** Users by display name; `q` matches display name or username, accent-insensitive (Design §13.8). */
 export async function listUsers(ctx: Ctx, q?: string) {
-  requirePermission(ctx, 'user.manage');
+  // A manager who may only unlock accounts (FR-ADM-01, `user.unlock`) still needs the list to find the locked one,
+  // and the audit log filters by person (FR-ADM-05).
+  if (!ctx.actor) throw errors.unauthenticated();
+  if (!(['user.manage', 'user.unlock', 'audit.view'] as const).some((p) => can(ctx.actor, p))) throw errors.forbidden('user.manage');
   const term = foldText(q ?? '').trim();
   const u = schema.appUser;
   const rows = await ctx.db

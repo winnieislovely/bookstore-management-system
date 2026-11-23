@@ -27,6 +27,25 @@ function withQuery(path: string, query?: Query): string {
   return qs ? `${path}?${qs}` : path;
 }
 
+/** A response body that may be empty or not JSON (a reverse proxy's error page). */
+export function parseBody(text: string): unknown {
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The reverse proxy answers 502/503 without our error envelope while the API process is down or
+ * restarting: the server never saw the request, so it counts as no network (the POS then sells
+ * offline, FR-POS-23). A 504 is left out, since the server may have handled the request.
+ */
+export function proxyUnreachable(status: number, data: unknown): boolean {
+  return (status === 502 || status === 503) && !(data as { error?: unknown } | undefined)?.error;
+}
+
 export async function api<T>(method: string, path: string, opts: { body?: unknown; query?: Query; headers?: Record<string, string> } = {}): Promise<T> {
   let res: Response;
   try {
@@ -44,8 +63,8 @@ export async function api<T>(method: string, path: string, opts: { body?: unknow
     throw new ApiError(0, 'network_error', t('error.network'));
   }
   if (res.status === 204) return undefined as T;
-  const text = await res.text();
-  const data = text ? (JSON.parse(text) as unknown) : undefined;
+  const data = parseBody(await res.text());
+  if (proxyUnreachable(res.status, data)) throw new ApiError(0, 'network_error', t('error.network'));
   if (!res.ok) {
     const e = (data as { error?: { code: string; message: string; details?: unknown; requestId?: string } } | undefined)?.error;
     throw new ApiError(res.status, e?.code ?? 'http_error', e?.message ?? `HTTP ${res.status}`, e?.details, e?.requestId);
@@ -67,7 +86,8 @@ export async function upload(file: File, purpose: 'image' | 'import'): Promise<{
   } catch {
     throw new ApiError(0, 'network_error', t('error.network'));
   }
-  const data = (await res.json()) as { id: string; error?: { code: string; message: string; details?: unknown; requestId?: string } };
+  const data = (parseBody(await res.text()) ?? {}) as { id: string; error?: { code: string; message: string; details?: unknown; requestId?: string } };
+  if (proxyUnreachable(res.status, data)) throw new ApiError(0, 'network_error', t('error.network'));
   if (!res.ok) throw new ApiError(res.status, data.error?.code ?? 'http_error', data.error?.message ?? `HTTP ${res.status}`, data.error?.details, data.error?.requestId);
   return data;
 }

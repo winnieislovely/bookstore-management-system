@@ -51,11 +51,18 @@ export function stockRoutes(app: OpenAPIHono<AppEnv>): void {
     { method: 'get', path: '/api/v1/catalog/lookup', access: 'catalog.view', summary: 'Lookup by barcode, SKU or ISBN', query: z.object({ code: z.string().min(1) }) },
     async ({ ctx, query }) => catalog.lookupCode(ctx, query.code),
   );
-  defineRoute(app, { method: 'get', path: '/api/v1/catalog/categories', access: 'catalog.view', summary: 'Category tree' }, async ({ ctx }) => ({
-    items: await catalog.listCategories(ctx),
-  }));
+  defineRoute(
+    app,
+    { method: 'get', path: '/api/v1/catalog/categories', access: 'catalog.view', summary: 'Category tree (`all=true` includes inactive ones)', query: z.object({ all: z.enum(['true', 'false']).default('false') }) },
+    async ({ ctx, query }) => ({ items: await catalog.listCategories(ctx, { all: query.all === 'true' }) }),
+  );
   defineRoute(app, { method: 'post', path: '/api/v1/catalog/categories', access: 'catalog.edit', summary: 'Create a category', status: 201, body: catalog.CategorySchema }, async ({ ctx, body }) =>
     catalog.createCategory(ctx, body),
+  );
+  defineRoute(
+    app,
+    { method: 'patch', path: '/api/v1/catalog/categories/:id', access: 'catalog.edit', summary: 'Rename, move, reorder or deactivate a category', params: IdParams, body: catalog.CategoryUpdateSchema },
+    async ({ ctx, params, body }) => catalog.updateCategory(ctx, params.id, body),
   );
   defineRoute(app, { method: 'get', path: '/api/v1/catalog/publishers', access: 'catalog.view', summary: 'Publishers' }, async ({ ctx }) => ({
     items: await catalog.listPublishers(ctx),

@@ -9,7 +9,7 @@ import { BookLookup, type BookResult } from '../components/bookLookup';
 import { normalizeShelf, ShelfPicker } from '../components/shelfPicker';
 import { CustomerPicker, type CustomerChoice } from '../components/customer-picker';
 import { DiscountInput } from '../components/discount-input';
-import { Button, Card, EmptyState, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
+import { Button, Card, ErrorState, Field, InlineAlert, PageHeader, Skeleton, StatusChip, type Tone } from '../components/ui';
 import { ApiError, get, patch, post } from '../lib/api';
 import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
 import { printHtml } from '../lib/print';

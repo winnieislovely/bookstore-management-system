@@ -10,7 +10,8 @@ import { defineRoute, IdParams } from '../http/route.js';
 
 /** Users, roles, settings and audit log (TDD §6.2, FR-ADM-03..05). */
 export function adminRoutes(app: OpenAPIHono<AppEnv>): void {
-  defineRoute(app, { method: 'get', path: '/api/v1/admin/users', access: 'user.manage', summary: 'List users', query: z.object({ q: z.string().max(100).optional() }) }, async ({ ctx, query }) => ({
+  // `user.manage` or `user.unlock`, checked in the module: a manager unlocks accounts from this list (FR-ADM-01).
+  defineRoute(app, { method: 'get', path: '/api/v1/admin/users', access: 'session', summary: 'List users', query: z.object({ q: z.string().max(100).optional() }) }, async ({ ctx, query }) => ({
     items: await identity.listUsers(ctx, query.q),
   }));
 

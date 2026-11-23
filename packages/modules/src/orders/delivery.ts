@@ -17,6 +17,12 @@ import { carrierReturnTx } from './returns.js';
 // =============================================================================================
 // geo.refresh (TDD §9.1): provinces → districts → wards, district kept hidden on the ward
 
+/** True until the first geo.refresh has loaded provinces (a new install has none, so no delivery address can be picked). */
+export async function geoIsEmpty(ctx: Ctx): Promise<boolean> {
+  const [row] = await ctx.db.select({ id: schema.geoProvince.id }).from(schema.geoProvince).limit(1);
+  return !row;
+}
+
 export async function refreshGeo(ctx: Ctx, carrier: CarrierAdapter, opts: { concurrency?: number } = {}) {
   const now = ctx.clock.now();
   const provinces = await carrier.provinces();

@@ -107,6 +107,8 @@ describe('users, forced password change and RBAC (FR-ADM-01, FR-ADM-03)', () => 
     cashier = await login('thu', 'tam-thoi-123');
     const blocked = await call('GET', '/api/v1/admin/users', { cookie: cashier });
     expect(blocked.body.error.code).toBe('password_change_required');
+    // The app shell reads the setup status first; it must still answer so the app can open the password change.
+    expect((await call('GET', '/api/v1/setup', { cookie: cashier })).status).toBe(200);
     const changed = await call('PATCH', '/api/v1/me/password', {
       cookie: cashier,
       body: { currentPassword: 'tam-thoi-123', newPassword: 'mat-khau-moi-456' },
@@ -159,6 +161,15 @@ describe('lockout and manager unlock (FR-ADM-01)', () => {
     expect((await call('POST', `/api/v1/admin/users/${kho.id}/unlock`, { cookie: owner })).status).toBe(204);
     await login('kho', 'kho-tam-thoi-1');
   });
+
+  it('a role that may only unlock can still list staff to find the locked account', async () => {
+    const role = await call('POST', '/api/v1/admin/roles', { cookie: owner, body: { name: 'Chỉ mở khóa', permissions: ['user.unlock'] } });
+    await call('POST', '/api/v1/admin/users', { cookie: owner, body: { username: 'mokhoa', displayName: 'Mở khóa', roleId: role.body.id, password: 'mo-khoa-tam-1' } });
+    const s = await login('mokhoa', 'mo-khoa-tam-1');
+    await call('PATCH', '/api/v1/me/password', { cookie: s, body: { currentPassword: 'mo-khoa-tam-1', newPassword: 'mo-khoa-moi-22' } });
+    expect((await call('GET', '/api/v1/admin/users', { cookie: s })).status).toBe(200);
+    expect((await call('POST', '/api/v1/admin/users', { cookie: s, body: { username: 'x', displayName: 'X', roleId: role.body.id, password: 'x-tam-thoi-11' } })).status).toBe(403);
+  });
 });
 
 describe('POS lock screen with PIN (NFR-SEC-07)', () => {
@@ -167,6 +178,7 @@ describe('POS lock screen with PIN (NFR-SEC-07)', () => {
     expect((await call('PUT', '/api/v1/me/pin', { cookie: owner, body: { pin: '246810' } })).status).toBe(204);
     expect((await call('POST', '/api/v1/auth/lock', { cookie: owner })).status).toBe(204);
     expect((await call('GET', '/api/v1/admin/users', { cookie: owner })).body.error.code).toBe('session_locked');
+    expect((await call('GET', '/api/v1/setup', { cookie: owner })).status).toBe(200);
     const wrong = await call('POST', '/api/v1/auth/unlock', { cookie: owner, body: { pin: '000000' } });
     expect(wrong.body.error.message).toMatch(/còn 4 lần/);
     expect((await call('POST', '/api/v1/auth/unlock', { cookie: owner, body: { pin: '246810' } })).status).toBe(204);

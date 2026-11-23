@@ -1,4 +1,4 @@
-import { ApiError, post } from '../lib/api';
+import { ApiError, parseBody, post, proxyUnreachable } from '../lib/api';
 import { kvGet, kvSet, wipe } from './db';
 
 /**
@@ -70,8 +70,8 @@ export async function deviceFetch<T>(method: 'GET' | 'POST', path: string, body?
   } catch {
     throw new ApiError(0, 'network_error', 'Không kết nối được máy chủ.');
   }
-  const text = await res.text();
-  const data = text ? (JSON.parse(text) as unknown) : undefined;
+  const data = parseBody(await res.text());
+  if (proxyUnreachable(res.status, data)) throw new ApiError(0, 'network_error', 'Không kết nối được máy chủ.');
   if (!res.ok) {
     const e = (data as { error?: { code: string; message: string; details?: unknown } } | undefined)?.error;
     if (e?.code === 'device_revoked') {

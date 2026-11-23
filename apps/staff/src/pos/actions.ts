@@ -1,5 +1,5 @@
 import type { ManualDiscount, PriceCartResult } from '@bookstore/domain';
-import { ApiError, get, post } from '../lib/api';
+import { ApiError, get, parseBody, post, proxyUnreachable } from '../lib/api';
 import type { CartApproval, CartCustomer, CartLine } from './cart';
 import { itemTitle, kvGet, kvSet, type CachedItem } from './db';
 import { deviceInfo } from './device';
@@ -186,7 +186,9 @@ export async function completeSale(input: SaleInput, idempotencyKey: string): Pr
       }).catch(() => {
         throw new ApiError(0, 'network_error', '');
       });
-      const body = (await r.json()) as { docNo: string; id: string; totalVnd: number; depositRefundVnd?: number; pointsEarned: number; printSlip: boolean; error?: { code: string; message: string; details?: unknown } };
+      const raw = parseBody(await r.text());
+      if (proxyUnreachable(r.status, raw)) throw new ApiError(0, 'network_error', '');
+      const body = (raw ?? {}) as { docNo: string; id: string; totalVnd: number; depositRefundVnd?: number; pointsEarned: number; printSlip: boolean; error?: { code: string; message: string; details?: unknown } };
       if (!r.ok) throw new ApiError(r.status, body.error?.code ?? 'http_error', body.error?.message ?? '', body.error?.details);
       await tallyCash(body.depositRefundVnd ?? 0);
       return { docNo: body.docNo, saleId: body.id, totalVnd: body.totalVnd, changeVnd, depositRefundVnd: body.depositRefundVnd ?? 0, pointsEarned: body.pointsEarned, offline: false, printSlip: body.printSlip };

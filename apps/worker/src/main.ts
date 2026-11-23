@@ -83,6 +83,9 @@ async function main() {
       log.info({ job: job.name, ms: Math.round(performance.now() - started), result }, 'job done');
     });
   }
+  // A new install has no GHN address data until the nightly refresh, so Tạo đơn giao could not pick a
+  // province on day one: load it once now (FR-ORD-06, TDD §9.1).
+  if (await orders.geoIsEmpty(ctx())) await boss.send('geo.refresh', null);
   log.info({ jobs: JOBS.map((j) => j.name) }, 'worker started');
   const stop = async () => {
     await boss.stop({ graceful: true });
