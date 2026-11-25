@@ -8,6 +8,12 @@
       "port": 3000
     },
     {
+      "name": "api-qa",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@bookstore/api", "exec", "tsx", "--env-file=D:/bookstore-management-system/.env.qa", "src/main.ts"],
+      "port": 3000
+    },
+    {
       "name": "staff",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@bookstore/staff", "dev"],

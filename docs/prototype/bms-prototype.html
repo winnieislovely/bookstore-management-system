@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Bookshelf – Bản mô phỏng</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --navy-900:#16233A; --navy-700:#22344F; --navy-100:#DCE3EC; --navy-50:#EEF2F7;
+  --sand-300:#D8C7A6; --sand-100:#F3ECDD; --sky-300:#A9C4D4; --sea-500:#7FA3B8; --olive-600:#5B6B3A; --olive-700:#4A5830;
+  --paper-100:#F5F2EA; --paper-200:#EDE9DF; --paper-300:#D9D3C4; --paper-500:#8C8574;
+  --ink-900:#1A2638; --ink-700:#3D4A5C; --ink-500:#5C6675; --ink-300:#A3A9B3;
+  --ok-50:#E7F1EA; --ok-700:#2E6B45; --warn-50:#FBF1DE; --warn-700:#8A5A12; --bad-50:#F8E9E6; --bad-700:#A63A2B; --info-50:#E6EFF5; --info-700:#2F6385;
+  --r-md:8px; --r-lg:12px; --shadow:0 1px 2px rgb(26 38 56 / .06), 0 4px 16px rgb(26 38 56 / .06);
+  --font:'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* Times New Roman, not Georgia, as the offline fallback: Georgia lacks Vietnamese stacked marks (ố, ấ). */
+  --display:'Cormorant Garamond', 'Times New Roman', Times, serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { font: 14px/1.5 var(--font); color: var(--ink-900); background: var(--paper-200); font-variant-numeric: tabular-nums; }
+button { font: inherit; cursor: pointer; }
+input, select, textarea { font: inherit; color: inherit; }
+a { color: inherit; }
+.num { font-variant-numeric: tabular-nums; }
+.code { font-weight: 500; letter-spacing: .01em; }
+
+/* ---------- Demo chrome (outside the app) ---------- */
+.demo-bar { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--ink-900); color: #fff; font-size: 13px; flex-wrap: wrap; }
+.demo-bar b { color: var(--sand-300); font-weight: 600; }
+.demo-bar .sp { flex: 1; }
+.demo-bar button { border: 1px solid rgb(255 255 255 / .25); background: transparent; color: #fff; border-radius: 999px; padding: 4px 12px; }
+.demo-bar button.on { background: var(--sand-300); color: var(--navy-900); border-color: var(--sand-300); }
+.stage { display: flex; justify-content: center; padding: 0; }
+body.phone .stage { padding: 24px 16px 48px; }
+.app { container-type: inline-size; container-name: app; width: 100%; min-height: calc(100vh - 44px); background: #fff; display: flex; position: relative; overflow: hidden; }
+body.phone .app { width: 390px; min-height: 780px; height: 844px; border-radius: 36px; border: 10px solid var(--ink-900); box-shadow: 0 20px 60px rgb(0 0 0 / .25); }
+body.phone .app .main { overflow-y: auto; }
+
+/* ---------- Sidebar ---------- */
+.side { width: 248px; flex: none; background: var(--navy-700); color: #E9EDF3; display: flex; flex-direction: column; }
+.brand { padding: 18px 20px 14px; line-height: 1; }
+.brand small { display: block; font-size: 9px; letter-spacing: .3em; font-weight: 600; }
+.brand strong { display: block; font-size: 20px; letter-spacing: .18em; font-weight: 700; margin: 3px 0; }
+.brand em { display: block; text-align: right; font-style: normal; font-size: 8px; letter-spacing: .3em; padding-right: 2px; font-weight: 600; }
+.nav { flex: 1; overflow-y: auto; padding: 4px 8px 12px; }
+.nav h6 { margin: 14px 12px 4px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #9FB0C6; font-weight: 600; }
+.nav a { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 8px; text-decoration: none; color: #E9EDF3; font-size: 13.5px; position: relative; }
+.nav a:hover { background: rgb(255 255 255 / .07); }
+.nav a.act { background: rgb(255 255 255 / .12); color: #fff; font-weight: 600; }
+.nav a.act::before { content: ''; position: absolute; left: -8px; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: var(--sand-300); }
+.nav a .ico { width: 18px; height: 18px; flex: none; opacity: .9; }
+.nav a .badge { margin-left: auto; background: var(--sand-300); color: var(--navy-900); border-radius: 999px; font-size: 11px; font-weight: 700; padding: 0 7px; line-height: 18px; }
+.side-foot { border-top: 1px solid rgb(255 255 255 / .1); padding: 10px 8px; }
+.side-foot a { display: flex; gap: 10px; align-items: center; padding: 7px 12px; color: #C9D3E0; text-decoration: none; font-size: 13px; }
+
+/* ---------- Main ---------- */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #fff; }
+.top { height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--paper-300); position: sticky; top: 0; background: #fff; z-index: 5; }
+.top .menu-btn { display: none; border: 0; background: none; padding: 6px; }
+.top .sp { flex: 1; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--navy-100); color: var(--navy-700); display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+.bell { position: relative; border: 0; background: none; padding: 6px; color: var(--ink-700); }
+.bell i { position: absolute; top: 0; right: 0; background: var(--bad-700); color: #fff; border-radius: 999px; font-size: 10px; font-style: normal; padding: 0 5px; line-height: 16px; }
+.page { padding: 24px; max-width: 1440px; width: 100%; }
+.ph { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+.ph h1 { font-size: 26px; line-height: 1.2; margin: 0; font-weight: 600; color: var(--navy-700); }
+.ph .back { border: 0; background: none; color: var(--navy-700); font-size: 20px; padding: 0 4px; }
+.ph .sp { flex: 1; }
+
+/* ---------- Components ---------- */
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--paper-500); background: #fff; color: var(--ink-900); font-weight: 500; white-space: nowrap; }
+.btn:hover { background: var(--navy-50); }
+.btn.pri { background: var(--navy-700); border-color: var(--navy-700); color: #fff; }
+.btn.pri:hover { background: var(--navy-900); }
+.btn.acc { background: var(--olive-600); border-color: var(--olive-600); color: #fff; }
+.btn.acc:hover { background: var(--olive-700); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.danger { color: var(--bad-700); border-color: var(--bad-700); }
+.btn.sm { height: 30px; padding: 0 12px; font-size: 13px; }
+.btn.lg { height: 44px; padding: 0 20px; font-size: 15px; }
+.btn.full { width: 100%; justify-content: center; }
+.btn[disabled] { opacity: .4; cursor: not-allowed; }
+.card { background: #fff; border: 1px solid var(--paper-300); border-radius: var(--r-lg); }
+.card.pad { padding: 18px; }
+.card h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.card .sub { color: var(--ink-500); font-size: 13px; margin-bottom: 12px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; background: var(--paper-200); color: var(--ink-700); }
+.chip.ok { background: var(--ok-50); color: var(--ok-700); }
+.chip.warn { background: var(--warn-50); color: var(--warn-700); }
+.chip.bad { background: var(--bad-50); color: var(--bad-700); }
+.chip.info { background: var(--info-50); color: var(--info-700); }
+.chip.sand { background: var(--sand-100); color: #6E5B36; }
+.search { display: flex; align-items: center; gap: 8px; height: 38px; border: 1px solid var(--paper-500); border-radius: var(--r-md); padding: 0 12px; background: #fff; min-width: 0; flex: 1; max-width: 420px; }
+.search input { border: 0; outline: 0; flex: 1; min-width: 0; background: transparent; }
+.toolbar { display: flex; gap: 10px; margin-bottom: 14px; align-items: center; flex-wrap: wrap; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 13px; font-weight: 500; color: var(--ink-700); }
+.field input, .field select, .field textarea { height: 38px; border: 1px solid var(--paper-500); border-radius: var(--r-md); padding: 0 10px; background: #fff; outline: 0; }
+.field textarea { height: 72px; padding: 8px 10px; resize: vertical; }
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--navy-700); }
+.grid { display: grid; gap: 16px; }
+.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.g4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.tbl-wrap { border: 1px solid var(--paper-300); border-radius: var(--r-lg); overflow-x: auto; background: #fff; }
+table { border-collapse: collapse; width: 100%; min-width: 640px; }
+th { background: var(--paper-200); text-align: left; font-size: 13px; font-weight: 600; color: var(--ink-700); padding: 11px 14px; white-space: nowrap; }
+td { padding: 12px 14px; border-top: 1px solid var(--paper-300); vertical-align: middle; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: var(--navy-50); }
+th.r, td.r { text-align: right; }
+td .muted, .muted { color: var(--ink-500); font-size: 12.5px; }
+th:first-child, td:first-child { position: sticky; left: 0; background: inherit; }
+td:first-child { background: #fff; }
+tr.click:hover td:first-child { background: var(--navy-50); }
+th:first-child { background: var(--paper-200); box-shadow: inset -1px 0 0 var(--paper-300); }
+td:first-child { box-shadow: inset -1px 0 0 var(--paper-300); }
+.kpi { border: 1px solid var(--paper-300); border-radius: var(--r-md); padding: 10px 12px; }
+.kpi span { display: block; font-size: 12.5px; color: var(--ink-500); }
+.kpi b { font-size: 20px; font-weight: 700; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--paper-300); margin-bottom: 16px; overflow-x: auto; }
+.tabs button { border: 0; background: none; padding: 10px 12px; color: var(--ink-700); border-bottom: 2px solid transparent; white-space: nowrap; }
+.tabs button.on { color: var(--navy-700); border-color: var(--navy-700); font-weight: 600; }
+.rows > div { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
+.rows > div.tot { font-weight: 700; font-size: 16px; border-top: 1px solid var(--paper-300); margin-top: 6px; padding-top: 10px; }
+.note { background: var(--info-50); color: var(--info-700); border-radius: var(--r-md); padding: 10px 12px; font-size: 13px; }
+.note.warn { background: var(--warn-50); color: var(--warn-700); }
+.note.ok { background: var(--ok-50); color: var(--ok-700); }
+.bar { height: 8px; border-radius: 99px; background: var(--paper-200); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--navy-700); border-radius: 99px; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.row { display: flex; gap: 10px; align-items: center; }
+.empty { text-align: center; color: var(--ink-500); padding: 40px 16px; }
+
+/* ---------- Dialog & toast ---------- */
+.scrim { position: absolute; inset: 0; background: rgb(22 35 58 / .45); display: grid; place-items: center; z-index: 30; padding: 16px; }
+.dlg { background: #fff; border-radius: 16px; width: min(560px, 100%); max-height: 100%; overflow: auto; box-shadow: 0 20px 50px rgb(0 0 0 / .2); }
+.dlg header { display: flex; align-items: center; padding: 16px 20px 6px; }
+.dlg header h2 { flex: 1; margin: 0; font-size: 17px; font-weight: 600; }
+.dlg header button { border: 0; background: none; font-size: 20px; color: var(--ink-500); }
+.dlg .body { padding: 8px 20px 4px; }
+.dlg footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px 18px; }
+.toast { position: absolute; right: 16px; bottom: 16px; z-index: 40; background: var(--ok-50); color: var(--ok-700); border: 1px solid #BFD9C7; border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); font-weight: 500; max-width: calc(100% - 32px); }
+
+/* ---------- POS ---------- */
+.pos { display: grid; grid-template-columns: minmax(0, 1fr) 380px; height: calc(100vh - 44px - 52px); }
+body.phone .pos { height: auto; }
+.pos-left { padding: 16px; overflow: auto; border-right: 1px solid var(--paper-300); }
+.pos-top { height: 52px; background: var(--navy-700); color: #fff; display: flex; align-items: center; gap: 12px; padding: 0 16px; }
+.pos-top .sp { flex: 1; }
+.net { font-size: 12px; border-radius: 999px; padding: 2px 10px; background: rgb(255 255 255 / .12); }
+.net.off { background: var(--warn-50); color: var(--warn-700); }
+.prod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
+.prod { border: 1px solid var(--paper-300); border-radius: 10px; padding: 10px; text-align: left; background: #fff; display: flex; flex-direction: column; gap: 6px; }
+.prod:hover { border-color: var(--navy-700); }
+.cover { height: 64px; border-radius: 6px; display: grid; place-items: center; color: #fff; font-family: var(--display); font-size: 22px; }
+.prod b { font-size: 13px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 34px; }
+.cart { display: flex; flex-direction: column; min-height: 0; background: #fff; }
+.cart-lines { flex: 1; overflow: auto; padding: 12px 16px; }
+.cline { padding: 10px 0; border-bottom: 1px solid var(--paper-200); }
+.cline .nm { font-weight: 600; font-size: 13.5px; }
+.qty { display: inline-flex; align-items: center; gap: 6px; }
+.qty button { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--paper-500); background: #fff; }
+.qty span { min-width: 22px; text-align: center; font-weight: 600; }
+.cart-sum { border-top: 1px solid var(--paper-300); padding: 12px 16px 16px; background: #fff; }
+.keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.keypad button { height: 48px; border-radius: 10px; border: 1px solid var(--paper-300); background: #fff; font-size: 18px; font-weight: 500; }
+.keypad button:hover { background: var(--navy-50); }
+
+/* ---------- Overview ---------- */
+.hero { background: var(--navy-700); color: #fff; border-radius: 20px; padding: 32px; position: relative; overflow: hidden; }
+.hero h1 { font-family: var(--display); font-size: 42px; margin: 0 0 6px; line-height: 1.1; font-weight: 600; }
+.hero p { color: #D2DAE5; max-width: 720px; margin: 0; font-size: 15px; }
+.hero .stats { display: flex; gap: 28px; margin-top: 22px; flex-wrap: wrap; }
+.hero .stats div b { display: block; font-size: 26px; color: var(--sand-300); }
+.hero .stats div span { font-size: 12.5px; color: #B8C4D4; }
+.mod { cursor: pointer; transition: border-color .15s, transform .15s; }
+.mod:hover { border-color: var(--navy-700); transform: translateY(-2px); }
+.mod .tag { float: right; }
+.timeline { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+.tl { border-radius: 10px; padding: 12px; border: 1px solid var(--paper-300); }
+.tl.done { background: var(--ok-50); border-color: #BFD9C7; }
+.tl.next { background: var(--sand-100); border-color: var(--sand-300); }
+.tl b { display: block; font-size: 16px; }
+.tl span { font-size: 12px; color: var(--ink-700); }
+h2.sec { font-size: 18px; margin: 28px 0 12px; color: var(--navy-700); font-weight: 600; }
+
+/* ---------- Responsive (container queries so the phone frame works too) ---------- */
+@container app (max-width: 1100px) {
+  .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .timeline { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .pos { grid-template-columns: minmax(0, 1fr) 320px; }
+}
+@container app (max-width: 767px) {
+  .side { position: absolute; z-index: 20; inset: 0 auto 0 0; transform: translateX(-100%); transition: transform .2s; box-shadow: 0 0 40px rgb(0 0 0 / .3); }
+  .app.drawer .side { transform: none; }
+  .top { padding: 0 16px; }
+  .top .menu-btn { display: block; }
+  .page { padding: 16px; }
+  .ph h1 { font-size: 22px; }
+  .g2, .g3 { grid-template-columns: minmax(0, 1fr); }
+  .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hero { padding: 22px; }
+  .hero h1 { font-size: 32px; }
+  .pos { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; height: auto; }
+  .pos-left { border-right: 0; }
+  .prod-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dlg { border-radius: 16px 16px 0 0; align-self: end; width: 100%; }
+  .scrim { padding: 0; place-items: end center; }
+  .hide-phone { display: none !important; }
+  .count-table { display: none; }
+  .count-cards { display: flex !important; }
+}
+.count-cards { display: none; flex-direction: column; gap: 10px; }
+.count-card { display: flex; gap: 12px; align-items: center; border: 1px solid var(--paper-300); border-radius: 12px; padding: 14px; }
+.count-card input { width: 72px; height: 44px; border: 1px solid var(--paper-500); border-radius: 8px; text-align: right; padding: 0 10px; font-size: 16px; }
+.tree-row td:first-child { padding-left: calc(14px + var(--d, 0) * 22px); }
+</style>
+</head>
+<body>
+<div class="demo-bar">
+  <span>📖 <b>The Bookshelf BMS</b> – bản mô phỏng có thể bấm thử · dữ liệu minh họa, không lưu</span>
+  <span class="sp"></span>
+  <button data-go="overview">Giới thiệu dự án</button>
+  <button data-go="dashboard">Vào ứng dụng</button>
+  <button id="phoneBtn">📱 Xem như điện thoại</button>
+</div>
+<div class="stage"><div class="app" id="app"></div></div>
+
+<script>
+/* ============================== Mock data ============================== */
+const vnd = (n) => n.toLocaleString('vi-VN') + ' ₫';
+const nf = (n) => n.toLocaleString('vi-VN');
+const COLORS = ['#22344F', '#5B6B3A', '#7FA3B8', '#8A5A12', '#2F6385', '#6E5B36', '#A63A2B', '#3D4A5C'];
+const PRODUCTS = [
+  { sku: 'SACH-0001', name: 'Cho tôi xin một vé đi tuổi thơ', author: 'Nguyễn Nhật Ánh', type: 'Sách', cat: 'Thiếu nhi', price: 98000, cost: 55000, stock: 11, min: 3 },
+  { sku: 'SACH-0002', name: 'Mắt biếc', author: 'Nguyễn Nhật Ánh', type: 'Sách', cat: 'Văn học', price: 110000, cost: 62000, stock: 2, min: 3 },
+  { sku: 'SACH-0003', name: 'Dế Mèn phiêu lưu ký', author: 'Tô Hoài', type: 'Sách', cat: 'Thiếu nhi', price: 65000, cost: 35000, stock: 2, min: 3 },
+  { sku: 'SACH-0004', name: 'Đắc nhân tâm', author: 'Dale Carnegie', type: 'Sách', cat: 'Kỹ năng', price: 86000, cost: 45000, stock: 20, min: 3 },
+  { sku: 'SACH-0005', name: 'Nhà giả kim', author: 'Paulo Coelho', type: 'Sách', cat: 'Văn học', price: 79000, cost: 40000, stock: 0, min: 3 },
+  { sku: 'SACH-0007', name: 'Tôi thấy hoa vàng trên cỏ xanh', author: 'Nguyễn Nhật Ánh', type: 'Sách', cat: 'Văn học', price: 125000, cost: 70000, stock: 19, min: 3 },
+  { sku: 'SACH-0010', name: 'Thay đổi tí hon hiệu quả bất ngờ', author: 'James Clear', type: 'Sách', cat: 'Kỹ năng', price: 189000, cost: 110000, stock: 19, min: 3 },
+  { sku: 'SACH-0012', name: 'Harry Potter và Hòn đá Phù thủy', author: 'J.K. Rowling', type: 'Sách', cat: 'Thiếu nhi', price: 150000, cost: 85000, stock: 19, min: 3 },
+  { sku: 'VPP-0001', name: 'Bút gel Thiên Long xanh', author: '', type: 'Văn phòng phẩm', cat: 'Văn phòng phẩm', price: 8000, cost: 4000, stock: 496, min: 5 },
+  { sku: 'VPP-0002', name: 'Vở Campus A5 200 trang', author: '', type: 'Văn phòng phẩm', cat: 'Văn phòng phẩm', price: 25000, cost: 15000, stock: 15, min: 5 },
+  { sku: 'QUA-0001', name: 'Túi vải The Bookshelf', author: '', type: 'Sản phẩm khác', cat: 'Quà tặng', price: 120000, cost: 50000, stock: 15, min: 5 },
+  { sku: 'QUA-0003', name: 'Tranh ghép 1000 mảnh Hồ Hoàn Kiếm', author: '', type: 'Sản phẩm khác', cat: 'Quà tặng', price: 350000, cost: 180000, stock: 15, min: 5 },
+];
+const CUSTOMERS = [
+  { name: 'Nguyễn Văn An', phone: '0901 234 561', tier: 'Thường', points: 122, orders: 1, spend: 16000, last: 'Hôm nay' },
+  { name: 'Phạm Thị Dung', phone: '0901 234 564', tier: 'Thường', points: 215, orders: 1, spend: 150650, last: 'Hôm nay' },
+  { name: 'Võ Thị Hà', phone: '0901 234 566', tier: 'Thường', points: 10, orders: 0, spend: 0, last: 'Hôm nay · thư viện' },
+  { name: 'Lê Hoàng Cường', phone: '0901 234 563', tier: 'Thường', points: 50, orders: 0, spend: 0, last: 'Hôm qua · thư viện' },
+  { name: 'Trần Thị Bình', phone: '0901 234 562', tier: 'Bạc', points: 840, orders: 12, spend: 6450000, last: '3 ngày trước' },
+  { name: 'Lê Thị Giao Hàng', phone: '0987 111 222', tier: 'Thường', points: 0, orders: 1, spend: 155900, last: '2 ngày trước' },
+];
+const SALES = [
+  { no: 'HD-2026-00004', type: 'Tại quầy', ch: 'Tại quầy', cust: 'Khách lẻ', total: 300000, pay: 'Tiền mặt', st: ['ok', 'Hoàn tất'], at: '25/11/2026 10:58' },
+  { no: 'HD-2026-00003', type: 'Tại quầy', ch: 'Tại quầy', cust: 'Khách Đặt Trước', total: 125000, pay: 'Thẻ', st: ['ok', 'Hoàn tất'], at: '23/11/2026 20:37' },
+  { no: 'DH-2026-00001', type: 'Online', ch: 'Facebook', cust: 'Lê Thị Giao Hàng', total: 155900, pay: 'Thu hộ (COD)', st: ['info', 'Đã trả hàng'], at: '23/11/2026 20:43' },
+  { no: 'Q1-000001', type: 'Tại quầy', ch: 'Tại quầy', cust: 'Khách lẻ', total: 35000, pay: 'Tiền mặt', st: ['bad', 'Đã hủy'], at: '23/11/2026 20:32', offline: true },
+  { no: 'HD-2026-00002', type: 'Tại quầy', ch: 'Tại quầy', cust: 'Phạm Thị Dung', total: 150650, pay: 'Chuyển khoản', st: ['ok', 'Hoàn tất'], at: '23/11/2026 20:30' },
+  { no: 'HD-2026-00001', type: 'Tại quầy', ch: 'Tại quầy', cust: 'Nguyễn Văn An', total: 74500, pay: 'Tiền mặt', st: ['ok', 'Hoàn tất'], at: '23/11/2026 20:29' },
+];
+
+/* ============================== Navigation ============================== */
+const I = (d) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const IC = {
+  home: I('<path d="M3 10.5 12 3l9 7.5V21H3z"/><path d="M9 21v-6h6v6"/>'), cart: I('<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.6 12h11l2-8H6"/>'),
+  clock: I('<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>'), truck: I('<path d="M1 6h13v11H1zM14 10h4l3 3v4h-7"/><circle cx="5" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>'),
+  coin: I('<circle cx="12" cy="12" r="8"/><path d="M9 12h6M12 9v6"/>'), receipt: I('<path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 8h6M9 12h6"/>'),
+  users: I('<circle cx="9" cy="8" r="3.5"/><path d="M2 21c0-4 3-6 7-6s7 2 7 6"/><path d="M16 4a3.5 3.5 0 0 1 0 7M19 15c2 .8 3 2.6 3 6"/>'), tag: I('<path d="M3 12V3h9l9 9-9 9z"/><circle cx="7.5" cy="7.5" r="1.5"/>'),
+  book: I('<path d="M3 5a2 2 0 0 1 2-2h6v18H5a2 2 0 0 1-2-2zM21 5a2 2 0 0 0-2-2h-6v18h6a2 2 0 0 0 2-2z"/>'), boxes: I('<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>'),
+  clip: I('<rect x="5" y="4" width="14" height="18" rx="2"/><path d="M9 4V2h6v2M9 10h6M9 14h6"/>'), build: I('<path d="M3 21V7l6-4 6 4v14M15 21V11h6v10M7 9h4M7 13h4M7 17h4"/>'),
+  hand: I('<path d="M7 11V5a2 2 0 0 1 4 0v5M11 10V4a2 2 0 0 1 4 0v7M15 9a2 2 0 0 1 4 0v5a7 7 0 0 1-7 7h-1a7 7 0 0 1-6-3l-2-4a2 2 0 0 1 3-2l1 1"/>'),
+  lib: I('<path d="M4 4v16M8 4v16M12 4l4 16M17 4l3 16"/>'), swap: I('<path d="M7 7h13l-4-4M17 17H4l4 4"/>'), user: I('<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>'),
+  shield: I('<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>'), wallet: I('<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18M16 15h2"/>'),
+  chart: I('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>'), gear: I('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
+  up: I('<path d="M12 16V4M6 10l6-6 6 6M4 20h16"/>'), scroll: I('<path d="M8 3h11v14a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-1h11v1a3 3 0 0 0 3 3"/><path d="M8 3a3 3 0 0 0-3 3v10M11 8h5M11 12h5"/>'),
+  bell: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8M10 21a2 2 0 0 0 4 0"/></svg>',
+  search: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5C6675" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  scan: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7V4h3M18 4h3v3M21 17v3h-3M6 20H3v-3M7 8v8M10 8v8M13 8v8M17 8v8"/></svg>',
+};
+const NAV = [
+  { items: [['dashboard', 'Tổng quan', 'home']] },
+  { label: 'Cửa hàng', items: [['pos', 'Bán hàng', 'cart'], ['preorders', 'Đặt trước', 'clock'], ['delivery', 'Giao hàng', 'truck', 1], ['cod', 'Đối soát COD', 'coin', 1], ['sales', 'Đơn hàng', 'receipt'], ['customers', 'Khách hàng', 'users'], ['promotions', 'Khuyến mãi', 'tag']] },
+  { label: 'Danh mục & kho', items: [['products', 'Sản phẩm', 'book'], ['stock', 'Tồn kho', 'boxes'], ['counts', 'Kiểm kho', 'clip'], ['suppliers', 'Nhà cung cấp', 'build'], ['consignment', 'Ký gửi', 'hand']] },
+  { label: 'Thư viện', items: [['libcatalog', 'Quản lý thư viện', 'lib'], ['libdesk', 'Mượn / trả', 'swap', 1], ['libcounts', 'Kiểm kê thư viện', 'clip']] },
+  { label: 'Nhân sự', items: [['users', 'Nhân viên', 'user'], ['roles', 'Phân quyền', 'shield']] },
+  { label: 'Báo cáo', items: [['shifts', 'Báo cáo ca làm', 'wallet'], ['rsales', 'Doanh thu', 'chart'], ['rstock', 'Kho & nhập hàng', 'boxes'], ['rtax', 'Thuế & kiểm toán', 'receipt'], ['rlib', 'Thư viện', 'lib']] },
+  { label: 'Cài đặt', items: [['settings', 'Cài đặt chung', 'gear'], ['import', 'Nhập dữ liệu', 'up'], ['audit', 'Nhật ký', 'scroll']] },
+];
+
+/* ============================== State & routing ============================== */
+const S = { route: 'overview', param: null, cart: [], online: true, toast: null, dlg: null, q: '', tab: 0, settingsList: 'cat' };
+const app = document.getElementById('app');
+function go(route, param = null) { S.route = route; S.param = param; S.q = ''; S.tab = 0; S.dlg = null; app.classList.remove('drawer'); location.hash = param ? `${route}/${param}` : route; render(); app.scrollTop = 0; const m = app.querySelector('.main'); if (m) m.scrollTop = 0; window.scrollTo(0, 0); }
+function toast(msg) { S.toast = msg; render(); clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 2600); }
+function dialog(d) { S.dlg = d; render(); }
+window.addEventListener('hashchange', () => { const [r, p] = location.hash.slice(1).split('/'); if (r && (r !== S.route || (p ?? null) !== S.param)) { S.route = r; S.param = p ?? null; S.dlg = null; render(); } });
+
+const chip = ([tone, text]) => `<span class="chip ${tone}">${text}</span>`;
+const table = (head, rows, opts = {}) => `<div class="tbl-wrap"><table style="min-width:${opts.min ?? 640}px"><thead><tr>${head.map((h) => `<th class="${/^(Tồn|Giá|Tổng|Số|Điểm|Phải|Đã|Tiền|Dự|Đếm)/.test(h) ? 'r' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.join('') : `<tr><td colspan="${head.length}" class="empty">Không có dòng phù hợp</td></tr>`}</tbody></table></div>`;
+const tr = (cells, go2) => `<tr class="${go2 ? 'click' : ''}" ${go2 ? `data-go="${go2}"` : ''}>${cells.map((c) => `<td class="${typeof c === 'number' || /₫$/.test(c) ? 'r num' : ''}">${typeof c === 'number' ? nf(c) : c}</td>`).join('')}</tr>`;
+const search = (ph) => `<label class="search">${IC.search}<input data-q placeholder="${ph}" value="${S.q}"></label>`;
+const match = (...xs) => !S.q || xs.join(' ').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').includes(S.q.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd'));
+const cover = (p, i) => `<div class="cover" style="background:${COLORS[i % COLORS.length]}">${p.name.split(' ').slice(0, 2).map((w) => w[0]).join('')}</div>`;
+const header = (title, actions = '', back) => `<div class="ph">${back ? `<button class="back" data-go="${back}" aria-label="Quay lại">←</button>` : ''}<h1>${title}</h1><span class="sp"></span>${actions}</div>`;
+
+/* ============================== Screens ============================== */
+const SCREENS = {
+  overview() {
+    const mods = [
+      ['pos', 'Bán hàng tại quầy', 'POS cảm ứng, quét mã, khuyến mãi tự áp, điểm thưởng, bán được khi mất mạng rồi tự đồng bộ.', 'R1'],
+      ['delivery', 'Đơn online & giao hàng', 'Đơn từ Facebook, Zalo, điện thoại; tạo vận đơn GHN, theo dõi trạng thái, đối soát COD.', 'R2a'],
+      ['products', 'Sản phẩm & kho', 'Danh mục, nhập hàng bằng quét mã, giá vốn bình quân, kiểm kho, ký gửi, in nhãn.', 'R1'],
+      ['libdesk', 'Thư viện', 'Đầu sách theo Dewey, mượn có phí, đặt giữ, phí trả trễ, tem gáy, kiểm kê.', 'R4'],
+      ['customers', 'Khách hàng & tích điểm', 'Hồ sơ, hạng thành viên, lịch sử mua và mượn, gộp hồ sơ trùng.', 'R1'],
+      ['dashboard', 'Báo cáo & tổng quan', 'Doanh thu theo ngày, tồn kho, thuế VAT, hóa đơn điện tử, ca làm – xuất Excel.', 'R1'],
+    ];
+    const rel = [['R1', 'Bán lẻ lõi', 'done'], ['R2a', 'Đơn online', 'done'], ['R4', 'Thư viện', 'done'], ['R3', 'Sự kiện', 'next'], ['R5', 'Nhân sự & báo cáo', ''], ['R2b', 'Website', ''], ['R6', 'Sự kiện & thư viện online', '']];
+    return `<div class="page stack" style="max-width:1200px;margin:0 auto">
+      <div class="hero"><h1>The Bookshelf · Hệ thống quản lý nhà sách</h1>
+        <p>Một ứng dụng web duy nhất cho nhân viên: bán hàng tại quầy, đơn online, kho, thư viện cho mượn, khách hàng và báo cáo. Chạy trên máy tính, máy tính bảng và điện thoại.</p>
+        <div class="stats"><div><b>3/7</b><span>đợt phát hành đã xây (R1, R2a, R4)</span></div><div><b>38</b><span>màn hình đã kiểm trên 6 cỡ màn</span></div><div><b>302</b><span>bài test tự động đều đạt</span></div><div><b>0</b><span>lỗi chặn còn mở</span></div></div>
+        <div style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap"><button class="btn acc lg" data-go="dashboard">Bấm thử ứng dụng →</button><button class="btn lg" data-go="pos">Mở màn Bán hàng</button></div>
+      </div>
+      <h2 class="sec">Các phân hệ – bấm để xem</h2>
+      <div class="grid g3">${mods.map(([r, t, d, tag]) => `<div class="card pad mod" data-go="${r}"><span class="chip ok tag">${tag}</span><h3>${t}</h3><div class="sub" style="margin:6px 0 0">${d}</div></div>`).join('')}</div>
+      <h2 class="sec">Lộ trình phát hành</h2>
+      <div class="timeline">${rel.map(([c, t, s]) => `<div class="tl ${s}"><b>${c}</b><span>${t}</span><div style="margin-top:6px">${s === 'done' ? chip(['ok', 'Đã xây']) : s === 'next' ? chip(['sand', 'Tiếp theo']) : chip(['', 'Kế hoạch'])}</div></div>`).join('')}</div>
+      <h2 class="sec">Tình trạng trước khi đưa vào dùng</h2>
+      <div class="grid g2">
+        <div class="card pad"><h3>Đã sẵn sàng</h3><div class="rows" style="margin-top:8px">
+          <div><span>Kiểm thử chức năng toàn bộ luồng</span>${chip(['ok', 'Đạt'])}</div>
+          <div><span>Giao diện điện thoại, máy tính bảng, máy tính</span>${chip(['ok', 'Đạt'])}</div>
+          <div><span>Bán ngoại tuyến và đồng bộ lại</span>${chip(['ok', 'Đạt'])}</div>
+          <div><span>Sao lưu tự động và diễn tập khôi phục</span>${chip(['ok', 'Đạt'])}</div>
+          <div><span>HTTPS, cookie bảo mật, nhật ký thao tác</span>${chip(['ok', 'Đạt'])}</div></div></div>
+        <div class="card pad"><h3>Cần làm trước khi chạy thật</h3><div class="rows" style="margin-top:8px">
+          <div><span>Đặt mã PIN và màn khóa cho quầy</span>${chip(['warn', 'Đang làm'])}</div>
+          <div><span>Kết nối hóa đơn điện tử MISA thật</span>${chip(['warn', 'Chờ quyết định'])}</div>
+          <div><span>Chạy thử (UAT) trên máy chủ với thiết bị thật</span>${chip(['info', 'Kế hoạch'])}</div>
+          <div><span>Tài khoản GHN thật và địa chỉ webhook</span>${chip(['info', 'Kế hoạch'])}</div>
+          <div><span>Nhập dữ liệu từ hệ thống cũ</span>${chip(['info', 'Kế hoạch'])}</div></div></div>
+      </div>
+      <p class="muted" style="text-align:center;margin:8px 0 24px">Bản mô phỏng này bắt chước giao diện thật để xem nhanh; số liệu là minh họa. Nút “📱 Xem như điện thoại” ở thanh trên cùng cho thấy bố cục trên màn nhỏ.</p>
+    </div>`;
+  },
+
+  dashboard() {
+    const days = [3.1, 4.6, 2.8, 5.2, 6.4, 4.9, 7.8, 5.5, 6.1, 8.4, 3.9, 6.7, 9.2, 7.1];
+    const max = Math.max(...days);
+    return `<div class="page stack">
+      <div><div class="muted">Thứ Tư, 25/11/2026</div><h1 style="margin:2px 0 0;font-size:26px;color:var(--navy-700)">Chào buổi sáng, Nguyễn Chủ Tiệm</h1></div>
+      <div class="grid g2">
+        <div class="card pad"><h3>Tổng quan cửa hàng</h3><div class="sub">Số liệu hôm nay</div><div class="grid g3"><div class="kpi"><span>Doanh thu</span><b>650.150 ₫</b></div><div class="kpi"><span>Số đơn</span><b>4</b></div><div class="kpi"><span>Trung bình</span><b>162.538 ₫</b></div></div></div>
+        <div class="card pad"><h3>Tổng quan thư viện</h3><div class="sub">Số liệu tuần này</div><div class="grid g3"><div class="kpi"><span>Doanh thu</span><b>160.000 ₫</b></div><div class="kpi"><span>Đang mượn</span><b>1 cuốn</b></div><div class="kpi"><span>Quá hạn</span><b style="color:var(--bad-700)">0 cuốn</b></div></div></div>
+      </div>
+      <div class="card pad"><div class="row"><div><h3>Doanh thu</h3><div class="sub">14 ngày qua · triệu đồng</div></div><span class="sp" style="flex:1"></span><span class="chip">Bán hàng</span><span class="chip sand">Thư viện</span></div>
+        <svg viewBox="0 0 700 180" width="100%" height="180" role="img" aria-label="Biểu đồ doanh thu 14 ngày">${days.map((d, i) => { const h = d / max * 140; const l = h * 0.12; return `<rect x="${i * 50 + 10}" y="${160 - h}" width="30" height="${h - l}" rx="4" fill="#22344F"/><rect x="${i * 50 + 10}" y="${160 - l}" width="30" height="${l}" fill="#D8C7A6"/><text x="${i * 50 + 25}" y="176" font-size="10" text-anchor="middle" fill="#5C6675">${12 + i}/11</text>`; }).join('')}</svg></div>
+      <div class="grid g3">
+        <div class="card pad"><h3>Tổng quan tồn kho</h3><div class="sub">754 sản phẩm</div>${[['Sách', 182, 24], ['Văn phòng phẩm', 527, 70], ['Khác', 45, 6]].map(([n, q, p]) => `<div style="margin:8px 0"><div class="row" style="justify-content:space-between"><span>${n}</span><span class="num">${q} · ${p}%</span></div><div class="bar"><i style="width:${p}%"></i></div></div>`).join('')}</div>
+        <div class="card pad"><h3>Sản phẩm bán chạy</h3><div class="sub">Hôm nay</div><div class="rows">${[['Poems of the Old Quarter', 3], ['Bút gel Thiên Long xanh', 2], ['Thay đổi tí hon hiệu quả bất ngờ', 1], ['Dế Mèn phiêu lưu ký', 1]].map(([n, q], i) => `<div><span>${i + 1}. ${n}</span><b class="num">${q}</b></div>`).join('')}</div></div>
+        <div class="card pad"><h3>Sắp hết hàng</h3><div class="sub">Còn / tối thiểu</div><div class="rows">${PRODUCTS.filter((p) => p.stock < p.min).map((p) => `<div class="click" data-go="product" data-param="${p.sku}" style="cursor:pointer"><span>${p.name}</span><span class="chip ${p.stock ? 'warn' : 'bad'}">${p.stock} / ${p.min}</span></div>`).join('')}</div></div>
+      </div></div>`;
+  },
+
+  pos() {
+    const sub = S.cart.reduce((a, l) => a + l.p.price * l.q, 0);
+    const disc = S.cart.reduce((a, l) => a + (l.p.cat === 'Thiếu nhi' ? Math.round(l.p.price * l.q * 0.1) : 0), 0);
+    const list = PRODUCTS.filter((p) => match(p.name, p.sku, p.author));
+    return `<div style="flex:1;display:flex;flex-direction:column;min-width:0">
+      <div class="pos-top"><button class="btn ghost sm" style="color:#fff" data-go="dashboard">☰</button><b>Q1 · Quầy 1</b><span class="sp"></span>
+        <button class="net ${S.online ? '' : 'off'}" data-act="net" style="border:0">${S.online ? '● Trực tuyến' : '◐ Ngoại tuyến · 1 đơn chờ đồng bộ'}</button></div>
+      <div class="pos">
+        <div class="pos-left">
+          <div class="row">${search('Quét mã hoặc gõ tên, SKU, ISBN…')}<button class="btn ghost" aria-label="Quét bằng camera" data-act="scan">${IC.scan}</button></div>
+          <div class="row" style="margin-top:10px"><button class="btn sm" data-act="cust">👤 ${S.cust ?? 'Gắn khách'}</button>${S.cust ? `<span class="chip ok">215 điểm · đủ đổi ưu đãi</span>` : ''}</div>
+          <div class="prod-grid">${list.map((p, i) => `<button class="prod" data-add="${p.sku}">${cover(p, i)}<b>${p.name}</b><span class="row" style="justify-content:space-between"><span class="num">${vnd(p.price)}</span><span class="muted">Tồn ${p.stock}</span></span></button>`).join('')}</div>
+        </div>
+        <div class="cart">
+          <div style="padding:14px 16px 0;font-weight:600">Giỏ hàng</div>
+          <div class="cart-lines">${S.cart.length ? S.cart.map((l, i) => `<div class="cline"><div class="nm">${l.p.name}</div><div class="row" style="justify-content:space-between;margin-top:4px"><span class="num">${vnd(l.p.price)}</span><span class="qty"><button data-dec="${i}">−</button><span>${l.q}</span><button data-inc="${i}">+</button></span></div>${l.p.cat === 'Thiếu nhi' ? `<div style="color:var(--ok-700);font-size:12.5px;margin-top:2px">Giảm ${vnd(Math.round(l.p.price * l.q * 0.1))} – Giảm 10% sách thiếu nhi</div>` : ''}</div>`).join('') : `<div class="empty">🛒<br>Chưa có sản phẩm nào được chọn<br><span class="muted">Bấm vào sản phẩm bên trái để thêm</span></div>`}</div>
+          <div class="cart-sum"><div class="rows"><div><span>Thành tiền</span><span class="num">${vnd(sub)}</span></div><div><span>Giảm giá</span><span class="num" style="color:var(--ok-700)">−${vnd(disc)}</span></div><div class="tot"><span>Tổng tiền</span><span class="num">${vnd(sub - disc)}</span></div></div>
+            <div class="grid g2" style="margin-top:12px"><button class="btn full lg" ${S.cart.length ? '' : 'disabled'} data-act="hold">Giữ giỏ</button><button class="btn acc full lg" ${S.cart.length ? '' : 'disabled'} data-act="pay">Xác nhận</button></div></div>
+        </div>
+      </div></div>`;
+  },
+
+  preorders: () => `<div class="page">${header('Đặt trước', '<button class="btn pri" data-act="soon">+ Thêm</button>')}
+    <div class="toolbar">${search('Tìm mã phiếu, khách, ISBN…')}<button class="btn">Lọc</button></div>
+    ${table(['Mã phiếu', 'Khách hàng', 'Sách', 'Đã cọc', 'Trạng thái'], [
+      tr(['<span class="code">DT-2026-00003</span>', 'Trần Thị Bình<div class="muted">0901 234 562</div>', 'Muôn kiếp nhân sinh (đặt NXB)', vnd(50000), chip(['info', 'Đang đặt hàng'])]),
+      tr(['<span class="code">DT-2026-00002</span>', 'Nguyễn Văn An<div class="muted">0901 234 561</div>', 'Mắt biếc', '—', chip(['warn', 'Chờ nhận · giữ đến 27/11'])]),
+      tr(['<span class="code">DT-2026-00001</span>', 'Khách Đặt Trước<div class="muted">0912 000 111</div>', 'Tôi thấy hoa vàng trên cỏ xanh', '—', chip(['ok', 'Đã nhận'])]),
+    ].filter((r) => match(r)))}</div>`,
+
+  delivery: () => `<div class="page">${header('Giao hàng', '<button class="btn pri" data-act="newship">+ Tạo đơn giao</button>')}
+    <div class="toolbar">${search('Tìm mã đơn, SĐT, mã vận đơn…')}<button class="btn">Lọc</button></div>
+    ${table(['Mã đơn', 'Khách hàng', 'Nguồn đơn', 'Tổng tiền', 'Thanh toán', 'Vận đơn', 'Trạng thái'], [
+      tr(['<span class="code">DH-2026-00003</span>', 'Hoàng Minh Đức<div class="muted">0909 777 888</div>', 'Zalo', vnd(237000), 'Chuyển khoản', '<span class="code">LYFH 2C</span>', chip(['info', 'Đang giao'])], 'sale/DH-2026-00001'),
+      tr(['<span class="code">DH-2026-00002</span>', 'Đặng Văn Khoa<div class="muted">0901 234 567</div>', 'Facebook', vnd(176900), 'Thu hộ (COD)', '—', chip(['warn', 'Chờ tạo vận đơn'])], 'sale/DH-2026-00001'),
+      tr(['<span class="code">DH-2026-00001</span>', 'Lê Thị Giao Hàng<div class="muted">0987 111 222</div>', 'Facebook', vnd(155900), 'Thu hộ (COD)', '<span class="code">LYFG 7A</span>', chip(['ok', 'Đã giao'])], 'sale/DH-2026-00001'),
+    ].filter((r) => match(r)), { min: 820 })}</div>`,
+
+  cod: () => `<div class="page">${header('Đối soát COD')}
+    <div class="tabs">${['Chờ đối soát (1)', 'Chênh lệch (1)', 'Đã khớp (4)'].map((t, i) => `<button class="${S.tab === i ? 'on' : ''}" data-tab="${i}">${t}</button>`).join('')}</div>
+    ${table(['Mã vận đơn', 'Đơn', 'Giao xong', 'Phải thu', 'GHN đã trả', 'Bảng kê', 'Trạng thái'], [
+      [tr(['<span class="code">LYFH 2C</span>', 'DH-2026-00003', '25/11/2026 09:10', vnd(237000), '', '', chip(['warn', 'Chờ đối soát'])], '')],
+      [tr(['<span class="code">LYFG 7A</span>', 'DH-2026-00001', '25/11/2026 11:00', vnd(155900), vnd(150000), 'BK-20261125-01', chip(['bad', 'Chênh lệch'])])],
+      [tr(['<span class="code">LYFA 1B</span>', 'DH-2026-00090', '20/11/2026 15:02', vnd(320000), vnd(320000), 'BK-20261121-01', chip(['ok', 'Đã khớp'])])],
+    ][S.tab], { min: 760 })}
+    ${S.tab === 0 ? '<div style="margin-top:12px"><button class="btn pri" data-act="reconcile">Đối soát LYFH 2C</button></div>' : ''}</div>`,
+
+  sales: () => `<div class="page">${header('Đơn hàng')}
+    <div class="toolbar">${search('Tìm mã đơn, khách, SĐT, sản phẩm…')}<button class="btn">Lọc</button></div>
+    ${table(['Mã đơn', 'Loại', 'Kênh', 'Khách hàng', 'Tổng tiền', 'Thanh toán', 'Trạng thái', 'Thời gian'], SALES.filter((s) => match(s.no, s.cust, s.ch)).map((s) => tr([`<span class="code">${s.no}</span>${s.offline ? '<div class="muted">Bán ngoại tuyến</div>' : ''}`, s.type, s.ch, s.cust, vnd(s.total), s.pay, chip(s.st), s.at], `sale/${s.no}`)), { min: 900 })}</div>`,
+
+  sale() {
+    const s = SALES.find((x) => x.no === S.param) ?? SALES[5];
+    const online = s.no.startsWith('DH');
+    return `<div class="page">${header(s.no, `<button class="btn" data-act="print">In lại phiếu</button><button class="btn" data-act="return">Đổi / trả</button>`, online ? 'delivery' : 'sales')}
+      <div class="row" style="margin:-8px 0 16px">${chip(s.st)}${chip(['ok', 'HĐĐT đã xuất'])}<span class="muted">${s.at}</span></div>
+      <div class="grid" style="grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)">
+        <div class="stack"><div class="card pad"><h3>Sản phẩm</h3>${table(['Sản phẩm', 'SL', 'Đơn giá', 'Giảm', 'Thành tiền'], online
+          ? [tr(['Harry Potter và Hòn đá Phù thủy<div class="muted">SACH-0012</div>', 1, vnd(150000), '−15.000', vnd(135000)])]
+          : [tr(['Dế Mèn phiêu lưu ký<div class="muted">SACH-0003</div>', 1, vnd(65000), '−6.500', vnd(58500)]), tr(['Bút gel Thiên Long xanh<div class="muted">VPP-0001</div>', 2, vnd(8000), '', vnd(16000)])], { min: 480 })}</div>
+          ${online ? `<div class="card pad"><h3>Giao hàng</h3><div class="rows"><div><span class="muted">Mã vận đơn GHN</span><b class="code">LYFG 7A</b></div><div><span class="muted">Người nhận</span><span>Lê Thị Giao Hàng · 0987 111 222</span></div><div><span class="muted">Địa chỉ</span><span>12 Phố Hàng Bài, Phường Hàng Bài, Hà Nội</span></div></div>
+            <h3 style="margin-top:14px">Lịch sử</h3>${[['Đã giao thành công', '25/11 11:00 · GHN'], ['Đang giao', '23/11 20:43 · Đỗ Quản Lý'], ['Đã xác nhận', '23/11 20:43 · Đỗ Quản Lý']].map(([a, b]) => `<div style="border-left:2px solid var(--paper-300);padding:4px 0 8px 12px"><b>${a}</b><div class="muted">${b}</div></div>`).join('')}</div>` : ''}</div>
+        <div class="stack"><div class="card pad"><h3>Tổng cộng</h3><div class="rows">${online ? `<div><span>Tạm tính</span><span>${vnd(150000)}</span></div><div><span>Giảm giá</span><span>−${vnd(15000)}</span></div><div><span>Phí giao hàng</span><span>${vnd(20900)}</span></div>` : `<div><span>Tạm tính</span><span>${vnd(81000)}</span></div><div><span>Giảm giá</span><span>−${vnd(6500)}</span></div><div><span>Trong đó VAT</span><span>${vnd(1185)}</span></div><div><span>Điểm cộng</span><span>+7</span></div>`}<div class="tot"><span>Tổng</span><span>${vnd(s.total)}</span></div></div></div>
+          <div class="card pad"><h3>Khách hàng</h3><div class="rows"><div><span>${s.cust}</span><a href="#" data-go="customers">Xem hồ sơ</a></div></div></div>
+          <div class="card pad"><h3>Hóa đơn điện tử</h3><div class="rows"><div><span class="muted">Trạng thái</span>${chip(['ok', 'Đã xuất'])}</div><div><span class="muted">Số hóa đơn</span><span class="code">00000001</span></div><div><span class="muted">Người mua</span><span>Khách lẻ</span></div></div><button class="btn sm" style="margin-top:10px" data-act="einvoice">Gửi lại cho khách</button></div></div>
+      </div></div>`;
+  },
+
+  customers: () => `<div class="page">${header('Khách hàng', '<button class="btn pri" data-act="soon">+ Thêm khách hàng</button>')}
+    <div class="toolbar">${search('Tìm tên hoặc SĐT – không dấu cũng được')}<button class="btn">Lọc</button></div>
+    ${table(['Khách hàng', 'Số điện thoại', 'Hạng', 'Điểm', 'Số đơn', 'Tổng mua', 'Hoạt động gần nhất'], CUSTOMERS.filter((c) => match(c.name, c.phone)).map((c, i) => tr([`<b>${c.name}</b>`, c.phone, c.tier === 'Bạc' ? chip(['info', 'Bạc']) : chip(['', 'Thường']), c.points, c.orders, vnd(c.spend), c.last], `customer/${i}`)), { min: 820 })}</div>`,
+
+  customer() {
+    const c = CUSTOMERS[+S.param || 0];
+    return `<div class="page">${header(c.name, '<button class="btn" data-act="soon">Sửa</button><button class="btn" data-act="merge">Gộp hồ sơ trùng</button>', 'customers')}
+      <div class="grid" style="grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)">
+        <div class="stack"><div class="card pad"><h3>Điểm</h3><div class="rows">${[['Thu hồi do trả hàng', '23/11/2026 20:34', -5], ['Tích điểm · HD-2026-00001', '23/11/2026 20:29', 7], ['Nhập dữ liệu – chuyển từ hệ thống cũ', '23/11/2026 20:23', 120]].map(([a, b, n]) => `<div><span>${a}<div class="muted">${b}</div></span><b style="color:${n < 0 ? 'var(--bad-700)' : 'var(--ok-700)'}">${n > 0 ? '+' : ''}${n}</b></div>`).join('')}</div></div>
+          <div class="card pad"><h3>Thư viện</h3><div class="note ok">✓ Được mượn · đang mượn 0/3</div></div></div>
+        <div class="card pad"><h3>Hồ sơ</h3><div class="rows"><div><span class="muted">Số điện thoại</span><span>${c.phone}</span></div><div><span class="muted">Hạng</span><span>${c.tier}</span></div><div><span class="muted">Điểm</span><b>${c.points}</b></div><div><span class="muted">Số đơn</span><span>${c.orders}</span></div><div><span class="muted">Tổng mua</span><span>${vnd(c.spend)}</span></div></div></div>
+      </div></div>`;
+  },
+
+  promotions: () => `<div class="page">${header('Khuyến mãi', '<button class="btn pri" data-act="soon">+ Tạo khuyến mãi</button>')}
+    ${table(['Chương trình', 'Ưu đãi', 'Áp dụng', 'Thời gian', 'Trạng thái'], [
+      tr(['<b>Giảm 10% sách thiếu nhi</b>', 'Giảm 10%', 'Danh mục Thiếu nhi', '23/11/2026 – không hết hạn', chip(['ok', 'Đang chạy'])]),
+      tr(['<b>Mua 2 tặng 1 bút gel</b>', 'Mua X tặng Y', 'Sản phẩm VPP-0001', '01/12 – 31/12/2026', chip(['info', 'Sắp chạy'])]),
+      tr(['<b>Combo Nguyễn Nhật Ánh</b>', 'Đồng giá combo 299.000 ₫', '3 sản phẩm', '01/11 – 20/11/2026', chip(['', 'Đã kết thúc'])]),
+    ])}</div>`,
+
+  products: () => `<div class="page">${header('Sản phẩm', '<button class="btn" data-go="import">Nhập từ Excel</button><button class="btn pri" data-act="soon">+ Thêm sản phẩm</button>')}
+    <div class="toolbar">${search('Tìm theo tên, tác giả, SKU, ISBN…')}<button class="btn">Lọc</button></div>
+    ${table(['SKU', 'Tên sản phẩm', 'Danh mục', 'Tồn', 'Giá bán', 'Giá nhập', 'Trạng thái'], PRODUCTS.filter((p) => match(p.name, p.sku, p.author)).map((p) => tr([`<span class="code">${p.sku}</span>`, `<b>${p.name}</b>${p.author ? `<div class="muted">${p.author}</div>` : ''}`, p.cat, p.stock, vnd(p.price), vnd(p.cost), p.stock === 0 ? chip(['bad', 'Hết hàng']) : p.stock < p.min ? chip(['warn', 'Sắp hết']) : chip(['ok', 'Còn hàng'])], `product/${p.sku}`)), { min: 860 })}</div>`,
+
+  product() {
+    const i = Math.max(0, PRODUCTS.findIndex((p) => p.sku === S.param)); const p = PRODUCTS[i];
+    return `<div class="page">${header(p.name, '<button class="btn" data-act="labels">In nhãn</button>', 'products')}
+      <div class="grid" style="grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)">
+        <div class="card pad"><div class="row" style="align-items:flex-start;gap:18px;flex-wrap:wrap"><div style="width:150px">${cover(p, i).replace('height', 'x')}</div><div class="rows" style="flex:1;min-width:220px">
+          <div><span class="muted">SKU</span><span class="code">${p.sku}</span></div><div><span class="muted">Loại</span><span>${p.type}</span></div><div><span class="muted">Tác giả</span><span>${p.author || '—'}</span></div><div><span class="muted">Danh mục</span><span>${p.cat}</span></div><div><span class="muted">Trạng thái</span>${chip(['ok', 'Đang bán'])}</div></div></div></div>
+        <div class="stack"><div class="card pad"><h3>Giá bán</h3><div class="rows"><div><span>Giá bán</span><b>${vnd(p.price)}</b></div><div><span>Giá vốn</span><span>${vnd(p.cost)}</span></div><div><span>Lãi mỗi sản phẩm</span><span style="color:var(--ok-700)">${vnd(p.price - p.cost)} (${Math.round((p.price - p.cost) / p.price * 100)}%)</span></div></div></div>
+          <div class="card pad"><h3>Tồn kho</h3><div class="rows"><div><span>Tồn</span><b>${p.stock}</b></div><div><span>Đang giữ</span><span>0</span></div><div><span>Tồn tối thiểu</span><span>${p.min}</span></div></div><button class="btn sm" style="margin-top:10px" data-go="stock">Xem lịch sử kho</button></div></div>
+      </div></div>`;
+  },
+
+  stock: () => `<div class="page">${header('Tồn kho', '<button class="btn" data-act="soon">Nhập từ Excel</button><button class="btn pri" data-act="stockin">Nhập hàng</button>')}
+    <div class="toolbar">${search('Tìm SKU, tên…')}<button class="btn">Lọc</button></div>
+    ${table(['SKU', 'Tên sản phẩm', 'Tồn', 'Tối thiểu', 'Giá nhập', 'Tình trạng'], PRODUCTS.filter((p) => match(p.name, p.sku)).map((p) => tr([`<span class="code">${p.sku}</span>`, p.name, p.stock, p.min, vnd(p.cost), p.stock === 0 ? chip(['bad', 'Hết hàng']) : p.stock < p.min ? chip(['warn', 'Sắp hết']) : chip(['ok', 'Còn hàng'])], `product/${p.sku}`)), { min: 760 })}</div>`,
+
+  counts: () => `<div class="page">${header('Kiểm kho', '<button class="btn pri" data-go="count">+ Tạo phiếu kiểm</button>')}
+    ${table(['Số phiếu', 'Ngày', 'Phạm vi', 'Người tạo', 'Đã đếm', 'Trạng thái'], [
+      tr(['<span class="code">KK-2026-00002</span>', '25/11/2026', 'Tất cả', 'Nguyễn Chủ Tiệm', '1/19', chip(['info', 'Đang đếm'])], 'count'),
+      tr(['<span class="code">KK-2026-00001</span>', '23/11/2026', 'Văn phòng phẩm', 'Đỗ Quản Lý', '3/3', chip(['ok', 'Đã duyệt'])], 'count'),
+    ])}</div>`,
+
+  count() {
+    S.counts ??= {};
+    const lines = PRODUCTS.slice(0, 8);
+    const done = lines.filter((p) => S.counts[p.sku] != null).length;
+    const v = (p) => S.counts[p.sku] == null ? '' : S.counts[p.sku] - p.stock;
+    const vc = (d) => d === '' ? '' : `<span style="color:${d < 0 ? 'var(--bad-700)' : d > 0 ? 'var(--warn-700)' : 'var(--ok-700)'}">${d > 0 ? '+' : ''}${d}</span>`;
+    return `<div class="page">${header('KK-2026-00002', '<button class="btn" data-act="submitcount">Gửi duyệt</button>', 'counts')}
+      <div class="row" style="margin-bottom:16px"><div class="card pad" style="flex:1"><div class="row" style="justify-content:space-between"><b>Tiến độ</b><b>${Math.round(done / lines.length * 100)}%</b></div><div class="bar" style="margin-top:8px"><i style="width:${done / lines.length * 100}%"></i></div></div><button class="btn ghost" data-act="scan" aria-label="Quét">${IC.scan}</button></div>
+      <h3 style="font-size:14px">Danh sách kiểm kho</h3>
+      <div class="count-table">${table(['SKU', 'Sản phẩm', 'Hệ thống', 'Đếm được', 'Chênh lệch'], lines.map((p) => tr([`<span class="code">${p.sku}</span>`, p.name, p.stock, `<input data-count="${p.sku}" value="${S.counts[p.sku] ?? ''}" placeholder="—" inputmode="numeric" style="width:76px;height:34px;border:1px solid var(--paper-500);border-radius:8px;text-align:right;padding:0 8px">`, vc(v(p))])), { min: 560 })}</div>
+      <div class="count-cards">${lines.map((p) => `<div class="count-card"><div style="flex:1;min-width:0"><b>${p.name}</b><div class="muted code">${p.sku}</div><div class="muted">Hệ thống ${p.stock}${v(p) !== '' ? ` · Chênh lệch ${vc(v(p))}` : ''}</div></div><input data-count="${p.sku}" value="${S.counts[p.sku] ?? ''}" placeholder="—" inputmode="numeric"></div>`).join('')}</div>
+      <p class="muted" style="margin-top:12px">Gõ số đếm rồi bấm ra ngoài – chênh lệch hiện ngay. Trên điện thoại danh sách tự chuyển thành dạng thẻ.</p></div>`;
+  },
+
+  suppliers: () => `<div class="page">${header('Nhà cung cấp', '<button class="btn pri" data-act="soon">+ Thêm nhà cung cấp</button>')}
+    ${table(['Nhà cung cấp', 'Điện thoại', 'Email', 'Mã số thuế', ''], [
+      tr(['<b>Công ty CP Phát hành Sách TP.HCM – Fahasa</b>', '028 3822 5796', 'sales@fahasa.example', '0304132047', '']),
+      tr(['<b>Nhã Nam</b>', '0243 514 6875', '—', '—', '']),
+      tr(['<b>Tác giả Lê Văn Ký Gửi</b>', '0987 654 321', '—', '—', chip(['sand', 'Ký gửi'])]),
+    ])}</div>`,
+
+  consignment: () => `<div class="page">${header('Ký gửi')}
+    <div class="tabs">${['Lô hàng ký gửi', 'Đối soát hàng tháng'].map((t, i) => `<button class="${S.tab === i ? 'on' : ''}" data-tab="${i}">${t}</button>`).join('')}</div>
+    ${S.tab === 0 ? table(['Sản phẩm', 'Bên ký gửi', 'Nhận', 'Đã bán', 'Đã trả', 'Còn lại', 'Chiết khấu', 'Hạn'], [tr(['<b>Poems of the Old Quarter</b><div class="muted">KG-0001</div>', 'Tác giả Lê Văn Ký Gửi', 10, 3, 2, 5, '30%', '31/12/2026'])], { min: 820 })
+      : `${table(['Số', 'Bên ký gửi', 'Kỳ', 'Phải trả', 'Trạng thái'], [tr(['<span class="code">KG-2026-00001</span>', 'Tác giả Lê Văn Ký Gửi', '2026-11', vnd(210000), chip(['ok', 'Đã duyệt'])])])}<div class="note" style="margin-top:12px">Phải trả = 3 cuốn đã bán × 100.000 ₫ × (1 − 30%) = 210.000 ₫. Bảng đối soát in khổ A4 ngang.</div>`}</div>`,
+
+  libcatalog: () => `<div class="page">${header('Quản lý thư viện', '<button class="btn pri" data-act="soon">+ Thêm đầu sách</button>')}
+    <div class="muted" style="margin:-10px 0 14px">3 bản · Sẵn sàng 1 · Đang mượn 1 · Đang giữ 1</div>
+    ${table(['Ký hiệu xếp giá', 'Kệ', 'Tên sách', 'Tác giả', 'Ngôn ngữ', 'Số lượng'], [
+      tr(['<span class="code">895.922<br>V500</span>', 'KỆ A1', '<b>Số đỏ</b>', 'Vũ Trọng Phụng', chip(['', 'Tiếng Việt']), '0/2']),
+      tr(['<span class="code">823.914<br>O79n</span>', 'KỆ B2', '<b>Nineteen Eighty-Four</b>', 'George Orwell', chip(['info', 'Tiếng Anh']), '1/1']),
+    ], { min: 720 })}</div>`,
+
+  libdesk: () => `<div class="page">${header('Mượn / trả', '<button class="btn" data-act="checkin">Nhận trả</button><button class="btn pri" data-act="loan">+ Phiếu mượn</button>')}
+    <div class="toolbar">${search('Tìm số phiếu, khách, SĐT, mã cá biệt…')}<button class="btn">Lọc</button></div>
+    ${table(['Số phiếu', 'Khách', 'SĐT', 'Số sách', 'Số tiền', 'Hạn trả', 'Người thu'], [
+      tr(['<span class="code">PT-2026-00002</span>', 'Võ Thị Hà', '0901 234 566', 2, vnd(100000), '<span style="color:var(--bad-700)">20/11/2026</span>', 'Nguyễn Chủ Tiệm']),
+      tr(['<span class="code">PT-2026-00001</span>', 'Võ Thị Hà', '0901 234 566', 1, vnd(50000), '<span class="muted">Đã trả hết</span>', 'Đỗ Quản Lý']),
+    ], { min: 800 })}</div>`,
+
+  libcounts: () => `<div class="page">${header('Kiểm kê thư viện', '<button class="btn pri" data-act="soon">+ Tạo phiếu kiểm kê</button>')}
+    ${table(['Số phiếu', 'Kệ', 'Người tạo', 'Tiến độ', 'Trạng thái'], [tr(['<span class="code">KT-2026-00001</span>', 'KỆ A1', 'Nguyễn Chủ Tiệm', '100%', chip(['ok', 'Đã duyệt'])])])}</div>`,
+
+  users: () => `<div class="page">${header('Nhân viên', '<button class="btn pri" data-act="soon">+ Thêm nhân viên</button>')}
+    ${table(['Nhân viên', 'Vai trò', 'Đăng nhập gần nhất', 'Trạng thái'], [
+      tr(['<b>Nguyễn Chủ Tiệm</b><div class="muted">owner</div>', 'Chủ cửa hàng', 'Vừa xong', chip(['ok', 'Đang dùng'])]),
+      tr(['<b>Đỗ Quản Lý</b><div class="muted">manager1</div>', 'Quản lý', '2 ngày trước', chip(['ok', 'Đang dùng'])]),
+      tr(['<b>Trần Thu Ngân</b><div class="muted">cashier1</div>', 'Thu ngân', '2 ngày trước', chip(['ok', 'Đang dùng'])]),
+      tr(['<b>Phạm Thủ Thư</b><div class="muted">lib1</div>', 'Thủ thư', 'Chưa đăng nhập', `${chip(['ok', 'Đang dùng'])} ${chip(['info', 'Chờ đổi mật khẩu'])}`]),
+      tr(['<b>Lê Thủ Kho</b><div class="muted">stock1</div>', 'Thủ kho', 'Chưa đăng nhập', chip(['', 'Ngừng dùng'])]),
+    ], { min: 680 })}</div>`,
+
+  roles: () => `<div class="page">${header('Phân quyền', '<button class="btn pri" data-act="soon">+ Thêm vai trò</button>')}
+    ${table(['Vai trò', 'Số quyền'], [['Chủ cửa hàng', 'Tất cả'], ['Quản lý', 53], ['Thu ngân', 14], ['Thủ kho', 10], ['Thủ thư', 6], ['Nhân viên bán online', 7], ['Thu ngân ca tối', 3]].map(([a, b]) => tr([`<b>${a}</b>`, b])), { min: 420 })}</div>`,
+
+  shifts: () => `<div class="page">${header('Báo cáo ca làm')}
+    ${table(['Ca', 'Quầy', 'Thu ngân', 'Mở lúc', 'Đóng lúc', 'Dự kiến', 'Đếm được', 'Trạng thái'], [
+      tr(['#2', 'Q1', 'Nguyễn Chủ Tiệm', '23/11 20:35', '—', '—', '—', chip(['info', 'Đang mở'])]),
+      tr(['#1', 'Q1', 'Đỗ Quản Lý', '23/11 20:28', '23/11 20:33', vnd(1109500), vnd(1100000), chip(['warn', 'Lệch −9.500 ₫'])]),
+    ], { min: 860 })}</div>`,
+
+  report(title, items) { return `<div class="page">${header(title)}<div class="card">${items.map(([a, b]) => `<div class="row" style="padding:14px 18px;border-bottom:1px solid var(--paper-300)"><div style="flex:1"><b>${a}</b><div class="muted">${b}</div></div><button class="btn sm" data-act="export">⬇ Xuất Excel</button></div>`).join('')}</div></div>`; },
+  rsales() { return this.report('Báo cáo doanh thu', [['Theo thời gian', 'Doanh thu theo ngày, hoặc theo tháng khi khoảng dài hơn 92 ngày.'], ['Theo sản phẩm', 'Số lượng bán, doanh thu, giảm giá và trả hàng của từng sản phẩm.'], ['Theo khách hàng', 'Số đơn và doanh thu của từng khách hàng.'], ['Theo kênh', 'Doanh thu tại quầy và theo từng nguồn đơn online.']]); },
+  rstock() { return this.report('Báo cáo kho & nhập hàng', [['Tồn kho hiện tại', 'Tồn, đang giữ và có thể bán của từng sản phẩm.'], ['Nhập – xuất – tồn', 'Số lượng nhập và xuất theo từng loại phát sinh.'], ['Phiếu nhập hàng', 'Số phiếu và số lượng nhập theo nhà cung cấp.']]); },
+  rtax() { return this.report('Báo cáo thuế & kiểm toán', [['Thuế GTGT đầu ra', 'Doanh thu và thuế GTGT theo từng thuế suất.'], ['Hóa đơn điện tử', 'Bảng kê hóa đơn: số hóa đơn, người mua, tiền và thuế.'], ['Ca làm và chênh lệch tiền', 'Tiền đầu ca, dự kiến, thực đếm và chênh lệch.']]); },
+  rlib() { return this.report('Báo cáo thư viện', [['Mượn trả trong kỳ', 'Số lượt mượn, trả, gia hạn, quá hạn.'], ['Tiền thu trong kỳ', 'Phí mượn, phí trễ, phí mất/hỏng.'], ['Sách được mượn nhiều', 'Top đầu sách theo lượt mượn.']]); },
+
+  settings() {
+    const cats = [['Thiếu nhi', 0, 'Children'], ['Truyện tranh', 1, 'Picture books'], ['Văn học', 0, 'Literature'], ['Kỹ năng', 0, 'Self-help'], ['Văn phòng phẩm', 0, 'Stationery'], ['Quà tặng', 0, 'Gifts']];
+    const tabs = ['Cấu hình', 'Danh mục dùng chung', 'Quầy & máy bán hàng', 'Sao lưu & dữ liệu', 'Kênh bán'];
+    const body = [
+      `<div class="grid g2"><div class="card pad stack"><h3>Thông tin cửa hàng</h3><div class="field"><label>Tên cửa hàng</label><input value="The Bookshelf Hanoi"></div><div class="field"><label>Địa chỉ</label><input value="12 Phố Sách, Hoàn Kiếm, Hà Nội"></div></div>
+        <div class="card pad stack"><h3>Bán hàng tại quầy</h3><div class="field"><label>Thời hạn đổi trả (ngày)</label><input value="7"></div><div class="field"><label>Thu ngân được giảm tối đa (%)</label><input value="10"></div><div class="field"><label>Xuất hóa đơn điện tử</label><select><option>Mọi đơn bán</option><option>Khi khách yêu cầu</option></select></div></div></div>
+        <div style="margin-top:16px"><button class="btn pri" data-act="saved">Lưu cài đặt</button></div>`,
+      `<div class="toolbar"><div class="field"><label>Danh mục</label><select data-list><option value="cat">Danh mục sản phẩm</option><option value="shelf">Kệ hàng</option><option value="src">Nguồn đơn hàng</option></select></div><button class="btn" data-act="soon" style="align-self:flex-end">+ Thêm danh mục</button></div>
+        ${table(['Danh mục', 'Thứ tự', ''], cats.map(([n, d, en]) => `<tr class="click tree-row" style="--d:${d}"><td><b>${n}</b><div class="muted">${d ? 'Thiếu nhi › ' + n : en}</div></td><td class="r">${d}</td><td>${chip(['ok', 'Đang dùng'])}</td></tr>`), { min: 420 })}`,
+      `${table(['Mã máy', 'Quầy', 'Người dùng gần nhất', 'Hoạt động', ''], [tr(['<span class="code">POS-7F3A</span>', 'Q1 · Quầy 1', 'Nguyễn Chủ Tiệm', 'Vừa xong', '<button class="btn sm danger">Thu hồi</button>']), tr(['<span class="code">POS-21C9</span>', 'Q1 · Quầy 1', 'Đỗ Quản Lý', '2 ngày trước', '<button class="btn sm danger">Thu hồi</button>'])], { min: 620 })}`,
+      `<div class="grid g2"><div class="card pad"><h3>Tình trạng hệ thống</h3><div class="rows"><div><span>Sao lưu hằng ngày</span>${chip(['ok', '25/11 02:00 · thành công'])}</div><div><span>Sao lưu liên tục (WAL)</span>${chip(['ok', 'Đang chạy · trễ 0 phút'])}</div><div><span>Cơ sở dữ liệu</span><span>19 MB</span></div></div><button class="btn pri" style="margin-top:12px" data-act="backup">Sao lưu ngay</button></div>
+        <div class="card pad"><h3>Khôi phục và xuất dữ liệu</h3><p class="muted">Khôi phục là quy trình của người phụ trách kỹ thuật, cần hai người xác nhận. Máy bán hàng vẫn bán ngoại tuyến trong lúc khôi phục.</p><button class="btn sm" data-act="export">Xuất danh mục sản phẩm</button></div></div>`,
+      `${table(['Kênh', 'Trang / tài khoản', 'Trạng thái'], [tr(['Facebook', 'The Bookshelf Hanoi', chip(['ok', 'Đang dùng'])]), tr(['Zalo', 'Zalo OA The Bookshelf', chip(['ok', 'Đang dùng'])])], { min: 480 })}`,
+    ];
+    return `<div class="page">${header('Cài đặt')}<div class="tabs">${tabs.map((t, i) => `<button class="${S.tab === i ? 'on' : ''}" data-tab="${i}">${t}</button>`).join('')}</div>${body[S.tab]}</div>`;
+  },
+
+  import: () => `<div class="page">${header('Nhập dữ liệu')}
+    <div class="card pad stack" style="max-width:720px"><div class="field"><label>Loại dữ liệu</label><select><option>Sản phẩm (kèm tồn đầu kỳ)</option><option>Phiếu nhập hàng</option><option>Khách hàng (kèm điểm)</option></select></div>
+      <div class="note">Mẫu có cột SKU (bắt buộc) và ISBN riêng. Sản phẩm mới chưa có ảnh được đánh dấu “Thiếu ảnh” để bổ sung sau.</div>
+      <div style="border:2px dashed var(--paper-300);border-radius:12px;padding:32px;text-align:center" class="muted">📄 Kéo thả tệp Excel (.xlsx) hoặc CSV vào đây<br>Tối đa 10 MB, 20.000 dòng</div>
+      <div class="row"><button class="btn pri" data-act="importcheck">Kiểm tra tệp mẫu</button><a href="#" class="muted">Tải file mẫu</a></div></div></div>`,
+
+  audit: () => `<div class="page">${header('Nhật ký thao tác')}<div class="toolbar"><button class="btn">Người thực hiện</button><button class="btn">Loại thao tác</button><button class="btn">Thời gian</button></div>
+    <div class="card">${[['Nguyễn Chủ Tiệm', 'duyệt quyết toán ký gửi KG-2026-00001', '25/11 11:01'], ['Nguyễn Chủ Tiệm', 'nhận trả sách VN-000001 · Số đỏ, thu phí trễ 10.000 ₫', '25/11 11:05'], ['Hệ thống', 'cập nhật vận đơn LYFG7A: Đã giao', '25/11 11:00'], ['Đỗ Quản Lý', 'tạo đơn DH-2026-00001', '23/11 20:43'], ['Đỗ Quản Lý', 'duyệt phiếu kiểm kho KK-2026-00001', '23/11 20:27'], ['Đỗ Quản Lý', 'điều chỉnh tồn SACH-0001 · Hư hỏng −1', '23/11 20:26']].map(([w, a, t]) => `<div style="padding:12px 18px;border-bottom:1px solid var(--paper-300)"><b style="color:var(--navy-700)">${w}</b> ${a}<div class="muted">${t}</div></div>`).join('')}</div></div>`,
+};
+
+/* ============================== Dialogs ============================== */
+function dlgHtml() {
+  const d = S.dlg; if (!d) return '';
+  const total = S.cart.reduce((a, l) => a + l.p.price * l.q - (l.p.cat === 'Thiếu nhi' ? Math.round(l.p.price * l.q * 0.1) : 0), 0);
+  const make = (title, body, foot) => `<div class="scrim" data-close><div class="dlg" role="dialog" aria-label="${title}"><header><h2>${title}</h2><button data-close aria-label="Đóng">×</button></header><div class="body">${body}</div><footer>${foot}</footer></div></div>`;
+  switch (d.k) {
+    case 'pay': {
+      const given = d.given ?? 0;
+      return make('Phương thức thanh toán', `<div class="row" style="justify-content:space-around;margin-bottom:12px">${['Tiền mặt', 'CK', 'Thẻ'].map((m) => `<label class="row" style="gap:6px"><input type="radio" name="pm" ${(d.m ?? 'Tiền mặt') === m ? 'checked' : ''} data-pm="${m}">${m}</label>`).join('')}</div>
+        <div class="rows"><div><span>Tổng giá trị đơn</span><b style="font-size:20px">${vnd(total)}</b></div>${(d.m ?? 'Tiền mặt') === 'Tiền mặt' ? `<div><span>Khách đưa</span><b class="num">${given ? vnd(given) : '—'}</b></div><div><span>Tiền thừa</span><b style="color:var(--ok-700)">${vnd(Math.max(0, given - total))}</b></div>` : ''}</div>
+        ${(d.m ?? 'Tiền mặt') === 'Tiền mặt' ? `<div class="keypad" style="margin-top:12px">${[1, 2, 3, 4, 5, 6, 7, 8, 9, '000', 0, '⌫'].map((k) => `<button data-key="${k}">${k}</button>`).join('')}</div>` : ''}`,
+        `<button class="btn acc full lg" ${(d.m ?? 'Tiền mặt') === 'Tiền mặt' && given && given < total ? 'disabled' : ''} data-act="paid">Xác nhận</button>`);
+    }
+    case 'paid': return make('Đã bán xong', `<div style="text-align:center;padding:8px 0 4px"><div style="font-size:42px;color:var(--ok-700)">✓</div><div class="muted">Số đơn</div><div style="font-size:24px;font-weight:700">${S.online ? 'HD-2026-00005' : 'Q1-000002'}</div>${S.online ? '' : '<div class="note warn" style="margin-top:10px">Đã lưu ngoại tuyến. Đơn sẽ được đồng bộ và xuất hóa đơn điện tử khi có mạng.</div>'}${d.change ? `<div class="muted" style="margin-top:8px">Tiền thừa</div><div style="font-size:26px;font-weight:700;color:var(--ok-700)">${vnd(d.change)}</div>` : ''}</div>`, '<button class="btn pri full lg" data-act="newsale">Đơn mới</button>');
+    case 'cust': return make('Thông tin khách hàng', `<div class="field"><label>Tìm theo SĐT hoặc tên</label><input value="0901234564"></div><div class="card" style="margin-top:10px;padding:10px 14px;cursor:pointer" data-act="pickcust"><b>Phạm Thị Dung</b><div class="muted">0901 234 564 · 215 điểm</div></div>`, '<button class="btn" data-close>Hủy</button>');
+    case 'newship': return make('Tạo đơn giao', `<div class="grid g2"><div class="field"><label>Nguồn đơn</label><select><option>Facebook</option><option>Zalo</option><option>Điện thoại</option></select></div><div class="field"><label>Hình thức</label><select><option>Thu hộ (COD)</option><option>Chuyển khoản trước</option></select></div><div class="field"><label>Số điện thoại</label><input value="0909 777 888"></div><div class="field"><label>Tên người nhận</label><input value="Hoàng Minh Đức"></div><div class="field"><label>Tỉnh/Thành phố</label><select><option>Hà Nội</option></select></div><div class="field"><label>Phường/Xã</label><select><option>Phường Hàng Bài</option></select></div></div><div class="field" style="margin-top:12px"><label>Địa chỉ cụ thể</label><input value="5 Tràng Tiền"></div>
+      <div class="rows" style="margin-top:14px"><div><span>Tạm tính</span><span>${vnd(237000)}</span></div><div><span>Phí giao hàng (GHN báo giá)</span><span>${vnd(20900)}</span></div><div class="tot"><span>Tổng</span><span>${vnd(257900)}</span></div></div>`, '<button class="btn" data-close>Hủy</button><button class="btn pri" data-act="shipped">Xác nhận</button>');
+    case 'reconcile': return make('Đối soát LYFH 2C', `<p>Phải thu <b>${vnd(237000)}</b> cho đơn DH-2026-00003.</p><div class="field"><label>GHN đã trả</label><input value="237.000"></div><div class="field" style="margin-top:10px"><label>Mã bảng kê</label><input value="BK-20261126-01"></div>`, '<button class="btn" data-close>Hủy</button><button class="btn pri" data-act="reconciled">Lưu đối soát</button>');
+    case 'return': return make('Đổi / trả', `<div class="row" style="justify-content:space-between"><span>Dế Mèn phiêu lưu ký<div class="muted">Đã mua 1 · 65.000 ₫</div></span><span class="qty"><button>−</button><span>1</span><button>+</button></span></div><label class="row" style="margin:10px 0"><input type="checkbox" checked> Nhập lại kho</label><div class="field"><label>Lý do</label><input value="Khách đổi ý"></div>`, '<button class="btn" data-close>Hủy</button><button class="btn pri" data-act="returned">Xác nhận trả · −58.500 ₫</button>');
+    case 'einvoice': return make('Gửi lại hóa đơn cho khách', `<div class="stack"><div class="field"><label>Tên người mua / đơn vị</label><input value="Công ty TNHH Sách Phạm Dung"></div><div class="field"><label>Mã số thuế</label><input value="0101234567"></div><div class="field"><label>Email nhận hóa đơn</label><input value="ketoan@phamdung.example"></div></div>`, '<button class="btn" data-close>Hủy</button><button class="btn pri" data-act="sent">Gửi lại</button>');
+    case 'loan': return make('Phiếu mượn sách', `<div class="stack"><div class="field"><label>1. Người mượn</label><input value="Võ Thị Hà · 0901 234 566"></div><div class="note ok">✓ Được mượn · đang mượn 0/3</div><div class="field"><label>2. Sách mượn</label><input value="VN-000001 · Số đỏ"></div>
+      <div class="rows"><div><span>Hạn trả</span><span>25/12/2026</span></div><div><span>Phí mượn</span><span>${vnd(50000)}</span></div><div class="tot"><span>Tổng phí mượn</span><span>${vnd(50000)}</span></div></div></div>`, '<button class="btn" data-close>Hủy</button><button class="btn pri" data-act="loaned">Xác nhận</button>');
+    case 'checkin': return make('Nhận trả sách thành công', `<div class="rows"><div><span class="muted">Tên sách</span><span>Số đỏ</span></div><div><span class="muted">Mã cá biệt</span><span class="code">VN-000001</span></div><div><span class="muted">Tên khách</span><span>Võ Thị Hà</span></div><div><span class="muted">Tình trạng</span><span style="color:var(--bad-700)">Trễ 5 ngày</span></div><div><span class="muted">Phí trả trễ</span><b style="color:var(--bad-700)">${vnd(10000)}</b></div></div><div class="note warn" style="margin-top:10px">Giữ cho Lê Hoàng Cường – gọi 0901 234 563 (giữ đến 28/11/2026).</div>`, '<button class="btn" data-act="feepaid">Thu phí 10.000 ₫</button><button class="btn pri" data-close>Xác nhận</button>');
+    case 'scan': return make('Quét mã', `<div style="background:#16233A;border-radius:12px;height:200px;display:grid;place-items:center;color:#D8C7A6"><div style="width:220px;height:120px;border:3px solid #D8C7A6;border-radius:12px;display:grid;place-items:center">Đưa mã vạch vào khung</div></div><p class="muted">Trên thiết bị thật, camera điện thoại hoặc máy quét cầm tay đọc ISBN và mã vạch.</p>`, '<button class="btn pri" data-act="scanned">Mô phỏng quét SACH-0003</button>');
+    default: return make(d.title ?? 'Thông báo', `<p>${d.text}</p>`, '<button class="btn pri" data-close>Đóng</button>');
+  }
+}
+
+/* ============================== Render & events ============================== */
+function render() {
+  const r = SCREENS[S.route] ? S.route : 'dashboard';
+  const isPos = r === 'pos', isOverview = r === 'overview';
+  const navActive = { sale: 'sales', customer: 'customers', product: 'products', count: 'counts' }[r] ?? r;
+  const nav = NAV.map((g) => `${g.label ? `<h6>${g.label}</h6>` : ''}${g.items.map(([k, t, ic, b]) => `<a href="#${k}" data-go="${k}" class="${navActive === k ? 'act' : ''}">${IC[ic]}<span>${t}</span>${b ? `<span class="badge">${b}</span>` : ''}</a>`).join('')}`).join('');
+  const side = `<aside class="side"><div class="brand"><small>THE</small><strong>BOOKSHELF</strong><em>HANOI</em></div><nav class="nav">${nav}</nav><div class="side-foot"><a href="#overview" data-go="overview">ⓘ Giới thiệu dự án</a></div></aside>`;
+  const top = `<div class="top"><button class="menu-btn" data-act="drawer" aria-label="Mở menu">☰</button><span class="sp"></span><button class="bell" data-act="notif" aria-label="Thông báo">${IC.bell}<i>3</i></button><span class="avatar">CT</span><span class="hide-phone" style="font-weight:500">Nguyễn Chủ Tiệm</span></div>`;
+  const html = SCREENS[r].call(SCREENS);
+  app.innerHTML = isPos ? html : `${isOverview ? '' : side}<div class="main">${isOverview ? '' : top}${html}</div>`;
+  app.insertAdjacentHTML('beforeend', dlgHtml() + (S.toast ? `<div class="toast">✓ ${S.toast}</div>` : ''));
+  document.querySelectorAll('.demo-bar [data-go]').forEach((b) => b.classList.toggle('on', (b.dataset.go === 'overview') === isOverview));
+  const q = app.querySelector('[data-q]'); if (q && S.focusQ) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+
+document.addEventListener('input', (e) => { if (e.target.matches('[data-q]')) { S.q = e.target.value; S.focusQ = true; render(); S.focusQ = false; } });
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (t.matches('[data-count]')) { (S.counts ??= {})[t.dataset.count] = t.value === '' ? null : +t.value.replace(/\D/g, ''); render(); }
+  if (t.matches('[data-pm]')) { S.dlg = { ...S.dlg, m: t.dataset.pm }; render(); }
+});
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-go],[data-act],[data-add],[data-inc],[data-dec],[data-tab],[data-key],[data-close]');
+  if (!el) return;
+  if (el.matches('[data-close]') && e.target !== el && !e.target.matches('[data-close]')) return;
+  e.preventDefault();
+  const d = el.dataset;
+  if (d.go) { const [r, p] = d.go.split('/'); return go(r, d.param ?? p ?? null); }
+  if (d.tab) { S.tab = +d.tab; return render(); }
+  if (d.add) { const p = PRODUCTS.find((x) => x.sku === d.add); const l = S.cart.find((x) => x.p === p); l ? l.q++ : S.cart.push({ p, q: 1 }); return render(); }
+  if (d.inc) { S.cart[+d.inc].q++; return render(); }
+  if (d.dec) { const l = S.cart[+d.dec]; if (--l.q <= 0) S.cart.splice(+d.dec, 1); return render(); }
+  if (d.key !== undefined) { let g = String(S.dlg.given ?? ''); g = d.key === '⌫' ? g.slice(0, -1) : g + d.key; S.dlg.given = +g || 0; return render(); }
+  if ('close' in d) { S.dlg = null; return render(); }
+  const A = {
+    drawer: () => { app.classList.toggle('drawer'); },
+    notif: () => dialog({ title: 'Thông báo', text: '• 1 bảng kê COD có chênh lệch (LYFG7A)<br>• 1 sách thư viện quá hạn: Số đỏ – Võ Thị Hà<br>• Phiếu đặt trước DT-2026-00002 sắp hết hạn giữ' }),
+    net: () => { S.online = !S.online; toast(S.online ? 'Đã có mạng – đồng bộ 1 đơn ngoại tuyến' : 'Mô phỏng mất mạng: vẫn bán được, đơn lưu trên máy'); },
+    pay: () => dialog({ k: 'pay' }), paid: () => { const total = S.cart.reduce((a, l) => a + l.p.price * l.q - (l.p.cat === 'Thiếu nhi' ? Math.round(l.p.price * l.q * 0.1) : 0), 0); dialog({ k: 'paid', change: S.dlg.given ? Math.max(0, S.dlg.given - total) : 0 }); },
+    newsale: () => { S.cart = []; S.cust = null; S.dlg = null; render(); },
+    hold: () => { S.cart = []; toast('Đã giữ giỏ hàng'); },
+    cust: () => dialog({ k: 'cust' }), pickcust: () => { S.cust = 'Phạm Thị Dung'; S.dlg = null; render(); },
+    scan: () => dialog({ k: 'scan' }), scanned: () => { S.dlg = null; if (S.route === 'pos') { const p = PRODUCTS[2]; const l = S.cart.find((x) => x.p === p); l ? l.q++ : S.cart.push({ p, q: 1 }); render(); } else { (S.counts ??= {})['SACH-0003'] = ((S.counts['SACH-0003']) ?? 0) + 1; toast('Đã đếm SACH-0003 · Dế Mèn phiêu lưu ký'); } },
+    newship: () => dialog({ k: 'newship' }), shipped: () => { S.dlg = null; toast('Đã tạo đơn DH-2026-00004 và vận đơn GHN'); },
+    reconcile: () => dialog({ k: 'reconcile' }), reconciled: () => { S.dlg = null; toast('Đã đối soát – Đã khớp'); },
+    return: () => dialog({ k: 'return' }), returned: () => { S.dlg = null; toast('Đã tạo phiếu trả TH-2026-00002 · hoàn 58.500 ₫'); },
+    einvoice: () => dialog({ k: 'einvoice' }), sent: () => { S.dlg = null; toast('Đã gửi lại hóa đơn điện tử'); },
+    loan: () => dialog({ k: 'loan' }), loaned: () => { S.dlg = null; toast('Đã cho mượn – phiếu PT-2026-00003'); },
+    checkin: () => dialog({ k: 'checkin' }), feepaid: () => { S.dlg = null; toast('Đã thu phí trả trễ 10.000 ₫'); },
+    submitcount: () => toast('Đã gửi phiếu kiểm để duyệt'),
+    print: () => toast('Đã gửi phiếu 80 mm tới máy in'), labels: () => toast('Đã mở bản in nhãn kệ khổ A4'),
+    export: () => toast('Đã xuất tệp Excel (minh họa)'), saved: () => toast('Đã lưu cài đặt'), backup: () => toast('Đã yêu cầu sao lưu – hoàn tất sau khoảng 1 phút'),
+    stockin: () => dialog({ title: 'Nhập thêm hàng', text: 'Quét ISBN hoặc mã vạch để thêm sản phẩm, chỉnh số lượng, chọn nhà cung cấp (tùy chọn) rồi xác nhận. Giá vốn bình quân tự tính lại khi đổi giá nhập.' }),
+    merge: () => dialog({ title: 'Gộp hồ sơ trùng', text: 'Điểm và lịch sử mua của hồ sơ được chọn sẽ chuyển sang hồ sơ này. Hồ sơ kia đóng lại.' }),
+    importcheck: () => dialog({ title: 'Kết quả kiểm tra', text: '18 dòng · 18 sản phẩm mới · Không có lỗi. Lượt nhập ghi tất cả các dòng hoặc không dòng nào, và có thể hoàn tác.' }),
+    soon: () => dialog({ title: 'Trong bản mô phỏng', text: 'Màn này có trong ứng dụng thật; bản mô phỏng chỉ minh họa các luồng chính.' }),
+  };
+  A[d.act]?.();
+});
+document.getElementById('phoneBtn').onclick = (e) => { document.body.classList.toggle('phone'); e.currentTarget.classList.toggle('on'); e.currentTarget.textContent = document.body.classList.contains('phone') ? '🖥 Xem như máy tính' : '📱 Xem như điện thoại'; render(); };
+document.querySelectorAll('.demo-bar [data-go]').forEach((b) => (b.onclick = () => go(b.dataset.go)));
+const [r0, p0] = location.hash.slice(1).split('/'); if (r0 && SCREENS[r0]) { S.route = r0; S.param = p0 ?? null; }
+render();
+</script>
+</body>
+</html>
