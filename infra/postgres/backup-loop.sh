@@ -15,7 +15,21 @@ q() { psql -X -qAt -v ON_ERROR_STOP=1 -c "$1"; }
 esc() { printf "%s" "$1" | sed "s/'/''/g" | tail -c 1500; }
 
 until pg_isready -q; do sleep 5; done
-pgbackrest --stanza=$STANZA stanza-create >/dev/null 2>&1 || pgbackrest --stanza=$STANZA check || true
+
+# The stanza is created on the first minute it can be: on a new volume the image's init server is
+# still restarting when pg_isready first answers, so a single attempt here used to fail silently and
+# leave the store with no backups and no WAL archive.
+stanza_ready=""
+ensure_stanza() {
+  [ -n "$stanza_ready" ] && return 0
+  if pgbackrest --stanza=$STANZA stanza-create >/dev/null 2>&1; then
+    stanza_ready=1
+    echo "pgbackrest stanza $STANZA ready"
+  else
+    echo "pgbackrest stanza $STANZA not ready yet; retrying in 60 s" >&2
+    return 1
+  fi
+}
 
 # run <row id> <pgbackrest type|dump>
 run() {
@@ -49,6 +63,9 @@ scheduled() {
 last_daily=""
 last_dump=""
 while true; do
+  ensure_stanza || true
+  # Wait for the migrate job on a new install instead of logging a missing-table error every minute.
+  if ! q "select 1 from platform.backup_run limit 0" >/dev/null 2>&1; then sleep 60; continue; fi
   manual=$(q "select id from platform.backup_run where status = 'requested' and kind = 'manual' order by requested_at limit 1")
   [ -n "$manual" ] && run "$manual" full
 

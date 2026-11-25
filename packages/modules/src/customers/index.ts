@@ -157,9 +157,11 @@ export async function search(ctx: Ctx, input: z.input<typeof CustomerListQuery> 
     const borrowed = sql`(exists (select 1 from library.loan l where l.customer_id = c.id) or exists (select 1 from library.lib_reservation r where r.customer_id = c.id))`;
     where.push(f.services === 'shop' ? sql`${bought} and not ${borrowed}` : sql`${borrowed} and not ${bought}`);
   }
+  // The app clock, not the database's now(): activity is stamped with ctx.clock, and the two must agree.
+  const nowAt = ctx.clock.now().toISOString();
   if (f.lastActivity === 'never') where.push(sql`act.at is null`);
-  else if (f.lastActivity === 'over180d') where.push(sql`act.at < now() - interval '180 days'`);
-  else if (f.lastActivity) where.push(sql`act.at >= now() - ${`${parseInt(f.lastActivity)} days`}::interval`);
+  else if (f.lastActivity === 'over180d') where.push(sql`act.at < ${nowAt}::timestamptz - interval '180 days'`);
+  else if (f.lastActivity) where.push(sql`act.at >= ${nowAt}::timestamptz - ${`${parseInt(f.lastActivity)} days`}::interval`);
   const rows = await ctx.db.execute<{
     id: string;
     name: string;

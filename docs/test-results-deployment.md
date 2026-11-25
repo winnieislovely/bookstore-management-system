@@ -20,8 +20,8 @@ Theo [test-plan-deployment.md](test-plan-deployment.md). Môi trường: CSDL `b
 
 ## Tóm tắt
 
-- **Đã sửa trong phiên (6):** B-02, B-05, B-06, B-09, B-16, B-23 – đều kiểm lại trên trình duyệt hoặc test tự động. Chưa commit. Bản `.docx` của SRS/TDD chưa cập nhật theo bản `.md`.
-- **Còn mở chặn deploy:** không còn Blocker.
+- **Đã sửa trong phiên (15):** B-02, B-03, B-04, B-05, B-06, B-09, B-16, B-21, B-23, B-28, B-34, B-35, B-36, B-37, B-39 – đều kiểm lại trên trình duyệt hoặc test tự động. Chưa commit. Bản `.docx` của SRS/TDD chưa cập nhật theo bản `.md`.
+- **Còn mở chặn deploy:** không còn Blocker sau khi sửa B-34, B-35, B-36 (sao lưu/khôi phục production). B-28 (PIN/màn khóa) đã sửa.
 - **Major:** B-03, B-21 đã sửa; B-10 đã cải thiện nhưng cần kiểm lại trên máy chủ thật vì Open Library không truy cập được từ mạng máy test.
 - **Giao diện:** 38 màn × 6 viewport – **không có tràn ngang cấp trang và không có chữ bị cắt**. Bảng cuộn ngang trong khung (cả ở 1280 px) là đúng Design §10.6.
 - **Chưa test:** xem cuối file.
@@ -53,9 +53,22 @@ Theo [test-plan-deployment.md](test-plan-deployment.md). Môi trường: CSDL `b
 | B-21 | Major | Kiểm kho (chi tiết) | M1/M2 | Trên điện thoại phiếu kiểm là bảng 560 px cuộn ngang; Design §10.6/§12.2/§13.8 yêu cầu **card list** cho kiểm kho trên điện thoại | Mở |
 | B-22 | Minor | Nhiều màn | M1/M2 | Vùng chạm nhỏ: công tắc "Hiển thị trên website" 36×20, liên kết SĐT/tên khách 18–20 px cao (Design §15) | Mở |
 | B-23 | **Major** | Giao hàng | – | Bản cài mới không có dữ liệu địa chỉ GHN (chỉ nạp bởi cron 03:00) → "Tạo đơn giao" không chọn được Tỉnh/Phường suốt ngày đầu | **Đã sửa** – worker chạy `geo.refresh` khi khởi động nếu bảng trống (`orders.geoIsEmpty`); đã kiểm: 65 tỉnh, 11.981 phường/xã, tạo đơn DH-2026-00001 + vận đơn GHN sandbox |
-| B-24 | Minor | Worker | – | Log pino của worker không ra stdout khi chuyển hướng output (file log 0 byte dù job chạy) – cần kiểm lại trong Docker để có log vận hành | Mở – cần kiểm |
+| B-24 | – | Worker | – | ~~Log worker không ra~~ – do `LOG_LEVEL=warn` trong `.env`/`.env.qa` của máy dev; bản production (`LOG_LEVEL=info`) có "worker started" và "job done" (smoke test 6.4) | Không phải lỗi |
 | B-25 | Minor | Thư viện – Phiếu mượn | D1 | Ô tìm người mượn không chọn được bằng phím mũi tên + Enter (ô Tỉnh/Phường thì được); hộp thành công lặp tiêu đề "Đã cho mượn" | Mở |
 | B-26 | Cosmetic | Nhật ký | – | Dòng tạo khách hiện "thêm khách hàng **Đã gộp vào khách hàng khác**" (trạng thái hiện tại thay vì tên lúc tạo) | Mở |
+| B-27 | Minor | Phân quyền | – | Form vai trò còn liệt kê quyền đã bỏ: "Sửa giá bán" (`sale.price_override`, bỏ 13/11) và "Thu/chi tiền mặt trong ca" (`shift.cash_movement`, FR-POS-20) | Mở |
+| B-28 | **Major** | POS / Nhân viên | – | Không có giao diện đặt mã PIN và không có màn khóa (NFR-SEC-07, Design §13.5) → không ai duyệt được thao tác vượt hạn mức của thu ngân; phiên bị khóa chỉ hiện lỗi | **Đã sửa** – tài liệu trước (SRS FR-ADM-01, Design §13.5, TDD §6.2), rồi: menu người dùng góc phải trên (Đặt/Đổi mã PIN, Khóa màn hình, Đăng xuất; có cả trên POS); hộp đặt PIN xác nhận mật khẩu (`PUT /me/pin` cần `currentPassword`); màn khóa trên mọi trang khi phiên bị khóa (bàn phím số + phím cứng, báo còn n lần, rung khi sai, “Đổi người dùng”); POS tự khóa sau `pos.lock_minutes` khi có PIN và có mạng; `/me` trả `hasPin`; không cho khóa khi chưa có PIN. Đã kiểm: khóa/mở khóa 1280 và 360 px, tải lại trang vẫn khóa, tự khóa sau 60 s, quản lý đặt PIN rồi duyệt giảm 15% cho thu ngân; api 210/210 |
+| B-29 | Cosmetic | In nhãn kệ | A4 | Giá 9 chữ số (125.000.000 ₫): "₫" xuống dòng, mã vạch bị thu nhỏ | Mở |
+| B-30 | Minor | Đơn giao – trả hàng | – | Lịch sử ghi "Hoàn 135000 ₫" (chưa định dạng); mã giao dịch hoàn tiền không hiện ở đâu; trạng thái thanh toán vẫn "Đã thanh toán" sau khi hoàn | Mở |
+| B-31 | Minor | Thư viện – Nhận trả | – | Sau khi "Thu phí" xong, nút "Thu phí 10.000 ₫" vẫn hiện; bấm lại mở hộp "Khách không còn khoản nào chưa thu" nhưng nút "Thu tiền" vẫn bật (không thu trùng) | Mở |
+| B-32 | Minor (a11y) | Đối soát COD, Trả hàng đơn giao | – | Ô nhập trong hộp thoại không gắn nhãn (`label` không liên kết với `input`) – trình đọc màn hình không đọc được tên ô | Mở |
+| B-33 | Minor | Hóa đơn điện tử | – | Mã số thuế người mua không kiểm tra định dạng (10 hoặc 13 số); "abc" được nhận, chỉ lỗi khi gửi MISA | Mở |
+| B-34 | **Blocker** | Sao lưu (production) | – | pgBackRest kết nối bằng role `postgres` không tồn tại (`POSTGRES_USER=bookstore`) → stanza-create và **mọi bản sao lưu thất bại** | **Đã sửa** – `PGBACKREST_PG1_USER: ${POSTGRES_USER}` trong `infra/docker-compose.yml` |
+| B-35 | **Blocker** | Sao lưu (production) | – | `backup-loop.sh` chỉ thử stanza-create **một lần** lúc khởi động; trên volume mới lúc đó Postgres còn khởi động lại (initdb) nên thất bại im lặng → không có sao lưu và **không lưu WAL** cho tới khi tạo tay | **Đã sửa** – thử lại mỗi phút đến khi được, có log; chờ bảng `platform.backup_run` (không còn lỗi lúc migrate chưa xong). Đã kiểm: stanza tự tạo khi bucket xuất hiện |
+| B-36 | **Blocker** | Runbook khôi phục | – | `docker compose run … backup` khởi động lại `postgres` (do `depends_on`) ngay lúc dời thư mục dữ liệu và khôi phục | **Đã sửa** – thêm `--no-deps` và bước kiểm tra postgres đã dừng trong `docs/runbooks/restore.md`; diễn tập PITR đạt |
+| B-37 | Minor | Caddy | – | Đường dẫn sâu (vd. `/dashboard`) trả `index.html` không có `Cache-Control: no-cache` → sau khi deploy có thể tải shell cũ trỏ tới asset đã xóa | **Đã sửa** – `@shell not path /assets/*` trong `infra/caddy/Caddyfile`; đã kiểm header |
+| B-38 | Minor | Compose | – | `up --build` lần đầu in `bookstore-postgres:18 … pull access denied` (service `backup` dùng image do `postgres` build); chỉ là cảnh báo, stack vẫn lên | Mở – có thể thêm `pull_policy: build` |
+| B-39 | Minor | Khách hàng – lọc Hoạt động gần nhất | – | Bộ lọc so với `now()` của CSDL thay vì đồng hồ app (`ctx.clock`) → test `pos.test.ts` bắt đầu fail từ 25/11 (đồng hồ test cố định 25/10). Production không bị vì hai đồng hồ trùng | **Đã sửa** – dùng `ctx.clock.now()`; api 210/210 pass |
 
 ## Chức năng
 
@@ -169,12 +182,43 @@ Script trong trang quét 38 màn (danh sách + chi tiết + form) ở mỗi view
 | Xuất Excel 10 báo cáo (doanh thu ×4, kho ×2, nhập hàng, thuế ×3) + báo cáo thư viện | Pass | Kiểm bằng fetch, không tải file về máy |
 | Nhật ký ghi đủ thao tác ở trên bằng câu đọc được | Pass | B-26 |
 
-## Chưa test trong phiên này
+### Đợt 25/11 – phần còn lại
 
-- Ký gửi: lập/duyệt/in bảng đối soát; Đối soát COD (cần bảng kê GHN); nhận hàng trả/từ chối trả của đơn giao.
-- Kiểm kê thư viện; đặt giữ sách thư viện; quá hạn và phí trễ; in tem gáy.
-- Cài đặt tab Cấu hình và Sao lưu (vai trò chủ cửa hàng); thêm/sửa vai trò; vô hiệu nhân viên + thu hồi máy.
-- Hạn mức giảm giá 10% với thu ngân (đã thử 15% bằng quản lý); hóa đơn điện tử có MST/email; khóa màn hình PIN.
-- In ấn: hóa đơn 80 mm, nhãn kệ/mã vạch, A4.
-- POS mất mạng thật (trình duyệt offline) – mới thử máy chủ không phản hồi (502).
-- Sao lưu/khôi phục theo `docs/runbooks/restore.md`; chạy `infra/docker-compose.yml` + Caddy production; HTTPS cho camera trên iPhone; thiết bị thật.
+| Ca | Kết quả | Ghi chú |
+| --- | --- | --- |
+| Cài đặt → Cấu hình: sửa "Thời hạn đổi trả", nút "Lưu cài đặt" hiện khi có thay đổi, toast | Pass | |
+| Cài đặt → Sao lưu & dữ liệu: tình trạng hệ thống, yêu cầu sao lưu thủ công | Pass | Chạy thật ở bộ production |
+| Tạo vai trò "Thu ngân ca tối" (3 quyền) | Pass | B-27 |
+| Vô hiệu nhân viên → đăng nhập bị từ chối "Tài khoản đã bị vô hiệu hóa" | Pass | |
+| Khóa màn hình PIN | Pass sau sửa | B-28 |
+| Hạn mức giảm giá thu ngân: 10% không cần duyệt, 15% cần duyệt; PIN sai bị từ chối, PIN đúng → mã duyệt 2 phút | Pass (API) | Giao diện không duyệt được – B-28 |
+| HĐĐT: gửi lại cho khách với tên đơn vị, MST, địa chỉ, email | Pass | B-33 |
+| In phiếu 80 mm (khổ 72 mm, khách hàng + điểm, chân phiếu) | Pass | |
+| In nhãn kệ / mã vạch A4 (bắt đầu ô 5), nhãn giá / mã vạch cuộn | Pass | B-29 |
+| In tem gáy thư viện 30 × 45 mm (mã cá biệt, Dewey, Cutter) | Pass | |
+| Ký gửi: sản phẩm ký gửi (CK 30%, hạn), bán 3, trả bên ký gửi 2, lập bảng đối soát 11/2026 = 210.000 ₫, in A4 ngang, duyệt quyết toán | Pass | |
+| Webhook GHN (token đúng/sai) → đơn "Đã giao" → bảng kê COD; đối soát 150.000/155.900 → "Chênh lệch"; badge menu | Pass | B-32 |
+| Trả hàng sau giao: yêu cầu → duyệt → nhận hàng trả (không nhập kho), hoàn 135.000 ₫ | Pass | B-30, B-32 |
+| Thư viện: mượn hết bản → đặt giữ; quá hạn 5 ngày → phí trễ 10.000 ₫, "Giữ cho … gọi …", thu phí; badge quá hạn | Pass | B-31 |
+| Kiểm kê thư viện: tạo theo kệ, quét, mã lạ báo lỗi, gửi duyệt, duyệt, báo cáo chênh lệch | Pass | |
+
+### Smoke test bộ production (`infra/docker-compose.yml` + Caddy, máy cục bộ, `SITE_DOMAIN=localhost`, kho S3 tạm SeaweedFS)
+
+| # (runbook UAT §6) | Kết quả | Ghi chú |
+| --- | --- | --- |
+| 6.1 Container | Pass | migrate Exited (0); api, postgres healthy; caddy, worker, backup Up. B-38 |
+| 6.2 HTTPS + `/healthz` | Pass | HTTP → HTTPS 308; HSTS, nosniff, Referrer-Policy; asset immutable + zstd. B-37 đã sửa |
+| 6.3 Log API | Pass | "api listening" |
+| 6.4 Log worker | Pass | "worker started", "job done" – B-24 không phải lỗi |
+| 6.5 Dữ liệu địa chỉ GHN | Pass | Worker tự nạp (carrier giả lập khi không có token) |
+| 6.6 Sao lưu | **Fail → đã sửa** | B-34, B-35; sau sửa: sao lưu thủ công từ app thành công (full 4,2 MB), WAL lưu liên tục |
+| 6.7 Giao diện / thiết lập | Pass | `/setup` qua HTTPS; cookie `__Host-bms_sid` Secure, HttpOnly, SameSite=Strict |
+| Diễn tập khôi phục (runbook `restore.md`) | **Fail → đã sửa** | B-36; sau sửa: PITR về thời điểm T giữ "Marker A", bỏ "Marker B"; sao lưu sau khôi phục thành công |
+
+## Chưa test được ở máy test (làm ở UAT)
+
+- POS mất mạng thật (tắt Wi-Fi) – mới thử máy chủ không phản hồi (502); camera quét mã trên iPhone/Android (cần HTTPS và thiết bị thật); máy in 80 mm và máy quét cầm tay thật.
+- Thu hồi máy POS khi vô hiệu nhân viên; từ chối trả hàng; GHN live và webhook qua URL công khai.
+- Tra cứu Open Library từ máy chủ thật (B-10).
+- Sao lưu lên S3 thật (đã thử với kho S3 tạm); bản dump hằng tuần (chạy 03:00 Chủ nhật).
+- Hóa đơn điện tử thật (chỉ có adapter giả lập).

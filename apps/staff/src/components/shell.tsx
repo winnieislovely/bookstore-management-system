@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { AlertOctagon, AlertTriangle, Bell, CheckCircle2, Info, LogOut, Menu, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, Bell, CheckCircle2, Info, KeyRound, Lock, LogOut, Menu, WifiOff, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router';
 import { get, post } from '../lib/api';
@@ -9,6 +9,8 @@ import { t } from '../lib/i18n';
 import { can, useMe, useSignOut, type Me } from '../lib/session';
 import { visibleNav, type NavGroup } from '../nav';
 import { CompactMark, Wordmark } from './logo';
+import { errText, toast } from './data';
+import { initialsOf, PinDialog } from './lock';
 import { CountBadge } from './ui';
 
 /** App shell (Design §6.3): sidebar, top bar, content. The POS uses its own full-screen layout. */
@@ -262,19 +264,70 @@ function NotificationBell() {
   );
 }
 
-function UserMenu({ me }: { me: Me }) {
-  const initials = me.displayName
-    .split(/\s+/)
-    .map((p) => p[0])
-    .slice(-2)
-    .join('')
-    .toUpperCase();
+/** User menu at the top right (Design §13.5): set or change the PIN, lock the screen, sign out. */
+export function UserMenu({ me, onNavy }: { me: Me; onNavy?: boolean }) {
+  const qc = useQueryClient();
+  const signOut = useSignOut();
+  const [open, setOpen] = useState(false);
+  const [pinDialog, setPinDialog] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', close);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', close);
+    };
+  }, [open]);
+  const lockNow = async () => {
+    setOpen(false);
+    try {
+      await post('/api/v1/auth/lock');
+      await qc.refetchQueries({ queryKey: ['me'] });
+    } catch (e) {
+      toast.error(errText(e));
+    }
+  };
+  const item = 'flex h-11 w-full items-center gap-3 px-4 text-left text-sm text-ink-900 hover:bg-navy-50';
   return (
-    <div className="flex items-center gap-2">
-      <span className="flex size-9 items-center justify-center rounded-full bg-navy-100 text-sm font-semibold text-navy-700" aria-hidden>
-        {initials}
-      </span>
-      <span className="hidden text-sm font-medium md:inline">{me.displayName}</span>
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        className={clsx('flex min-h-11 items-center gap-2 rounded-full pr-2 pl-1', onNavy ? 'text-white hover:bg-navy-800' : 'hover:bg-navy-50')}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Tài khoản – ${me.displayName}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className={clsx('flex size-9 items-center justify-center rounded-full text-sm font-semibold', onNavy ? 'bg-white/15 text-white' : 'bg-navy-100 text-navy-700')} aria-hidden>
+          {initialsOf(me.displayName)}
+        </span>
+        <span className="hidden text-sm font-medium md:inline">{me.displayName}</span>
+      </button>
+      {open && (
+        <div role="menu" className="absolute top-full right-0 z-50 mt-2 w-60 overflow-hidden rounded-lg border border-paper-300 bg-white py-1 shadow-md">
+          <div className="border-b border-paper-300 px-4 py-2 text-sm">
+            <div className="font-semibold text-ink-900">{me.displayName}</div>
+            <div className="text-ink-500">{me.username}</div>
+          </div>
+          <button type="button" role="menuitem" className={item} onClick={() => (setOpen(false), setPinDialog(true))}>
+            <KeyRound size={18} aria-hidden /> {me.hasPin ? 'Đổi mã PIN' : 'Đặt mã PIN'}
+          </button>
+          {me.hasPin && (
+            <button type="button" role="menuitem" className={item} onClick={() => void lockNow()}>
+              <Lock size={18} aria-hidden /> Khóa màn hình
+            </button>
+          )}
+          <button type="button" role="menuitem" className={item} onClick={() => void signOut()}>
+            <LogOut size={18} aria-hidden /> {t('auth.signOut')}
+          </button>
+        </div>
+      )}
+      {pinDialog && <PinDialog me={me} onClose={() => setPinDialog(false)} />}
     </div>
   );
 }

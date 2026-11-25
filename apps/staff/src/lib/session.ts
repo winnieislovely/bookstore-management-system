@@ -11,6 +11,8 @@ export interface Me {
   permissions: string[];
   locked: boolean;
   mustChangePassword: boolean;
+  /** Whether a quick PIN is set (user menu, lock screen; FR-ADM-01). */
+  hasPin?: boolean;
 }
 
 const ME_KEY = 'bms.me';

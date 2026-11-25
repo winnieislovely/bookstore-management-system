@@ -1,13 +1,14 @@
 import './styles.css';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Construction, Lock } from 'lucide-react';
-import { StrictMode, type ReactNode } from 'react';
+import { StrictMode, useEffect, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, Navigate, RouterProvider, useLocation } from 'react-router';
 import { Toaster } from './components/data';
+import { LockScreen } from './components/lock';
 import { Shell } from './components/shell';
 import { EmptyState, ErrorState, Skeleton } from './components/ui';
-import { ApiError } from './lib/api';
+import { ApiError, SESSION_LOCKED_EVENT } from './lib/api';
 import { t } from './lib/i18n';
 import { can, useMe, useSetupStatus } from './lib/session';
 import { landingPath, NAV } from './nav';
@@ -61,6 +62,12 @@ function Gate({ children }: { children: ReactNode }) {
   const setup = useSetupStatus();
   const me = useMe();
   const location = useLocation();
+  const { refetch } = me;
+  useEffect(() => {
+    const relock = () => void refetch();
+    window.addEventListener(SESSION_LOCKED_EVENT, relock);
+    return () => window.removeEventListener(SESSION_LOCKED_EVENT, relock);
+  }, [refetch]);
   if (setup.isLoading || me.isLoading) return <Loading />;
   if (setup.isError) return <ErrorState error={setup.error} onRetry={() => setup.refetch()} />;
   if (setup.data?.needsSetup) return <Navigate to="/setup" replace />;
@@ -70,6 +77,8 @@ function Gate({ children }: { children: ReactNode }) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
   if (me.data.mustChangePassword) return <Navigate to="/change-password" replace />;
+  // A locked session shows the lock screen over any page until the PIN is entered (Design §13.5).
+  if (me.data.locked) return <LockScreen me={me.data} />;
   return <>{children}</>;
 }
 

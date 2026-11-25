@@ -120,7 +120,7 @@ export async function startHarness(): Promise<Harness> {
       });
       expect(r.status, JSON.stringify(r.body)).toBe(201);
       const owner = await login('lan', OWNER_PW);
-      await call('PUT', '/api/v1/me/pin', { cookie: owner, body: { pin: '246810' } });
+      await call('PUT', '/api/v1/me/pin', { cookie: owner, body: { pin: '246810', currentPassword: OWNER_PW } });
       const roles = (await call('GET', '/api/v1/admin/roles', { cookie: owner })).body.items;
       return { owner, roles: Object.fromEntries(roles.map((x: { code: string; id: string }) => [x.code, x.id])) };
     },
@@ -129,7 +129,7 @@ export async function startHarness(): Promise<Harness> {
       expect(r.status, JSON.stringify(r.body)).toBe(201);
       const cookie = await login(username, 'tam-thoi-123');
       expect((await call('PATCH', '/api/v1/me/password', { cookie, body: { currentPassword: 'tam-thoi-123', newPassword: 'mat-khau-moi-456' } })).status).toBe(204);
-      expect((await call('PUT', '/api/v1/me/pin', { cookie, body: { pin } })).status).toBe(204);
+      expect((await call('PUT', '/api/v1/me/pin', { cookie, body: { pin, currentPassword: 'mat-khau-moi-456' } })).status).toBe(204);
       return cookie;
     },
   };

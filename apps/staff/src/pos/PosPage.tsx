@@ -4,7 +4,8 @@ import { AlertOctagon, BookOpen, CalendarClock, ChevronDown, Coins, Gift, Info, 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Button, Field, InlineAlert, Skeleton } from '../components/ui';
-import { NavDrawer } from '../components/shell';
+import { NavDrawer, UserMenu } from '../components/shell';
+import { useAutoLock } from '../components/lock';
 import { ConfirmDialog } from '../components/data';
 import { get } from '../lib/api';
 import { formatDate, formatDateTime, formatNumber, formatPhone, formatVnd } from '../lib/format';
@@ -16,7 +17,7 @@ import { deviceInfo, registerDevice, type DeviceInfo } from './device';
 import { ApprovalDialog, CloseShiftDialog, CustomerDialog, PaymentSheet, SaleDone } from './dialogs';
 import { DiscountInput } from '../components/discount-input';
 import { isReady, PREORDER_STATUS, toCart, type PreorderRow } from './preorders';
-import { bootstrap, flush, leaseState, startSync, usePosStatus } from './sync';
+import { bootstrap, flush, leaseState, startSync, usePosStatus, type PosSettings } from './sync';
 import { CameraScanner, Dialog, MoneyInput } from './widgets';
 
 /** POS (FR-POS-01..11, FR-POS-18..26, Design §13). Full screen, without the back-office sidebar. */
@@ -235,6 +236,12 @@ interface Result extends CachedItem {
 function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: DeviceInfo; shift: LocalShift; onShiftChange: (s: LocalShift | null) => void }) {
   const cart = useCart();
   const status = usePosStatus();
+  // Auto-lock after pos.lock_minutes without use, for a user with a PIN (Design §13.5).
+  const [lockMinutes, setLockMinutes] = useState<number | null>(null);
+  useEffect(() => {
+    void kvGet<PosSettings>('settings').then((x) => setLockMinutes(x?.lockMinutes ?? null));
+  }, []);
+  useAutoLock(me, lockMinutes);
   const [q, setQ] = useState('');
   const [results, setResults] = useState<Result[]>([]);
   const [notFound, setNotFound] = useState<string | null>(null);
@@ -687,6 +694,7 @@ function SellingScreen({ me, device, shift, onShiftChange }: { me: Me; device: D
         >
           <Wallet size={22} aria-hidden />
         </button>
+        <UserMenu me={me} onNavy />
       </header>
       {!status.online && (
         <div className="flex items-center gap-2 bg-warning-50 px-4 py-2 text-sm text-warning-700" role="alert">

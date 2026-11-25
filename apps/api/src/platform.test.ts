@@ -174,9 +174,16 @@ describe('lockout and manager unlock (FR-ADM-01)', () => {
 
 describe('POS lock screen with PIN (NFR-SEC-07)', () => {
   it('blocks the session until the PIN is entered', async () => {
-    expect((await call('PUT', '/api/v1/me/pin', { cookie: owner, body: { pin: '12345' } })).status).toBe(400);
-    expect((await call('PUT', '/api/v1/me/pin', { cookie: owner, body: { pin: '246810' } })).status).toBe(204);
+    // No PIN yet: /me says so and the screen cannot be locked (there would be no way back but signing out).
+    expect((await call('GET', '/api/v1/me', { cookie: owner })).body.hasPin).toBe(false);
+    expect((await call('POST', '/api/v1/auth/lock', { cookie: owner })).body.error.code).toBe('no_pin');
+    expect((await call('PUT', '/api/v1/me/pin', { cookie: owner, body: { pin: '12345', currentPassword: OWNER_PW } })).status).toBe(400);
+    // The password is confirmed, so an unattended screen cannot be given a PIN (FR-ADM-01).
+    expect((await call('PUT', '/api/v1/me/pin', { cookie: owner, body: { pin: '246810', currentPassword: 'sai-mat-khau' } })).body.error.code).toBe('invalid_current_password');
+    expect((await call('PUT', '/api/v1/me/pin', { cookie: owner, body: { pin: '246810', currentPassword: OWNER_PW } })).status).toBe(204);
+    expect((await call('GET', '/api/v1/me', { cookie: owner })).body.hasPin).toBe(true);
     expect((await call('POST', '/api/v1/auth/lock', { cookie: owner })).status).toBe(204);
+    expect((await call('GET', '/api/v1/me', { cookie: owner })).body.locked).toBe(true);
     expect((await call('GET', '/api/v1/admin/users', { cookie: owner })).body.error.code).toBe('session_locked');
     expect((await call('GET', '/api/v1/setup', { cookie: owner })).status).toBe(200);
     const wrong = await call('POST', '/api/v1/auth/unlock', { cookie: owner, body: { pin: '000000' } });
@@ -194,7 +201,7 @@ describe('supervisor approval (FR-ADM-09)', () => {
     });
     const ha = await login('hoa', 'thu-ngan-ha-1');
     await call('PATCH', '/api/v1/me/password', { cookie: ha, body: { currentPassword: 'thu-ngan-ha-1', newPassword: 'thu-ngan-ha-2' } });
-    await call('PUT', '/api/v1/me/pin', { cookie: ha, body: { pin: '135790' } });
+    await call('PUT', '/api/v1/me/pin', { cookie: ha, body: { pin: '135790', currentPassword: 'thu-ngan-ha-2' } });
 
     const ok = await call('POST', '/api/v1/auth/approve', {
       cookie: ha,

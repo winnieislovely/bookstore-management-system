@@ -174,6 +174,8 @@ export async function logout(ctx: Ctx): Promise<void> {
 /** POS lock screen (FR-ADM-01, NFR-SEC-07): the cart is kept; the session needs the PIN to resume. */
 export async function lock(ctx: Ctx): Promise<void> {
   if (!ctx.actor) throw errors.unauthenticated();
+  // Without a PIN the screen could only be left by signing out (Design §13.5).
+  if (!(await hasPin(ctx))) throw new AppError(422, 'no_pin', 'Hãy đặt mã PIN trước khi khóa màn hình.');
   await ctx.db.update(schema.session).set({ locked: true }).where(eq(schema.session.id, ctx.actor.sessionId));
 }
 
@@ -210,9 +212,24 @@ export async function changePassword(ctx: Ctx, current: string, next: string): P
   });
 }
 
-export async function setPin(ctx: Ctx, pin: string): Promise<void> {
+/** Whether the signed-in user has a PIN (the user menu offers Đặt or Đổi mã PIN, and Khóa màn hình). */
+export async function hasPin(ctx: Ctx): Promise<boolean> {
+  if (!ctx.actor) return false;
+  const [u] = await ctx.db.select({ pinHash: schema.appUser.pinHash }).from(schema.appUser).where(eq(schema.appUser.id, ctx.actor.userId));
+  return !!u?.pinHash;
+}
+
+/**
+ * Set or change one's own PIN (FR-ADM-01). The password is checked so that someone at an unattended,
+ * signed-in screen cannot set a PIN and approve actions with it later (FR-ADM-09).
+ */
+export async function setPin(ctx: Ctx, pin: string, currentPassword: string): Promise<void> {
   if (!ctx.actor) throw errors.unauthenticated();
   PinSchema.parse(pin);
+  const [me] = await ctx.db.select({ passwordHash: schema.appUser.passwordHash }).from(schema.appUser).where(eq(schema.appUser.id, ctx.actor.userId));
+  if (!me || !(await verifySecret(me.passwordHash, currentPassword))) {
+    throw new AppError(400, 'invalid_current_password', 'Mật khẩu hiện tại không đúng.');
+  }
   const pinHash = await hashSecret(pin);
   await ctx.db.transaction(async (tx) => {
     await tx.update(schema.appUser).set({ pinHash, updatedAt: ctx.clock.now() }).where(eq(schema.appUser.id, ctx.actor!.userId));

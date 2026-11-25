@@ -29,17 +29,24 @@ Confirm the last full/diff backup and the WAL range cover your target.
 
 ## 3. Restore
 
+Every `run` below needs **`--no-deps`**: the `backup` service depends on `postgres`, and without it
+Compose starts PostgreSQL again while its data directory is being moved and restored.
+
 ```bash
 docker compose -f infra/docker-compose.yml stop postgres
 # Keep the damaged data directory until the restore is verified.
-docker compose -f infra/docker-compose.yml run --rm --user root --entrypoint bash backup -c \
+docker compose -f infra/docker-compose.yml run --rm --no-deps --user root --entrypoint bash backup -c \
   'mv /var/lib/postgresql/18/docker /var/lib/postgresql/18/docker.broken-$(date +%s); mkdir -p /var/lib/postgresql/18/docker; chown postgres:postgres /var/lib/postgresql/18/docker; chmod 700 /var/lib/postgresql/18/docker'
+# Check PostgreSQL is still stopped (State: exited) before restoring:
+docker compose -f infra/docker-compose.yml ps -a postgres
 # Latest:
-docker compose -f infra/docker-compose.yml run --rm --user postgres --entrypoint pgbackrest backup --stanza=bookstore restore
+docker compose -f infra/docker-compose.yml run --rm --no-deps --user postgres --entrypoint pgbackrest backup --stanza=bookstore restore
 # Or point in time:
-docker compose -f infra/docker-compose.yml run --rm --user postgres --entrypoint pgbackrest backup --stanza=bookstore \
+docker compose -f infra/docker-compose.yml run --rm --no-deps --user postgres --entrypoint pgbackrest backup --stanza=bookstore \
   --type=time "--target=2026-11-02 03:14:00+00" --target-action=promote restore
 ```
+
+A warning `unknown group 'root' in backup manifest mapped to current group` is harmless.
 
 ## 4. Start and verify
 
@@ -53,7 +60,12 @@ docker compose -f infra/docker-compose.yml exec postgres psql -U bookstore -c "s
 - In the staff app open **Cài đặt → Sao lưu & dữ liệu**: database OK, WAL archiving resumes
   within a few minutes. Request a manual backup and wait for it to succeed.
 - The nightly `integrity.check` job (02:30) must log no drift; check `docker compose -f infra/docker-compose.yml logs worker` the next morning.
-- POS devices reconnect and upload their outbox; review **Thiết bị POS → Ngoại lệ đồng bộ**.
+- POS devices reconnect and upload their outbox; review the sync exceptions in **Cài đặt → Quầy & máy bán hàng**.
+
+Drill on 25 Nov 2026 (local copy of the production stack): point-in-time restore to a chosen
+second kept the record made before it and dropped the one made after; the stack started on the
+new timeline and the next manual backup succeeded. Steps 1–4 took about five minutes on a
+4 MB database.
 
 ## 5. New server (disaster)
 

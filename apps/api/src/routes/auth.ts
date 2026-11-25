@@ -10,7 +10,7 @@ import { defineRoute } from '../http/route.js';
 
 /** Auth, own profile and first-run wizard (TDD §6.2 “Auth and administration”). */
 export function authRoutes(app: OpenAPIHono<AppEnv>, deps: Deps): void {
-  const meView = (ctx: Parameters<Parameters<typeof defineRoute>[2]>[0]['ctx'], session: { locked: boolean; mustChangePassword: boolean } | null) => ({
+  const meView = async (ctx: Parameters<Parameters<typeof defineRoute>[2]>[0]['ctx'], session: { locked: boolean; mustChangePassword: boolean } | null) => ({
     id: ctx.actor!.userId,
     username: ctx.actor!.username,
     displayName: ctx.actor!.displayName,
@@ -19,6 +19,7 @@ export function authRoutes(app: OpenAPIHono<AppEnv>, deps: Deps): void {
     permissions: [...ctx.actor!.permissions].sort(),
     locked: session?.locked ?? false,
     mustChangePassword: session?.mustChangePassword ?? false,
+    hasPin: await identity.hasPin(ctx),
   });
 
   defineRoute(
@@ -101,9 +102,9 @@ export function authRoutes(app: OpenAPIHono<AppEnv>, deps: Deps): void {
 
   defineRoute(
     app,
-    { method: 'put', path: '/api/v1/me/pin', access: 'session', summary: 'Set own quick PIN', status: 204, body: z.object({ pin: z.string() }) },
+    { method: 'put', path: '/api/v1/me/pin', access: 'session', summary: 'Set own quick PIN (password confirmed)', status: 204, body: z.object({ pin: z.string(), currentPassword: z.string().min(1, 'Nhập mật khẩu hiện tại.') }) },
     async ({ ctx, body }) => {
-      await identity.setPin(ctx, body.pin);
+      await identity.setPin(ctx, body.pin, body.currentPassword);
     },
   );
 

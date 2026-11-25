@@ -27,6 +27,8 @@ function withQuery(path: string, query?: Query): string {
   return qs ? `${path}?${qs}` : path;
 }
 
+export const SESSION_LOCKED_EVENT = 'bms:session-locked';
+
 /** A response body that may be empty or not JSON (a reverse proxy's error page). */
 export function parseBody(text: string): unknown {
   if (!text) return undefined;
@@ -65,6 +67,8 @@ export async function api<T>(method: string, path: string, opts: { body?: unknow
   if (res.status === 204) return undefined as T;
   const data = parseBody(await res.text());
   if (proxyUnreachable(res.status, data)) throw new ApiError(0, 'network_error', t('error.network'));
+  // Locked elsewhere (another tab, the POS idle timer): the app re-reads /me and shows the lock screen.
+  if (res.status === 423) window.dispatchEvent(new Event(SESSION_LOCKED_EVENT));
   if (!res.ok) {
     const e = (data as { error?: { code: string; message: string; details?: unknown; requestId?: string } } | undefined)?.error;
     throw new ApiError(res.status, e?.code ?? 'http_error', e?.message ?? `HTTP ${res.status}`, e?.details, e?.requestId);

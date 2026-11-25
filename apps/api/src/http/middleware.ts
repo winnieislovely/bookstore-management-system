@@ -15,6 +15,7 @@ const FIELD_LABELS: Record<string, string> = {
   phone: 'Số điện thoại', email: 'Email', taxCode: 'Mã số thuế', address: 'Địa chỉ', note: 'Ghi chú', reason: 'Lý do',
   title: 'Tên', description: 'Mô tả', sku: 'SKU', isbn: 'ISBN', barcode: 'Mã vạch', priceVnd: 'Giá bán', costVnd: 'Giá nhập',
   qty: 'Số lượng', weightGrams: 'Khối lượng', sort: 'Thứ tự', birthDate: 'Ngày sinh', pin: 'Mã PIN', amountVnd: 'Số tiền',
+  from: 'Từ ngày', to: 'Đến ngày',
 };
 const issueText = (i: { path: PropertyKey[]; message: string }) => {
   const key = [...i.path].reverse().find((p) => typeof p === 'string') as string | undefined;

@@ -18,7 +18,9 @@
 		root * /srv/staff
 		@hashed path /assets/*
 		header @hashed Cache-Control "public, max-age=31536000, immutable"
-		@shell path / /index.html /sw.js
+		# Everything outside the hashed assets is revalidated, including deep links such as /dashboard
+		# that fall back to index.html: a cached old shell would load assets a new release removed.
+		@shell not path /assets/*
 		header @shell Cache-Control "no-cache"
 		try_files {path} /index.html
 		file_server
